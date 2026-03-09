@@ -154,11 +154,8 @@ void Renderer::resolve_color(uint32_t encoded, const Config &config,
     b = (rgb & 0xFF) / 255.0f;
 }
 
-void Renderer::clear(const Config &config) {
-    float bgr = ((config.bg_color >> 16) & 0xFF) / 255.0f;
-    float bgg = ((config.bg_color >> 8) & 0xFF) / 255.0f;
-    float bgb = (config.bg_color & 0xFF) / 255.0f;
-    glClearColor(bgr, bgg, bgb, 1.0f);
+void Renderer::clear(const Config &/*config*/) {
+    glClearColor(0.0f, 0.0f, 0.0f, 1.0f);
     glClear(GL_COLOR_BUFFER_BIT);
 }
 
@@ -417,6 +414,20 @@ void Renderer::render_pane(const ScreenBuffer &buffer, const Config &config,
     int scissor_y = viewport_h_ - (offset_y + h);
     glEnable(GL_SCISSOR_TEST);
     glScissor(offset_x, scissor_y, w, h);
+
+    // Draw pane background (cells with default bg rely on this rather than glClear,
+    // so that the dead zone outside tmux panes stays black)
+    float bg_r = ((config.bg_color >> 16) & 0xFF) / 255.0f;
+    float bg_g = ((config.bg_color >> 8) & 0xFF) / 255.0f;
+    float bg_b = (config.bg_color & 0xFF) / 255.0f;
+    float fx = (float)offset_x, fy = (float)offset_y;
+    float fw = (float)w, fh = (float)h;
+    vertices_.push_back({fx,    fy,    0,0, bg_r,bg_g,bg_b,1, 0});
+    vertices_.push_back({fx+fw, fy,    0,0, bg_r,bg_g,bg_b,1, 0});
+    vertices_.push_back({fx+fw, fy+fh, 0,0, bg_r,bg_g,bg_b,1, 0});
+    vertices_.push_back({fx,    fy,    0,0, bg_r,bg_g,bg_b,1, 0});
+    vertices_.push_back({fx+fw, fy+fh, 0,0, bg_r,bg_g,bg_b,1, 0});
+    vertices_.push_back({fx,    fy+fh, 0,0, bg_r,bg_g,bg_b,1, 0});
 
     build_pane_vertices(buffer, config, offset_x, offset_y, w, h, pane_focused);
 
