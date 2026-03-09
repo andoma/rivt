@@ -203,14 +203,34 @@ void X11Backend::handle_key_event(xcb_key_press_event_t *ev, bool pressed) {
 
     KeyEvent key{};
     key.pressed = pressed;
-    key.keysym = xkb_state_key_get_one_sym(xkb_state_, ev->detail);
     key.mods = translate_mods(ev->state);
+
+    // Get the keysym with Shift applied but without Ctrl, so we see 'c'/'C' not a
+    // control character. This lets Ctrl+C map to ETX and Ctrl+Shift+C match XKB_KEY_C.
+    {
+        const xkb_keysym_t *syms;
+        xkb_layout_index_t layout = xkb_state_key_get_layout(xkb_state_, ev->detail);
+        // level 0 = unshifted, level 1 = shifted
+        int level = (ev->state & XCB_MOD_MASK_SHIFT) ? 1 : 0;
+        int n = xkb_keymap_key_get_syms_by_level(xkb_keymap_, ev->detail, layout, level, &syms);
+        key.keysym = (n > 0) ? syms[0] : xkb_state_key_get_one_sym(xkb_state_, ev->detail);
+    }
 
     if (pressed) {
         char buf[64];
         int len = xkb_state_key_get_utf8(xkb_state_, ev->detail, buf, sizeof(buf));
         if (len > 0 && buf[0] >= 0x20) {
             key.text = std::string(buf, len);
+        }
+        // When Ctrl is held, xkb produces control chars (< 0x20) with no text.
+        // Provide the unmodified letter as text so encode_key can map Ctrl+letter.
+        if (key.text.empty() && (key.mods & KeyMod::Ctrl)) {
+            xkb_keysym_t sym = key.keysym;
+            if (sym >= XKB_KEY_a && sym <= XKB_KEY_z) {
+                key.text = std::string(1, (char)('a' + (sym - XKB_KEY_a)));
+            } else if (sym >= XKB_KEY_A && sym <= XKB_KEY_Z) {
+                key.text = std::string(1, (char)('A' + (sym - XKB_KEY_A)));
+            }
         }
     }
 

@@ -294,38 +294,49 @@ void Renderer::render(const ScreenBuffer &buffer, const Config &config) {
         float cur_g = ((config.cursor_color >> 8) & 0xFF) / 255.0f;
         float cur_b = (config.cursor_color & 0xFF) / 255.0f;
 
-        // Block cursor (outline)
-        float thick = 2.0f;
-        // Top
-        vertices_.push_back({cx, cy, 0,0, cur_r,cur_g,cur_b,1, 0});
-        vertices_.push_back({cx+m.cell_width, cy, 0,0, cur_r,cur_g,cur_b,1, 0});
-        vertices_.push_back({cx+m.cell_width, cy+thick, 0,0, cur_r,cur_g,cur_b,1, 0});
-        vertices_.push_back({cx, cy, 0,0, cur_r,cur_g,cur_b,1, 0});
-        vertices_.push_back({cx+m.cell_width, cy+thick, 0,0, cur_r,cur_g,cur_b,1, 0});
-        vertices_.push_back({cx, cy+thick, 0,0, cur_r,cur_g,cur_b,1, 0});
-        // Bottom
-        float by = cy+m.cell_height-thick;
-        vertices_.push_back({cx, by, 0,0, cur_r,cur_g,cur_b,1, 0});
-        vertices_.push_back({cx+m.cell_width, by, 0,0, cur_r,cur_g,cur_b,1, 0});
-        vertices_.push_back({cx+m.cell_width, cy+(float)m.cell_height, 0,0, cur_r,cur_g,cur_b,1, 0});
-        vertices_.push_back({cx, by, 0,0, cur_r,cur_g,cur_b,1, 0});
-        vertices_.push_back({cx+m.cell_width, cy+(float)m.cell_height, 0,0, cur_r,cur_g,cur_b,1, 0});
-        vertices_.push_back({cx, cy+(float)m.cell_height, 0,0, cur_r,cur_g,cur_b,1, 0});
-        // Left
-        vertices_.push_back({cx, cy, 0,0, cur_r,cur_g,cur_b,1, 0});
-        vertices_.push_back({cx+thick, cy, 0,0, cur_r,cur_g,cur_b,1, 0});
-        vertices_.push_back({cx+thick, cy+(float)m.cell_height, 0,0, cur_r,cur_g,cur_b,1, 0});
-        vertices_.push_back({cx, cy, 0,0, cur_r,cur_g,cur_b,1, 0});
-        vertices_.push_back({cx+thick, cy+(float)m.cell_height, 0,0, cur_r,cur_g,cur_b,1, 0});
-        vertices_.push_back({cx, cy+(float)m.cell_height, 0,0, cur_r,cur_g,cur_b,1, 0});
-        // Right
-        float rx = cx+m.cell_width-thick;
-        vertices_.push_back({rx, cy, 0,0, cur_r,cur_g,cur_b,1, 0});
-        vertices_.push_back({cx+(float)m.cell_width, cy, 0,0, cur_r,cur_g,cur_b,1, 0});
-        vertices_.push_back({cx+(float)m.cell_width, cy+(float)m.cell_height, 0,0, cur_r,cur_g,cur_b,1, 0});
-        vertices_.push_back({rx, cy, 0,0, cur_r,cur_g,cur_b,1, 0});
-        vertices_.push_back({cx+(float)m.cell_width, cy+(float)m.cell_height, 0,0, cur_r,cur_g,cur_b,1, 0});
-        vertices_.push_back({rx, cy+(float)m.cell_height, 0,0, cur_r,cur_g,cur_b,1, 0});
+        float cw = (float)m.cell_width;
+        float ch = (float)m.cell_height;
+
+        if (focused_) {
+            // Filled block cursor
+            vertices_.push_back({cx,    cy,    0,0, cur_r,cur_g,cur_b,0.7f, 0});
+            vertices_.push_back({cx+cw, cy,    0,0, cur_r,cur_g,cur_b,0.7f, 0});
+            vertices_.push_back({cx+cw, cy+ch, 0,0, cur_r,cur_g,cur_b,0.7f, 0});
+            vertices_.push_back({cx,    cy,    0,0, cur_r,cur_g,cur_b,0.7f, 0});
+            vertices_.push_back({cx+cw, cy+ch, 0,0, cur_r,cur_g,cur_b,0.7f, 0});
+            vertices_.push_back({cx,    cy+ch, 0,0, cur_r,cur_g,cur_b,0.7f, 0});
+        } else {
+            // Hollow outline cursor
+            float thick = 2.0f;
+            // Top
+            vertices_.push_back({cx, cy, 0,0, cur_r,cur_g,cur_b,1, 0});
+            vertices_.push_back({cx+cw, cy, 0,0, cur_r,cur_g,cur_b,1, 0});
+            vertices_.push_back({cx+cw, cy+thick, 0,0, cur_r,cur_g,cur_b,1, 0});
+            vertices_.push_back({cx, cy, 0,0, cur_r,cur_g,cur_b,1, 0});
+            vertices_.push_back({cx+cw, cy+thick, 0,0, cur_r,cur_g,cur_b,1, 0});
+            vertices_.push_back({cx, cy+thick, 0,0, cur_r,cur_g,cur_b,1, 0});
+            // Bottom
+            vertices_.push_back({cx, cy+ch-thick, 0,0, cur_r,cur_g,cur_b,1, 0});
+            vertices_.push_back({cx+cw, cy+ch-thick, 0,0, cur_r,cur_g,cur_b,1, 0});
+            vertices_.push_back({cx+cw, cy+ch, 0,0, cur_r,cur_g,cur_b,1, 0});
+            vertices_.push_back({cx, cy+ch-thick, 0,0, cur_r,cur_g,cur_b,1, 0});
+            vertices_.push_back({cx+cw, cy+ch, 0,0, cur_r,cur_g,cur_b,1, 0});
+            vertices_.push_back({cx, cy+ch, 0,0, cur_r,cur_g,cur_b,1, 0});
+            // Left
+            vertices_.push_back({cx, cy, 0,0, cur_r,cur_g,cur_b,1, 0});
+            vertices_.push_back({cx+thick, cy, 0,0, cur_r,cur_g,cur_b,1, 0});
+            vertices_.push_back({cx+thick, cy+ch, 0,0, cur_r,cur_g,cur_b,1, 0});
+            vertices_.push_back({cx, cy, 0,0, cur_r,cur_g,cur_b,1, 0});
+            vertices_.push_back({cx+thick, cy+ch, 0,0, cur_r,cur_g,cur_b,1, 0});
+            vertices_.push_back({cx, cy+ch, 0,0, cur_r,cur_g,cur_b,1, 0});
+            // Right
+            vertices_.push_back({cx+cw-thick, cy, 0,0, cur_r,cur_g,cur_b,1, 0});
+            vertices_.push_back({cx+cw, cy, 0,0, cur_r,cur_g,cur_b,1, 0});
+            vertices_.push_back({cx+cw, cy+ch, 0,0, cur_r,cur_g,cur_b,1, 0});
+            vertices_.push_back({cx+cw-thick, cy, 0,0, cur_r,cur_g,cur_b,1, 0});
+            vertices_.push_back({cx+cw, cy+ch, 0,0, cur_r,cur_g,cur_b,1, 0});
+            vertices_.push_back({cx+cw-thick, cy+ch, 0,0, cur_r,cur_g,cur_b,1, 0});
+        }
     }
 
     if (vertices_.empty()) return;

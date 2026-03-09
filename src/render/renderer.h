@@ -16,6 +16,7 @@ public:
 
     bool init(const Config &config);
     void set_viewport(int width, int height);
+    void set_focused(bool focused) { focused_ = focused; }
     void render(const ScreenBuffer &buffer, const Config &config);
 
     Font &font() { return font_; }
@@ -43,6 +44,7 @@ private:
 
     int viewport_w_ = 0;
     int viewport_h_ = 0;
+    bool focused_ = true;
 
     struct QuadVertex {
         float x, y;       // position

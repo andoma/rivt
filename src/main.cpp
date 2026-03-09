@@ -296,6 +296,8 @@ int main(int argc, char *argv[]) {
     };
 
     platform->on_focus = [&](bool focused) {
+        renderer.set_focused(focused);
+        needs_render = true;
         if (screen.focus_reporting()) {
             pty.write(focused ? "\033[I" : "\033[O");
         }
