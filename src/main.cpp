@@ -9,6 +9,7 @@
 #include <xkbcommon/xkbcommon-keysyms.h>
 #include <cstdio>
 #include <cstring>
+#include <chrono>
 #include <signal.h>
 
 using namespace rivt;
@@ -405,6 +406,12 @@ int main(int argc, char *argv[]) {
     ScreenBuffer screen(cols, rows, config.scrollback_lines);
     VtParser parser(screen);
 
+    // Selection state
+    bool selecting = false;
+    int click_count = 0;
+    uint64_t last_click_ms = 0;
+    int last_click_col = -1, last_click_row = -1;
+
     // Title change callback
     screen.on_title_change = [&](const std::string &title) {
         platform->set_title(title);
@@ -450,9 +457,13 @@ int main(int argc, char *argv[]) {
                     return;
                 }
                 case XKB_KEY_C:
-                case XKB_KEY_c:
-                    // TODO: copy selection to clipboard
+                case XKB_KEY_c: {
+                    std::string text = screen.get_selection_text();
+                    if (!text.empty()) {
+                        platform->set_clipboard(text, false);
+                    }
                     return;
+                }
                 case XKB_KEY_plus:
                 case XKB_KEY_equal: {
                     // Increase font size
@@ -565,7 +576,105 @@ int main(int argc, char *argv[]) {
             }
         }
 
-        // TODO: selection handling
+        // Selection handling (only when mouse mode is off)
+        if (!screen.mouse_mode()) {
+            auto now_ms = std::chrono::duration_cast<std::chrono::milliseconds>(
+                std::chrono::steady_clock::now().time_since_epoch()).count();
+
+            if (mouse.button == MouseButton::Left && mouse.pressed && !mouse.motion) {
+                int abs_line = screen.absolute_line(cell_row);
+
+                // Detect multi-click (within 400ms and same cell)
+                if (now_ms - last_click_ms < 400 &&
+                    cell_col == last_click_col && cell_row == last_click_row) {
+                    click_count = (click_count % 3) + 1;
+                } else {
+                    click_count = 1;
+                }
+                last_click_ms = now_ms;
+                last_click_col = cell_col;
+                last_click_row = cell_row;
+
+                if (click_count == 1) {
+                    // Single click: start selection
+                    selecting = true;
+                    screen.selection.active = true;
+                    screen.selection.start_line = abs_line;
+                    screen.selection.start_col = cell_col;
+                    screen.selection.end_line = abs_line;
+                    screen.selection.end_col = cell_col;
+                } else if (click_count == 2) {
+                    // Double click: select word
+                    selecting = false;
+                    const Line &line = screen.line(cell_row);
+                    int wstart = cell_col, wend = cell_col;
+                    auto is_word_char = [](uint32_t cp) {
+                        return cp > ' ' && cp != '"' && cp != '\'' &&
+                               cp != '(' && cp != ')' && cp != '[' && cp != ']' &&
+                               cp != '{' && cp != '}' && cp != '<' && cp != '>';
+                    };
+                    while (wstart > 0 && wstart - 1 < (int)line.cells.size() &&
+                           is_word_char(line.cells[wstart - 1].codepoint))
+                        wstart--;
+                    while (wend + 1 < (int)line.cells.size() &&
+                           is_word_char(line.cells[wend + 1].codepoint))
+                        wend++;
+                    screen.selection.active = true;
+                    screen.selection.start_line = abs_line;
+                    screen.selection.start_col = wstart;
+                    screen.selection.end_line = abs_line;
+                    screen.selection.end_col = wend;
+                    std::string text = screen.get_selection_text();
+                    if (!text.empty()) platform->set_clipboard(text, true);
+                } else if (click_count == 3) {
+                    // Triple click: select whole line
+                    selecting = false;
+                    const Line &line = screen.line(cell_row);
+                    screen.selection.active = true;
+                    screen.selection.start_line = abs_line;
+                    screen.selection.start_col = 0;
+                    screen.selection.end_line = abs_line;
+                    screen.selection.end_col = (int)line.cells.size() - 1;
+                    std::string text = screen.get_selection_text();
+                    if (!text.empty()) platform->set_clipboard(text, true);
+                }
+                needs_render = true;
+            } else if (mouse.motion && selecting) {
+                // Drag: extend selection
+                screen.selection.end_line = screen.absolute_line(cell_row);
+                screen.selection.end_col = cell_col;
+                needs_render = true;
+            } else if (mouse.button == MouseButton::Left && !mouse.pressed && !mouse.motion) {
+                // Release: finish selection, copy to PRIMARY
+                if (selecting) {
+                    selecting = false;
+                    // Only keep selection if it spans more than zero characters
+                    int sl, sc, el, ec;
+                    screen.selection.normalized(sl, sc, el, ec);
+                    if (sl == el && sc == ec) {
+                        screen.selection.clear();
+                    } else {
+                        std::string text = screen.get_selection_text();
+                        if (!text.empty()) {
+                            platform->set_clipboard(text, true);  // PRIMARY
+                        }
+                    }
+                    needs_render = true;
+                }
+            } else if (mouse.button == MouseButton::Middle && mouse.pressed) {
+                // Middle click: paste from PRIMARY
+                std::string text = platform->get_clipboard(true);
+                if (!text.empty()) {
+                    if (screen.bracketed_paste()) {
+                        pty.write("\033[200~");
+                        pty.write(text);
+                        pty.write("\033[201~");
+                    } else {
+                        pty.write(text);
+                    }
+                }
+            }
+        }
     };
 
     platform->on_resize = [&](int width, int height) {

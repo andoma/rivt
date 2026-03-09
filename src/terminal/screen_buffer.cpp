@@ -637,4 +637,64 @@ void ScreenBuffer::esc_dispatch(char intermediate, char final_byte) {
     }
 }
 
+std::string ScreenBuffer::get_selection_text() const {
+    if (!selection.active) return {};
+
+    int sl, sc, el, ec;
+    selection.normalized(sl, sc, el, ec);
+
+    auto get_line = [&](int abs) -> const Line & {
+        int sb_size = (int)scrollback_.size();
+        if (abs < sb_size) return scrollback_[abs];
+        int row = abs - sb_size;
+        if (row >= 0 && row < (int)screen_.size()) return screen_[row];
+        static Line empty(0);
+        return empty;
+    };
+
+    std::string result;
+    for (int ln = sl; ln <= el; ln++) {
+        const Line &line = get_line(ln);
+        int c0 = (ln == sl) ? sc : 0;
+        int c1 = (ln == el) ? ec : (int)line.cells.size() - 1;
+
+        // Find last non-space to trim trailing whitespace
+        int last_non_space = c0 - 1;
+        for (int c = c1; c >= c0; c--) {
+            if (c < (int)line.cells.size() && line.cells[c].codepoint != ' ') {
+                last_non_space = c;
+                break;
+            }
+        }
+
+        for (int c = c0; c <= last_non_space && c < (int)line.cells.size(); c++) {
+            if (line.cells[c].attrs & ATTR_WIDE_CONT) continue;
+            uint32_t cp = line.cells[c].codepoint;
+            // UTF-8 encode
+            if (cp < 0x80) {
+                result += (char)cp;
+            } else if (cp < 0x800) {
+                result += (char)(0xC0 | (cp >> 6));
+                result += (char)(0x80 | (cp & 0x3F));
+            } else if (cp < 0x10000) {
+                result += (char)(0xE0 | (cp >> 12));
+                result += (char)(0x80 | ((cp >> 6) & 0x3F));
+                result += (char)(0x80 | (cp & 0x3F));
+            } else {
+                result += (char)(0xF0 | (cp >> 18));
+                result += (char)(0x80 | ((cp >> 12) & 0x3F));
+                result += (char)(0x80 | ((cp >> 6) & 0x3F));
+                result += (char)(0x80 | (cp & 0x3F));
+            }
+        }
+
+        // Add newline between lines (not after wrapped lines within selection)
+        if (ln < el && !line.wrapped) {
+            result += '\n';
+        }
+    }
+
+    return result;
+}
+
 } // namespace rivt

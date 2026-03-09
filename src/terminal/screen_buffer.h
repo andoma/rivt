@@ -7,6 +7,35 @@
 
 namespace rivt {
 
+struct Selection {
+    bool active = false;
+    // Absolute line coordinates (scrollback-aware)
+    int start_line = 0, start_col = 0;
+    int end_line = 0, end_col = 0;
+
+    void clear() { active = false; }
+
+    // Return normalized range (start <= end)
+    void normalized(int &sl, int &sc, int &el, int &ec) const {
+        if (start_line < end_line || (start_line == end_line && start_col <= end_col)) {
+            sl = start_line; sc = start_col; el = end_line; ec = end_col;
+        } else {
+            sl = end_line; sc = end_col; el = start_line; ec = start_col;
+        }
+    }
+
+    bool contains(int abs_line, int col) const {
+        if (!active) return false;
+        int sl, sc, el, ec;
+        normalized(sl, sc, el, ec);
+        if (abs_line < sl || abs_line > el) return false;
+        if (abs_line == sl && abs_line == el) return col >= sc && col <= ec;
+        if (abs_line == sl) return col >= sc;
+        if (abs_line == el) return col <= ec;
+        return true;
+    }
+};
+
 class ScreenBuffer : public VtHandler {
 public:
     ScreenBuffer(int cols, int rows, int scrollback_limit = 10000);
@@ -39,6 +68,13 @@ public:
     int mouse_mode() const { return mouse_mode_; }
     bool sgr_mouse() const { return mode_sgr_mouse_; }
     bool alt_screen() const { return using_alt_screen_; }
+
+    // Selection
+    Selection selection;
+    int absolute_line(int screen_row) const {
+        return (int)scrollback_.size() + viewport_offset_ + screen_row;
+    }
+    std::string get_selection_text() const;
 
     // Kitty keyboard protocol
     // Flags: bit 0 = disambiguate, bit 1 = report event types,

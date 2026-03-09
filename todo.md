@@ -23,7 +23,7 @@ Audit of `plan.md` vs codebase as of 2026-03-09.
 | 5b – Config file | TOML/conf parsing, reload | Not started |
 | 5c – Scrollback nav | Mouse wheel, Shift+PageUp/Down | Done |
 | 5d – Font size | Ctrl+Shift+±/0 | Done |
-| 5e – Selection | Mouse selection, Ctrl+Shift+C | Partial — copy stubbed, no mouse selection |
+| 5e – Selection | Mouse selection, Ctrl+Shift+C | Done |
 | 5f – Search | Scrollback search | Not started |
 | 5g – Focus reporting | DECSET 1004 | Done |
 | 5h – Paste | Ctrl+Shift+V, bracketed paste | Done |
@@ -45,7 +45,7 @@ Audit of `plan.md` vs codebase as of 2026-03-09.
 ### High Priority — finish partially-implemented features
 
 - [x] **Mouse event forwarding**: wire parsed mouse events through to PTY (SGR 1006 encoding)
-- [ ] **Selection model**: implement click-drag selection, double-click word, triple-click line; copy to clipboard via Ctrl+Shift+C
+- [x] **Selection model**: click-drag, double-click word, triple-click line; Ctrl+Shift+C to CLIPBOARD, auto PRIMARY
 - [ ] **OSC 52 clipboard**: complete read/write wiring to X11 clipboard
 ### Medium Priority — new features that round out the terminal
 

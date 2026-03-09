@@ -201,6 +201,16 @@ void Renderer::render(const ScreenBuffer &buffer, const Config &config) {
                 resolve_color(cell.bg, config, cell_bg_r, cell_bg_g, cell_bg_b);
             }
 
+            // Selection: use selection_color as background, white as foreground
+            int abs_line = buffer.absolute_line(row);
+            bool selected = buffer.selection.contains(abs_line, col);
+            if (selected) {
+                cell_bg_r = ((config.selection_color >> 16) & 0xFF) / 255.0f;
+                cell_bg_g = ((config.selection_color >> 8) & 0xFF) / 255.0f;
+                cell_bg_b = (config.selection_color & 0xFF) / 255.0f;
+                fg_r = 1.0f; fg_g = 1.0f; fg_b = 1.0f;
+            }
+
             // Handle inverse
             if (cell.attrs & ATTR_INVERSE) {
                 std::swap(fg_r, cell_bg_r);
@@ -213,8 +223,8 @@ void Renderer::render(const ScreenBuffer &buffer, const Config &config) {
                 fg_r *= 0.5f; fg_g *= 0.5f; fg_b *= 0.5f;
             }
 
-            // Background quad (only if non-default)
-            if (!(cell.bg & COLOR_FLAG_DEFAULT) || (cell.attrs & ATTR_INVERSE)) {
+            // Background quad (only if non-default, inverse, or selected)
+            if (!(cell.bg & COLOR_FLAG_DEFAULT) || (cell.attrs & ATTR_INVERSE) || selected) {
                 // Triangle 1
                 vertices_.push_back({x_left,  y_top,    0, 0, cell_bg_r, cell_bg_g, cell_bg_b, 1.0f, 0});
                 vertices_.push_back({x_right, y_top,    0, 0, cell_bg_r, cell_bg_g, cell_bg_b, 1.0f, 0});
