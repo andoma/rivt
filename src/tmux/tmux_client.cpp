@@ -165,11 +165,12 @@ void TmuxClient::parse_line(const std::string &line) {
         return;
     }
 
-    if (line.substr(0, 13) == "%window-close") {
-        // %window-close @ID
-        size_t p = 14;
-        if (p >= line.size() || line[p] != '@') return;
-        int window_id = std::stoi(line.substr(p + 1));
+    if (line.substr(0, 13) == "%window-close" ||
+        line.substr(0, 22) == "%unlinked-window-close") {
+        // %window-close @ID  or  %unlinked-window-close @ID
+        size_t at = line.find('@');
+        if (at == std::string::npos) return;
+        int window_id = std::stoi(line.substr(at + 1));
         if (on_window_close) on_window_close(window_id);
         return;
     }
@@ -188,6 +189,15 @@ void TmuxClient::parse_line(const std::string &line) {
 
     if (line.substr(0, 16) == "%session-changed") {
         if (on_session_changed) on_session_changed();
+        return;
+    }
+
+    if (line.substr(0, 23) == "%session-window-changed") {
+        // %session-window-changed $SESSION @WINDOW
+        size_t at = line.find('@');
+        if (at == std::string::npos) return;
+        int window_id = std::stoi(line.substr(at + 1));
+        if (on_session_window_changed) on_session_window_changed(window_id);
         return;
     }
 

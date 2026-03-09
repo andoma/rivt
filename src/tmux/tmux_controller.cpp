@@ -22,6 +22,7 @@ TmuxController::TmuxController(TmuxClient &client, Window &window,
     client_.on_window_renamed = [this](int id, const std::string &n) { on_window_renamed(id, n); };
     client_.on_layout_change = [this](int id, const std::string &l, bool active) { on_layout_change(id, l, active); };
     client_.on_session_changed = [this]() { on_session_changed(); };
+    client_.on_session_window_changed = [this](int id) { on_session_window_changed(id); };
     client_.on_exit = [this]() { on_exit(); };
 }
 
@@ -304,6 +305,19 @@ void TmuxController::on_session_changed() {
                 on_layout_change(window_id, layout);
             }
         });
+}
+
+void TmuxController::on_session_window_changed(int window_id) {
+    dbg("tmux: session-window-changed @%d", window_id);
+    auto it = window_map_.find(window_id);
+    if (it == window_map_.end()) return;
+    Tab *tab = it->second;
+    for (int i = 0; i < tabs_.tab_count(); i++) {
+        if (tabs_.tabs()[i].get() == tab) {
+            tabs_.activate_tab(i);
+            break;
+        }
+    }
 }
 
 void TmuxController::on_exit() {

@@ -37,6 +37,7 @@ public:
     std::function<void(int window_id, const std::string &name)> on_window_renamed;
     std::function<void(int window_id, const std::string &layout, bool is_active)> on_layout_change;
     std::function<void()> on_session_changed;
+    std::function<void(int window_id)> on_session_window_changed;
     std::function<void()> on_exit;
 
 private:
