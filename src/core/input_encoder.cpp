@@ -254,10 +254,10 @@ std::string encode_key_legacy(const KeyEvent &key, const ScreenBuffer &buffer) {
             seq = std::string("\033") + app + "D";
             break;
         case XKB_KEY_Home:
-            seq = "\033[H";
+            seq = std::string("\033") + app + "H";
             break;
         case XKB_KEY_End:
-            seq = "\033[F";
+            seq = std::string("\033") + app + "F";
             break;
         case XKB_KEY_Insert:
             seq = "\033[2~";
@@ -286,20 +286,47 @@ std::string encode_key_legacy(const KeyEvent &key, const ScreenBuffer &buffer) {
         case XKB_KEY_F11: seq = "\033[23~"; break;
         case XKB_KEY_F12: seq = "\033[24~"; break;
         default:
-            if (!key.text.empty()) {
-                if (ctrl && key.text.size() == 1) {
+            if (ctrl) {
+                // Ctrl + punctuation/symbol control codes
+                switch (key.keysym) {
+                    case XKB_KEY_space:
+                    case XKB_KEY_at:
+                        seq = std::string(1, '\0');
+                        break;
+                    case XKB_KEY_bracketleft:
+                        seq = "\033";
+                        break;
+                    case XKB_KEY_backslash:
+                        seq = std::string(1, '\x1c');
+                        break;
+                    case XKB_KEY_bracketright:
+                        seq = std::string(1, '\x1d');
+                        break;
+                    case XKB_KEY_asciicircum:
+                        seq = std::string(1, '\x1e');
+                        break;
+                    case XKB_KEY_underscore:
+                    case XKB_KEY_slash:
+                        seq = std::string(1, '\x1f');
+                        break;
+                    default:
+                        break;
+                }
+                if (!seq.empty()) break;
+
+                if (!key.text.empty() && key.text.size() == 1) {
                     char c = key.text[0];
                     if (c >= 'a' && c <= 'z') {
-                        char ctrl_char = c - 'a' + 1;
-                        seq = std::string(1, ctrl_char);
+                        seq = std::string(1, (char)(c - 'a' + 1));
                         break;
                     }
                     if (c >= 'A' && c <= 'Z') {
-                        char ctrl_char = c - 'A' + 1;
-                        seq = std::string(1, ctrl_char);
+                        seq = std::string(1, (char)(c - 'A' + 1));
                         break;
                     }
                 }
+            }
+            if (seq.empty() && !key.text.empty()) {
                 seq = key.text;
             }
             break;
