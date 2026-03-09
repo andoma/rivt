@@ -40,6 +40,8 @@ add_executable(rivt
     src/terminal/vt_parser.cpp
     src/terminal/screen_buffer.cpp
     src/pty/pty.cpp
+    src/tmux/tmux_client.cpp
+    src/tmux/tmux_controller.cpp
 )
 
 target_include_directories(rivt PRIVATE

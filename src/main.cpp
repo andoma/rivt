@@ -17,15 +17,35 @@ static void sigchld_handler(int) {
 }
 
 int main(int argc, char *argv[]) {
-    (void)argc; (void)argv;
-
     signal(SIGCHLD, sigchld_handler);
 
     Config base_config;
     EventLoop loop;
     std::vector<std::unique_ptr<Window>> windows;
 
+    // Check for tmux subcommand: rivt tmux <args...>
+    bool tmux_mode = false;
+    std::vector<std::string> tmux_args;
+    if (argc >= 2 && std::string(argv[1]) == "tmux") {
+        tmux_mode = true;
+        for (int i = 2; i < argc; i++)
+            tmux_args.push_back(argv[i]);
+    }
+
+    std::function<void(Pane *)> create_tmux_window;
     std::function<void()> create_window;
+
+    create_tmux_window = [&](Pane *gateway) {
+        auto win = std::make_unique<Window>(base_config, loop);
+        if (!win->init_tmux_pty(gateway)) return;
+        Window *raw = win.get();
+        loop.add_fd(raw->event_fd(), [raw](uint32_t) {
+            raw->platform()->process_events();
+        });
+        raw->on_close = [](Window *w) { w->mark_closing(); };
+        windows.push_back(std::move(win));
+    };
+
     create_window = [&]() {
         auto win = std::make_unique<Window>(base_config, loop);
         if (!win->init()) return;
@@ -34,11 +54,23 @@ int main(int argc, char *argv[]) {
             raw->platform()->process_events();
         });
         raw->on_new_window = create_window;
+        raw->on_new_tmux_window = create_tmux_window;
         raw->on_close = [](Window *w) { w->mark_closing(); };
         windows.push_back(std::move(win));
     };
 
-    create_window();
+    if (tmux_mode) {
+        auto win = std::make_unique<Window>(base_config, loop);
+        if (!win->init_tmux(tmux_args)) return 1;
+        Window *raw = win.get();
+        loop.add_fd(raw->event_fd(), [raw](uint32_t) {
+            raw->platform()->process_events();
+        });
+        raw->on_close = [](Window *w) { w->mark_closing(); };
+        windows.push_back(std::move(win));
+    } else {
+        create_window();
+    }
     if (windows.empty()) return 1;
 
     loop.add_timer(600, [&]() {

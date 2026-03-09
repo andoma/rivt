@@ -69,6 +69,10 @@ void TabManager::setup_pane(Pane *pane) {
             }
         }
     };
+
+    pane->on_tmux_control_mode = [this](Pane *p) {
+        if (on_tmux_control_mode) on_tmux_control_mode(p);
+    };
 }
 
 Tab *TabManager::new_tab() {
@@ -125,6 +129,63 @@ bool TabManager::close_tab(int index) {
         active_index_ = (int)tabs_.size() - 1;
 
     return true;
+}
+
+bool TabManager::close_tab_ptr(Tab *tab) {
+    for (int i = 0; i < (int)tabs_.size(); i++) {
+        if (tabs_[i].get() == tab) {
+            return close_tab(i);
+        }
+    }
+    return true;
+}
+
+Tab *TabManager::new_empty_tab(const std::string &title) {
+    auto tab = std::make_unique<Tab>();
+    tab->id = next_tab_id_++;
+    tab->title = title;
+
+    Tab *raw = tab.get();
+    tabs_.push_back(std::move(tab));
+    active_index_ = (int)tabs_.size() - 1;
+
+    return raw;
+}
+
+Pane *TabManager::add_pane_to_tab(Tab *tab, int cols, int rows) {
+    auto pane = std::make_unique<Pane>(cols, rows, config_);
+    Pane *raw = pane.get();
+
+    setup_pane(raw);
+    pane->setup_callbacks(platform_, config_);
+
+    tab->panes.push_back(std::move(pane));
+    if (!tab->focused_pane) tab->focused_pane = raw;
+
+    return raw;
+}
+
+bool TabManager::remove_pane(Tab *tab, Pane *pane) {
+    pane->detach(loop_);
+
+    // Update focus if needed
+    if (tab->focused_pane == pane) {
+        tab->focused_pane = nullptr;
+        for (auto &p : tab->panes) {
+            if (p.get() != pane) {
+                tab->focused_pane = p.get();
+                break;
+            }
+        }
+    }
+
+    auto it = std::find_if(tab->panes.begin(), tab->panes.end(),
+        [pane](const std::unique_ptr<Pane> &p) { return p.get() == pane; });
+    if (it != tab->panes.end()) {
+        tab->panes.erase(it);
+        return true;
+    }
+    return false;
 }
 
 void TabManager::activate_tab(int index) {
@@ -235,12 +296,9 @@ void TabManager::recompute_layout(int content_x, int content_y, int content_w, i
     Tab *tab = active_tab();
     if (!tab) return;
 
-    // Get cell dimensions from the first pane's screen metrics are not directly
-    // available here. We pass 0 for cell_w/cell_h and let Pane::resize handle grid calc.
-    // Actually, we need cell dimensions for snapping. We'll get them from the renderer
-    // through the caller. For now, use border_width=2.
-    // The caller should pass cell_w/cell_h via a different mechanism or we store them.
-    // For simplicity, store cell dimensions.
+    // Skip layout computation for tmux-managed tabs (pane rects set by TmuxController)
+    if (tab->tmux_managed) return;
+
     tab->layout.compute_layout(content_x, content_y, content_w, content_h,
                                 2, cell_w_, cell_h_);
 }

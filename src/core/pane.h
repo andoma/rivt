@@ -28,15 +28,21 @@ public:
     // Remove PTY fd from event loop (called before destruction)
     void detach(EventLoop &loop);
 
-    // Write data to the PTY
+    // Write data to the PTY (or write_callback if set)
     void write(const std::string &data);
     void write(const char *data, size_t len);
+
+    // Feed data directly into parser (for tmux %output)
+    void feed_data(const char *buf, size_t len);
 
     // Resize terminal grid
     void resize(int cols, int rows);
 
     // Check if child shell is alive
-    bool alive() const { return pty_.alive(); }
+    bool alive() const { if (write_callback_) return true; return pty_.alive(); }
+
+    // When set, write() routes here instead of to PTY
+    std::function<void(const std::string &)> write_callback_;
 
     // Accessors
     ScreenBuffer &screen() { return screen_; }
@@ -67,6 +73,12 @@ public:
 
     // Activity flag (set when output received while not focused)
     bool has_activity = false;
+
+    // Callback: tmux control mode detected in PTY output (\033P1000p)
+    std::function<void(Pane *)> on_tmux_control_mode;
+
+    // When set, raw PTY reads go here instead of VtParser (used for tmux PTY mode)
+    std::function<void(const char *, int)> pty_data_override_;
 
 private:
     ScreenBuffer screen_;

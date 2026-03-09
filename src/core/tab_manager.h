@@ -20,6 +20,18 @@ public:
     // Close tab by index. Returns false if it was the last tab (caller should quit).
     bool close_tab(int index);
 
+    // Close tab by pointer. Returns false if it was the last tab.
+    bool close_tab_ptr(Tab *tab);
+
+    // Create an empty tab (no shell spawned) for tmux use
+    Tab *new_empty_tab(const std::string &title);
+
+    // Add a pane to a tab without spawning a shell (for tmux use)
+    Pane *add_pane_to_tab(Tab *tab, int cols, int rows);
+
+    // Remove a specific pane from a tab
+    bool remove_pane(Tab *tab, Pane *pane);
+
     // Activate tab by index
     void activate_tab(int index);
 
@@ -66,6 +78,9 @@ public:
 
     // Callback: should quit
     std::function<void()> on_quit;
+
+    // Callback: tmux control mode detected in a pane
+    std::function<void(Pane *)> on_tmux_control_mode;
 
 private:
     Pane *create_pane();

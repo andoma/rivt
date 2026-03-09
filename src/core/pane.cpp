@@ -1,6 +1,7 @@
 #include "core/pane.h"
 #include "platform/platform.h"
 #include <sys/epoll.h>
+#include <cstring>
 
 namespace rivt {
 
@@ -22,6 +23,41 @@ bool Pane::spawn_shell(EventLoop &loop) {
             char buf[65536];
             int n;
             while ((n = pty_.read(buf, sizeof(buf))) > 0) {
+                // If in tmux PTY mode, forward all data to override
+                if (pty_data_override_) {
+                    pty_data_override_(buf, n);
+                    continue;
+                }
+
+                // Check for tmux control mode DCS: \033P1000p
+                if (on_tmux_control_mode) {
+                    static const char marker[] = "\033P1000p";
+                    static const int marker_len = 7;
+                    const char *found = nullptr;
+                    for (int i = 0; i <= n - marker_len; i++) {
+                        if (buf[i] == '\033' && memcmp(buf + i, marker, marker_len) == 0) {
+                            found = buf + i;
+                            break;
+                        }
+                    }
+                    if (found) {
+                        // Feed data before marker to VtParser
+                        if (found > buf) {
+                            parser_.feed(buf, found - buf);
+                            if (on_needs_render) on_needs_render();
+                        }
+                        // Fire callback — handler sets pty_data_override_
+                        on_tmux_control_mode(this);
+                        // Feed remainder after marker to tmux client
+                        const char *after = found + marker_len;
+                        int remaining = n - (int)(after - buf);
+                        if (remaining > 0 && pty_data_override_) {
+                            pty_data_override_(after, remaining);
+                        }
+                        continue;
+                    }
+                }
+
                 parser_.feed(buf, n);
                 if (on_needs_render) on_needs_render();
             }
@@ -49,16 +85,25 @@ void Pane::detach(EventLoop &loop) {
 }
 
 void Pane::write(const std::string &data) {
-    pty_.write(data);
+    if (write_callback_) write_callback_(data);
+    else pty_.write(data);
 }
 
 void Pane::write(const char *data, size_t len) {
-    pty_.write(data, (int)len);
+    if (write_callback_) write_callback_(std::string(data, len));
+    else pty_.write(data, (int)len);
+}
+
+void Pane::feed_data(const char *buf, size_t len) {
+    parser_.feed(buf, len);
+    if (screen_.search.active && !screen_.search.query.empty())
+        screen_.find_matches_incremental();
+    if (on_needs_render) on_needs_render();
 }
 
 void Pane::resize(int cols, int rows) {
     screen_.resize(cols, rows);
-    pty_.resize(cols, rows);
+    if (pty_fd_registered_ >= 0) pty_.resize(cols, rows);
 }
 
 void Pane::setup_callbacks(Platform *platform, const Config &config) {
@@ -76,7 +121,7 @@ void Pane::setup_callbacks(Platform *platform, const Config &config) {
     };
 
     screen_.on_write_back = [this](const std::string &data) {
-        pty_.write(data);
+        write(data);
     };
 
     screen_.on_osc52_read = [this, platform, &config](const std::string &sel) {
@@ -84,7 +129,7 @@ void Pane::setup_callbacks(Platform *platform, const Config &config) {
         bool primary = (sel.find('p') != std::string::npos);
         std::string text = platform->get_clipboard(primary);
         std::string response = "\033]52;" + sel + ";" + base64_encode(text) + "\033\\";
-        pty_.write(response);
+        write(response);
     };
 }
 
