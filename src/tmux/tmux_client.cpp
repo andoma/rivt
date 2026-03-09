@@ -186,6 +186,11 @@ void TmuxClient::parse_line(const std::string &line) {
         return;
     }
 
+    if (line.substr(0, 16) == "%session-changed") {
+        if (on_session_changed) on_session_changed();
+        return;
+    }
+
     if (line.substr(0, 14) == "%layout-change") {
         // %layout-change @ID layout_string [flags...]
         size_t p = 15;

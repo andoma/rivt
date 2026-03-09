@@ -21,6 +21,7 @@ TmuxController::TmuxController(TmuxClient &client, Window &window,
     client_.on_window_close = [this](int id) { on_window_close(id); };
     client_.on_window_renamed = [this](int id, const std::string &n) { on_window_renamed(id, n); };
     client_.on_layout_change = [this](int id, const std::string &l) { on_layout_change(id, l); };
+    client_.on_session_changed = [this]() { on_session_changed(); };
     client_.on_exit = [this]() { on_exit(); };
 }
 
@@ -240,6 +241,32 @@ Pane *TmuxController::create_tmux_pane(Tab *tab, int tmux_pane_id, int cols, int
         });
 
     return pane;
+}
+
+void TmuxController::on_session_changed() {
+    dbg("tmux: session-changed, requesting window list");
+    client_.send_command(
+        "list-windows -F '#{window_id} #{window_layout}'",
+        [this](const std::string &output) {
+            dbg("tmux: list-windows response (%zu bytes)", output.size());
+            // Each line: "ID LAYOUT_STRING\n"
+            size_t pos = 0;
+            while (pos < output.size()) {
+                size_t nl = output.find('\n', pos);
+                if (nl == std::string::npos) nl = output.size();
+                std::string line = output.substr(pos, nl - pos);
+                pos = nl + 1;
+                if (line.empty()) continue;
+
+                // Parse "ID LAYOUT"
+                size_t sp = line.find(' ');
+                if (sp == std::string::npos) continue;
+                int window_id = std::stoi(line.substr(0, sp));
+                std::string layout = line.substr(sp + 1);
+                dbg("tmux: list-windows: @%d layout='%s'", window_id, layout.c_str());
+                on_layout_change(window_id, layout);
+            }
+        });
 }
 
 void TmuxController::on_exit() {
