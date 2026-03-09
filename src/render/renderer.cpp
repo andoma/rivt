@@ -501,6 +501,21 @@ static std::string utf8_truncate(const std::string &s, int max_chars) {
     return s.substr(0, i);
 }
 
+int Renderer::tab_hit_test(const TabManager &tabs, int x) {
+    const auto &m = font_.metrics();
+    float tab_x = 4;
+    for (int i = 0; i < tabs.tab_count(); i++) {
+        const Tab &tab = *tabs.tabs()[i];
+        std::string title = tab.title.empty() ? "Terminal" : format_tab_title(tab.title);
+        if (utf8_len(title) > 15) title = utf8_truncate(title, 15) + "...";
+        float tab_w = (utf8_len(title) + 2) * m.cell_width;
+        if (x >= tab_x && x < tab_x + tab_w)
+            return i;
+        tab_x += tab_w + 4;
+    }
+    return -1;
+}
+
 void Renderer::render_tab_bar(const TabManager &tabs, const Config &/*config*/, int bar_height) {
     const auto &m = font_.metrics();
     float atlas_size = (float)atlas_.texture_size();

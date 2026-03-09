@@ -345,40 +345,18 @@ int main(int argc, char *argv[]) {
 
         // Tab bar click handling
         if (bar_h > 0 && mouse.y < bar_h) {
-            if (mouse.button == MouseButton::Left && mouse.pressed && !mouse.motion) {
-                // Determine which tab was clicked
-                float tab_x = 4;
-                for (int i = 0; i < tabs.tab_count(); i++) {
-                    const Tab &t = *tabs.tabs()[i];
-                    std::string title = t.title.empty() ? "Terminal" : t.title;
-                    if (title.size() > 20) title = title.substr(0, 20) + "...";
-                    float tab_w = (title.size() + 2) * met.cell_width;
-                    if (mouse.x >= tab_x && mouse.x < tab_x + tab_w) {
-                        tabs.activate_tab(i);
-                        recompute();
-                        needs_render = true;
-                        return;
-                    }
-                    tab_x += tab_w + 4;
-                }
-            }
-            if (mouse.button == MouseButton::Middle && mouse.pressed && !mouse.motion) {
-                // Middle-click to close tab
-                float tab_x = 4;
-                for (int i = 0; i < tabs.tab_count(); i++) {
-                    const Tab &t = *tabs.tabs()[i];
-                    std::string title = t.title.empty() ? "Terminal" : t.title;
-                    if (title.size() > 20) title = title.substr(0, 20) + "...";
-                    float tab_w = (title.size() + 2) * met.cell_width;
-                    if (mouse.x >= tab_x && mouse.x < tab_x + tab_w) {
-                        if (!tabs.close_tab(i)) {
+            if (mouse.pressed && !mouse.motion) {
+                int hit = renderer.tab_hit_test(tabs, mouse.x);
+                if (hit >= 0) {
+                    if (mouse.button == MouseButton::Left) {
+                        tabs.activate_tab(hit);
+                    } else if (mouse.button == MouseButton::Middle) {
+                        if (!tabs.close_tab(hit)) {
                             loop.request_quit();
                         }
-                        recompute();
-                        needs_render = true;
-                        return;
                     }
-                    tab_x += tab_w + 4;
+                    recompute();
+                    needs_render = true;
                 }
             }
             return;

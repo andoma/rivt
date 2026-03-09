@@ -35,6 +35,9 @@ public:
     // Render tab bar
     void render_tab_bar(const TabManager &tabs, const Config &config, int bar_height);
 
+    // Hit-test tab bar, returns tab index or -1
+    int tab_hit_test(const TabManager &tabs, int x);
+
     // Flush all accumulated vertices (call after building all quads)
     void flush();
 
