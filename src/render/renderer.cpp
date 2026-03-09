@@ -1,6 +1,7 @@
 #define GL_GLEXT_PROTOTYPES
 #include "render/renderer.h"
 #include "terminal/screen_buffer.h"
+#include "core/tab_manager.h"
 #include <GL/gl.h>
 #include <cstdio>
 #include <cmath>
@@ -133,7 +134,6 @@ void Renderer::compute_grid(int pixel_w, int pixel_h, int &cols, int &rows) cons
 void Renderer::resolve_color(uint32_t encoded, const Config &config,
                               float &r, float &g, float &b) const {
     if (encoded & COLOR_FLAG_DEFAULT) {
-        // Will be resolved by caller (fg vs bg)
         r = g = b = 0;
         return;
     }
@@ -149,45 +149,48 @@ void Renderer::resolve_color(uint32_t encoded, const Config &config,
     b = (rgb & 0xFF) / 255.0f;
 }
 
-void Renderer::render(const ScreenBuffer &buffer, const Config &config) {
-    // Clear with background color
+void Renderer::clear(const Config &config) {
     float bgr = ((config.bg_color >> 16) & 0xFF) / 255.0f;
     float bgg = ((config.bg_color >> 8) & 0xFF) / 255.0f;
     float bgb = (config.bg_color & 0xFF) / 255.0f;
     glClearColor(bgr, bgg, bgb, 1.0f);
     glClear(GL_COLOR_BUFFER_BIT);
+}
 
+void Renderer::begin_frame(const Config &config) {
+    clear(config);
     vertices_.clear();
+}
 
-    // Build projection matrix (orthographic, pixel coords, origin top-left)
-    float proj[16] = {};
-    proj[0] = 2.0f / viewport_w_;
-    proj[5] = -2.0f / viewport_h_;
-    proj[10] = -1.0f;
-    proj[12] = -1.0f;
-    proj[13] = 1.0f;
-    proj[15] = 1.0f;
-
+void Renderer::build_pane_vertices(const ScreenBuffer &buffer, const Config &config,
+                                    int offset_x, int offset_y, int clip_w, int clip_h,
+                                    bool pane_focused) {
     const auto &m = font_.metrics();
     float def_fg_r = ((config.fg_color >> 16) & 0xFF) / 255.0f;
     float def_fg_g = ((config.fg_color >> 8) & 0xFF) / 255.0f;
     float def_fg_b = (config.fg_color & 0xFF) / 255.0f;
-    float def_bg_r = bgr, def_bg_g = bgg, def_bg_b = bgb;
+    float def_bg_r = ((config.bg_color >> 16) & 0xFF) / 255.0f;
+    float def_bg_g = ((config.bg_color >> 8) & 0xFF) / 255.0f;
+    float def_bg_b = (config.bg_color & 0xFF) / 255.0f;
 
     float atlas_size = (float)atlas_.texture_size();
+    float ox = (float)offset_x;
+    float oy = (float)offset_y;
 
-    // Iterate over visible cells
     for (int row = 0; row < buffer.rows(); row++) {
         const Line &line = buffer.line(row);
-        float y_top = row * m.cell_height;
+        float y_top = oy + row * m.cell_height;
+
+        if (y_top >= oy + clip_h) break;
 
         for (int col = 0; col < buffer.cols() && col < (int)line.cells.size(); col++) {
             const Cell &cell = line.cells[col];
-            float x_left = col * m.cell_width;
+            float x_left = ox + col * m.cell_width;
             float x_right = x_left + m.cell_width;
             float y_bottom = y_top + m.cell_height;
 
-            // Resolve colors
+            if (x_left >= ox + clip_w) break;
+
             float fg_r, fg_g, fg_b, cell_bg_r, cell_bg_g, cell_bg_b;
 
             if (cell.fg & COLOR_FLAG_DEFAULT) {
@@ -202,7 +205,6 @@ void Renderer::render(const ScreenBuffer &buffer, const Config &config) {
                 resolve_color(cell.bg, config, cell_bg_r, cell_bg_g, cell_bg_b);
             }
 
-            // Selection: use selection_color as background, white as foreground
             int abs_line = buffer.absolute_line(row);
             bool selected = buffer.selection.contains(abs_line, col);
             if (selected) {
@@ -212,49 +214,39 @@ void Renderer::render(const ScreenBuffer &buffer, const Config &config) {
                 fg_r = 1.0f; fg_g = 1.0f; fg_b = 1.0f;
             }
 
-            // Search highlight
             int mt = buffer.search.match_type(abs_line, col);
             if (mt == 2) {
-                // Current match: bright orange
                 cell_bg_r = 0.9f; cell_bg_g = 0.6f; cell_bg_b = 0.1f;
                 fg_r = 0.0f; fg_g = 0.0f; fg_b = 0.0f;
             } else if (mt == 1) {
-                // Other matches: yellow
                 cell_bg_r = 0.6f; cell_bg_g = 0.5f; cell_bg_b = 0.1f;
                 fg_r = 0.0f; fg_g = 0.0f; fg_b = 0.0f;
             }
 
-            // Handle inverse
             if (cell.attrs & ATTR_INVERSE) {
                 std::swap(fg_r, cell_bg_r);
                 std::swap(fg_g, cell_bg_g);
                 std::swap(fg_b, cell_bg_b);
             }
 
-            // Handle dim
             if (cell.attrs & ATTR_DIM) {
                 fg_r *= 0.5f; fg_g *= 0.5f; fg_b *= 0.5f;
             }
 
-            // Background quad (only if non-default, inverse, selected, or search match)
             if (!(cell.bg & COLOR_FLAG_DEFAULT) || (cell.attrs & ATTR_INVERSE) || selected || mt) {
-                // Triangle 1
                 vertices_.push_back({x_left,  y_top,    0, 0, cell_bg_r, cell_bg_g, cell_bg_b, 1.0f, 0});
                 vertices_.push_back({x_right, y_top,    0, 0, cell_bg_r, cell_bg_g, cell_bg_b, 1.0f, 0});
                 vertices_.push_back({x_right, y_bottom, 0, 0, cell_bg_r, cell_bg_g, cell_bg_b, 1.0f, 0});
-                // Triangle 2
                 vertices_.push_back({x_left,  y_top,    0, 0, cell_bg_r, cell_bg_g, cell_bg_b, 1.0f, 0});
                 vertices_.push_back({x_right, y_bottom, 0, 0, cell_bg_r, cell_bg_g, cell_bg_b, 1.0f, 0});
                 vertices_.push_back({x_left,  y_bottom, 0, 0, cell_bg_r, cell_bg_g, cell_bg_b, 1.0f, 0});
             }
 
-            // Skip if continuation of wide char or space
             if ((cell.attrs & ATTR_WIDE_CONT) || (cell.codepoint == ' ' && !(cell.attrs & ATTR_UNDERLINE_MASK)))
                 continue;
 
-            // Find and render glyph
             uint32_t cp = cell.codepoint;
-            if (cp >= GRAPHEME_SENTINEL_BASE) continue; // TODO: grapheme cluster support
+            if (cp >= GRAPHEME_SENTINEL_BASE) continue;
 
             auto [font_idx, glyph_id] = font_.find_glyph(cp);
             const GlyphEntry *ge = atlas_.get(font_, font_idx, glyph_id);
@@ -272,16 +264,13 @@ void Renderer::render(const ScreenBuffer &buffer, const Config &config) {
 
             float glyph_type = (ge->type == GlyphType::Color) ? 2.0f : 1.0f;
 
-            // Triangle 1
             vertices_.push_back({gx,  gy,  tu,  tv,  fg_r, fg_g, fg_b, 1.0f, glyph_type});
             vertices_.push_back({gx2, gy,  tu2, tv,  fg_r, fg_g, fg_b, 1.0f, glyph_type});
             vertices_.push_back({gx2, gy2, tu2, tv2, fg_r, fg_g, fg_b, 1.0f, glyph_type});
-            // Triangle 2
             vertices_.push_back({gx,  gy,  tu,  tv,  fg_r, fg_g, fg_b, 1.0f, glyph_type});
             vertices_.push_back({gx2, gy2, tu2, tv2, fg_r, fg_g, fg_b, 1.0f, glyph_type});
             vertices_.push_back({gx,  gy2, tu,  tv2, fg_r, fg_g, fg_b, 1.0f, glyph_type});
 
-            // Underline
             if (cell.attrs & ATTR_UNDERLINE_MASK) {
                 float uy = y_top + m.ascender + 2;
                 float uy2 = uy + std::max(1, m.underline_thickness);
@@ -293,7 +282,6 @@ void Renderer::render(const ScreenBuffer &buffer, const Config &config) {
                 vertices_.push_back({x_left,  uy2, 0, 0, fg_r, fg_g, fg_b, 1.0f, 0});
             }
 
-            // Strikethrough
             if (cell.attrs & ATTR_STRIKETHROUGH) {
                 float sy = y_top + m.cell_height / 2.0f;
                 float sy2 = sy + 1;
@@ -307,12 +295,12 @@ void Renderer::render(const ScreenBuffer &buffer, const Config &config) {
         }
     }
 
-    // Render cursor
+    // Cursor
     if (buffer.cursor_visible() && buffer.viewport_offset() == 0) {
         int cr = buffer.cursor_row();
         int cc = buffer.cursor_col();
-        float cx = cc * m.cell_width;
-        float cy = cr * m.cell_height;
+        float cx = ox + cc * m.cell_width;
+        float cy = oy + cr * m.cell_height;
         float cur_r = ((config.cursor_color >> 16) & 0xFF) / 255.0f;
         float cur_g = ((config.cursor_color >> 8) & 0xFF) / 255.0f;
         float cur_b = (config.cursor_color & 0xFF) / 255.0f;
@@ -320,8 +308,7 @@ void Renderer::render(const ScreenBuffer &buffer, const Config &config) {
         float cw = (float)m.cell_width;
         float ch = (float)m.cell_height;
 
-        if (focused_) {
-            // Filled block cursor
+        if (focused_ && pane_focused) {
             vertices_.push_back({cx,    cy,    0,0, cur_r,cur_g,cur_b,0.7f, 0});
             vertices_.push_back({cx+cw, cy,    0,0, cur_r,cur_g,cur_b,0.7f, 0});
             vertices_.push_back({cx+cw, cy+ch, 0,0, cur_r,cur_g,cur_b,0.7f, 0});
@@ -329,7 +316,6 @@ void Renderer::render(const ScreenBuffer &buffer, const Config &config) {
             vertices_.push_back({cx+cw, cy+ch, 0,0, cur_r,cur_g,cur_b,0.7f, 0});
             vertices_.push_back({cx,    cy+ch, 0,0, cur_r,cur_g,cur_b,0.7f, 0});
         } else {
-            // Hollow outline cursor
             float thick = 2.0f;
             // Top
             vertices_.push_back({cx, cy, 0,0, cur_r,cur_g,cur_b,1, 0});
@@ -362,42 +348,37 @@ void Renderer::render(const ScreenBuffer &buffer, const Config &config) {
         }
     }
 
-    // Search bar overlay (only when focused)
+    // Search bar overlay (render within pane rect)
     if (buffer.search.focused) {
         float bar_h = m.cell_height + 8;
-        float bar_y = 0;
-        float bar_w = (float)viewport_w_;
+        float bar_y = oy;
+        float bar_w = (float)clip_w;
 
-        // Bar background (dark gray)
         float bar_r = 0.15f, bar_g = 0.15f, bar_b = 0.15f;
-        vertices_.push_back({0,     bar_y,         0,0, bar_r,bar_g,bar_b,0.95f, 0});
-        vertices_.push_back({bar_w, bar_y,         0,0, bar_r,bar_g,bar_b,0.95f, 0});
-        vertices_.push_back({bar_w, bar_y + bar_h, 0,0, bar_r,bar_g,bar_b,0.95f, 0});
-        vertices_.push_back({0,     bar_y,         0,0, bar_r,bar_g,bar_b,0.95f, 0});
-        vertices_.push_back({bar_w, bar_y + bar_h, 0,0, bar_r,bar_g,bar_b,0.95f, 0});
-        vertices_.push_back({0,     bar_y + bar_h, 0,0, bar_r,bar_g,bar_b,0.95f, 0});
+        vertices_.push_back({ox,        bar_y,         0,0, bar_r,bar_g,bar_b,0.95f, 0});
+        vertices_.push_back({ox+bar_w,  bar_y,         0,0, bar_r,bar_g,bar_b,0.95f, 0});
+        vertices_.push_back({ox+bar_w,  bar_y + bar_h, 0,0, bar_r,bar_g,bar_b,0.95f, 0});
+        vertices_.push_back({ox,        bar_y,         0,0, bar_r,bar_g,bar_b,0.95f, 0});
+        vertices_.push_back({ox+bar_w,  bar_y + bar_h, 0,0, bar_r,bar_g,bar_b,0.95f, 0});
+        vertices_.push_back({ox,        bar_y + bar_h, 0,0, bar_r,bar_g,bar_b,0.95f, 0});
 
-        // Bottom border (subtle highlight)
         float bdr_y = bar_y + bar_h - 1;
-        vertices_.push_back({0,     bdr_y,     0,0, 0.3f,0.3f,0.3f,1, 0});
-        vertices_.push_back({bar_w, bdr_y,     0,0, 0.3f,0.3f,0.3f,1, 0});
-        vertices_.push_back({bar_w, bdr_y + 1, 0,0, 0.3f,0.3f,0.3f,1, 0});
-        vertices_.push_back({0,     bdr_y,     0,0, 0.3f,0.3f,0.3f,1, 0});
-        vertices_.push_back({bar_w, bdr_y + 1, 0,0, 0.3f,0.3f,0.3f,1, 0});
-        vertices_.push_back({0,     bdr_y + 1, 0,0, 0.3f,0.3f,0.3f,1, 0});
+        vertices_.push_back({ox,        bdr_y,     0,0, 0.3f,0.3f,0.3f,1, 0});
+        vertices_.push_back({ox+bar_w,  bdr_y,     0,0, 0.3f,0.3f,0.3f,1, 0});
+        vertices_.push_back({ox+bar_w,  bdr_y + 1, 0,0, 0.3f,0.3f,0.3f,1, 0});
+        vertices_.push_back({ox,        bdr_y,     0,0, 0.3f,0.3f,0.3f,1, 0});
+        vertices_.push_back({ox+bar_w,  bdr_y + 1, 0,0, 0.3f,0.3f,0.3f,1, 0});
+        vertices_.push_back({ox,        bdr_y + 1, 0,0, 0.3f,0.3f,0.3f,1, 0});
 
         float text_y = bar_y + 4;
-        float text_x = 4;
+        float text_x = ox + 4;
 
-        // "Find: " label
         draw_text(text_x, text_y, "Find: ", 0.6f, 0.6f, 0.6f, atlas_size);
         text_x += 6 * m.cell_width;
 
-        // Query text
         draw_text(text_x, text_y, buffer.search.query, 1.0f, 1.0f, 1.0f, atlas_size);
         text_x += buffer.search.query.size() * m.cell_width;
 
-        // Cursor
         float cur_x = text_x;
         vertices_.push_back({cur_x,   text_y,                     0,0, 0.8f,0.8f,0.8f,0.8f, 0});
         vertices_.push_back({cur_x+2, text_y,                     0,0, 0.8f,0.8f,0.8f,0.8f, 0});
@@ -406,7 +387,6 @@ void Renderer::render(const ScreenBuffer &buffer, const Config &config) {
         vertices_.push_back({cur_x+2, text_y + (float)m.cell_height, 0,0, 0.8f,0.8f,0.8f,0.8f, 0});
         vertices_.push_back({cur_x,   text_y + (float)m.cell_height, 0,0, 0.8f,0.8f,0.8f,0.8f, 0});
 
-        // Match count (right-aligned)
         if (!buffer.search.query.empty()) {
             std::string info;
             if (buffer.search.total_matches() == 0) {
@@ -415,17 +395,192 @@ void Renderer::render(const ScreenBuffer &buffer, const Config &config) {
                 info = std::to_string(buffer.search.current_match + 1) + " of "
                      + std::to_string(buffer.search.total_matches());
             }
-            float info_x = bar_w - (info.size() + 1) * m.cell_width;
+            float info_x = ox + bar_w - (info.size() + 1) * m.cell_width;
             float info_r = buffer.search.total_matches() == 0 ? 0.8f : 0.6f;
             float info_g = buffer.search.total_matches() == 0 ? 0.3f : 0.6f;
             float info_b = buffer.search.total_matches() == 0 ? 0.3f : 0.6f;
             draw_text(info_x, text_y, info, info_r, info_g, info_b, atlas_size);
         }
     }
+}
 
+void Renderer::render_pane(const ScreenBuffer &buffer, const Config &config,
+                            int offset_x, int offset_y, int w, int h,
+                            bool pane_focused) {
+    // Set scissor to clip rendering to pane rect
+    // OpenGL scissor uses bottom-left origin, so convert
+    int scissor_y = viewport_h_ - (offset_y + h);
+    glEnable(GL_SCISSOR_TEST);
+    glScissor(offset_x, scissor_y, w, h);
+
+    build_pane_vertices(buffer, config, offset_x, offset_y, w, h, pane_focused);
+
+    // Flush vertices for this pane while scissor is active
+    flush();
+
+    glDisable(GL_SCISSOR_TEST);
+}
+
+void Renderer::render_border(float x, float y, float w, float h,
+                              float r, float g, float b) {
+    vertices_.push_back({x,   y,   0,0, r,g,b,1, 0});
+    vertices_.push_back({x+w, y,   0,0, r,g,b,1, 0});
+    vertices_.push_back({x+w, y+h, 0,0, r,g,b,1, 0});
+    vertices_.push_back({x,   y,   0,0, r,g,b,1, 0});
+    vertices_.push_back({x+w, y+h, 0,0, r,g,b,1, 0});
+    vertices_.push_back({x,   y+h, 0,0, r,g,b,1, 0});
+}
+
+// Format a terminal title for display in a tab.
+// Strips "user@host:" prefix, abbreviates paths to last 2 components,
+// replaces $HOME prefix with ~.
+static std::string format_tab_title(const std::string &raw) {
+    std::string title = raw;
+
+    // Strip "user@host:" prefix (common bash PROMPT_COMMAND pattern)
+    auto colon = title.find(':');
+    if (colon != std::string::npos && colon > 0) {
+        // Check that everything before colon looks like user@host
+        bool looks_like_host = false;
+        for (size_t i = 0; i < colon; i++) {
+            if (title[i] == '@') { looks_like_host = true; break; }
+        }
+        if (looks_like_host) {
+            title = title.substr(colon + 1);
+            // Strip leading space if any
+            if (!title.empty() && title[0] == ' ') title = title.substr(1);
+        }
+    }
+
+    // If it looks like a path, abbreviate to last 2 components
+    if (!title.empty() && (title[0] == '/' || title[0] == '~')) {
+        // Find the last two path separators
+        size_t last = title.rfind('/');
+        if (last != std::string::npos && last > 0) {
+            size_t prev = title.rfind('/', last - 1);
+            if (prev != std::string::npos && prev > 0) {
+                // Show .../second-to-last/last
+                title = "..." + title.substr(prev);
+            }
+        }
+    }
+
+    return title;
+}
+
+static int utf8_len(const std::string &s) {
+    int count = 0;
+    for (size_t i = 0; i < s.size(); count++) {
+        unsigned char c = s[i];
+        if (c < 0x80) i += 1;
+        else if ((c & 0xE0) == 0xC0) i += 2;
+        else if ((c & 0xF0) == 0xE0) i += 3;
+        else if ((c & 0xF8) == 0xF0) i += 4;
+        else i += 1;
+    }
+    return count;
+}
+
+static std::string utf8_truncate(const std::string &s, int max_chars) {
+    int count = 0;
+    size_t i = 0;
+    while (i < s.size() && count < max_chars) {
+        unsigned char c = s[i];
+        if (c < 0x80) i += 1;
+        else if ((c & 0xE0) == 0xC0) i += 2;
+        else if ((c & 0xF0) == 0xE0) i += 3;
+        else if ((c & 0xF8) == 0xF0) i += 4;
+        else i += 1;
+        count++;
+    }
+    return s.substr(0, i);
+}
+
+void Renderer::render_tab_bar(const TabManager &tabs, const Config &/*config*/, int bar_height) {
+    const auto &m = font_.metrics();
+    float atlas_size = (float)atlas_.texture_size();
+    float bar_w = (float)viewport_w_;
+
+    // Tab bar background
+    vertices_.push_back({0,     0,              0,0, 0.12f,0.12f,0.12f,1, 0});
+    vertices_.push_back({bar_w, 0,              0,0, 0.12f,0.12f,0.12f,1, 0});
+    vertices_.push_back({bar_w, (float)bar_height, 0,0, 0.12f,0.12f,0.12f,1, 0});
+    vertices_.push_back({0,     0,              0,0, 0.12f,0.12f,0.12f,1, 0});
+    vertices_.push_back({bar_w, (float)bar_height, 0,0, 0.12f,0.12f,0.12f,1, 0});
+    vertices_.push_back({0,     (float)bar_height, 0,0, 0.12f,0.12f,0.12f,1, 0});
+
+    // Bottom border
+    float bdr_y = (float)bar_height - 1;
+    vertices_.push_back({0,     bdr_y,     0,0, 0.25f,0.25f,0.25f,1, 0});
+    vertices_.push_back({bar_w, bdr_y,     0,0, 0.25f,0.25f,0.25f,1, 0});
+    vertices_.push_back({bar_w, bdr_y + 1, 0,0, 0.25f,0.25f,0.25f,1, 0});
+    vertices_.push_back({0,     bdr_y,     0,0, 0.25f,0.25f,0.25f,1, 0});
+    vertices_.push_back({bar_w, bdr_y + 1, 0,0, 0.25f,0.25f,0.25f,1, 0});
+    vertices_.push_back({0,     bdr_y + 1, 0,0, 0.25f,0.25f,0.25f,1, 0});
+
+    // Render each tab
+    float tab_x = 4;
+    float text_y = 4;
+    int active_idx = tabs.active_index();
+
+    for (int i = 0; i < tabs.tab_count(); i++) {
+        const Tab &tab = *tabs.tabs()[i];
+        std::string title = tab.title.empty() ? "Terminal" : format_tab_title(tab.title);
+        if (utf8_len(title) > 15) title = utf8_truncate(title, 15) + "...";
+
+        float tab_w = (utf8_len(title) + 2) * m.cell_width;
+
+        if (i == active_idx) {
+            // Active tab background
+            vertices_.push_back({tab_x,        0,                  0,0, 0.2f,0.2f,0.2f,1, 0});
+            vertices_.push_back({tab_x+tab_w,  0,                  0,0, 0.2f,0.2f,0.2f,1, 0});
+            vertices_.push_back({tab_x+tab_w,  (float)bar_height-1, 0,0, 0.2f,0.2f,0.2f,1, 0});
+            vertices_.push_back({tab_x,        0,                  0,0, 0.2f,0.2f,0.2f,1, 0});
+            vertices_.push_back({tab_x+tab_w,  (float)bar_height-1, 0,0, 0.2f,0.2f,0.2f,1, 0});
+            vertices_.push_back({tab_x,        (float)bar_height-1, 0,0, 0.2f,0.2f,0.2f,1, 0});
+
+            // Active tab indicator (colored bottom border)
+            float ind_y = (float)bar_height - 2;
+            vertices_.push_back({tab_x,       ind_y,            0,0, 0.3f,0.6f,1.0f,1, 0});
+            vertices_.push_back({tab_x+tab_w, ind_y,            0,0, 0.3f,0.6f,1.0f,1, 0});
+            vertices_.push_back({tab_x+tab_w, (float)bar_height, 0,0, 0.3f,0.6f,1.0f,1, 0});
+            vertices_.push_back({tab_x,       ind_y,            0,0, 0.3f,0.6f,1.0f,1, 0});
+            vertices_.push_back({tab_x+tab_w, (float)bar_height, 0,0, 0.3f,0.6f,1.0f,1, 0});
+            vertices_.push_back({tab_x,       (float)bar_height, 0,0, 0.3f,0.6f,1.0f,1, 0});
+
+            draw_text(tab_x + m.cell_width, text_y, title, 0.9f, 0.9f, 0.9f, atlas_size);
+        } else {
+            // Activity indicator
+            if (tab.has_activity) {
+                // Small dot
+                float dot_x = tab_x + 4;
+                float dot_y = text_y + m.cell_height / 2.0f - 2;
+                vertices_.push_back({dot_x,   dot_y,   0,0, 0.3f,0.7f,1.0f,1, 0});
+                vertices_.push_back({dot_x+4, dot_y,   0,0, 0.3f,0.7f,1.0f,1, 0});
+                vertices_.push_back({dot_x+4, dot_y+4, 0,0, 0.3f,0.7f,1.0f,1, 0});
+                vertices_.push_back({dot_x,   dot_y,   0,0, 0.3f,0.7f,1.0f,1, 0});
+                vertices_.push_back({dot_x+4, dot_y+4, 0,0, 0.3f,0.7f,1.0f,1, 0});
+                vertices_.push_back({dot_x,   dot_y+4, 0,0, 0.3f,0.7f,1.0f,1, 0});
+            }
+
+            draw_text(tab_x + m.cell_width, text_y, title, 0.5f, 0.5f, 0.5f, atlas_size);
+        }
+
+        tab_x += tab_w + 4;
+    }
+}
+
+void Renderer::flush() {
     if (vertices_.empty()) return;
 
-    // Upload and draw
+    float proj[16] = {};
+    proj[0] = 2.0f / viewport_w_;
+    proj[5] = -2.0f / viewport_h_;
+    proj[10] = -1.0f;
+    proj[12] = -1.0f;
+    proj[13] = 1.0f;
+    proj[15] = 1.0f;
+
     glUseProgram(glyph_shader_);
 
     int loc = glGetUniformLocation(glyph_shader_, "uProjection");
@@ -442,19 +597,15 @@ void Renderer::render(const ScreenBuffer &buffer, const Config &config) {
     glBufferData(GL_ARRAY_BUFFER, vertices_.size() * sizeof(QuadVertex),
                  vertices_.data(), GL_DYNAMIC_DRAW);
 
-    // aPos
     glVertexAttribPointer(0, 2, GL_FLOAT, GL_FALSE, sizeof(QuadVertex),
                           (void *)offsetof(QuadVertex, x));
     glEnableVertexAttribArray(0);
-    // aTexCoord
     glVertexAttribPointer(1, 2, GL_FLOAT, GL_FALSE, sizeof(QuadVertex),
                           (void *)offsetof(QuadVertex, u));
     glEnableVertexAttribArray(1);
-    // aColor
     glVertexAttribPointer(2, 4, GL_FLOAT, GL_FALSE, sizeof(QuadVertex),
                           (void *)offsetof(QuadVertex, r));
     glEnableVertexAttribArray(2);
-    // aType
     glVertexAttribPointer(3, 1, GL_FLOAT, GL_FALSE, sizeof(QuadVertex),
                           (void *)offsetof(QuadVertex, type));
     glEnableVertexAttribArray(3);
@@ -462,13 +613,47 @@ void Renderer::render(const ScreenBuffer &buffer, const Config &config) {
     glDrawArrays(GL_TRIANGLES, 0, (int)vertices_.size());
 
     glBindVertexArray(0);
+    vertices_.clear();
+}
+
+// Original render method — delegates to build_pane_vertices + flush for backwards compat
+void Renderer::render(const ScreenBuffer &buffer, const Config &config) {
+    begin_frame(config);
+    build_pane_vertices(buffer, config, 0, 0, viewport_w_, viewport_h_, true);
+    flush();
 }
 
 void Renderer::draw_text(float x, float y, const std::string &text,
                          float r, float g, float b, float atlas_size) {
     const auto &m = font_.metrics();
-    for (unsigned char ch : text) {
-        auto [font_idx, glyph_id] = font_.find_glyph(ch);
+    size_t i = 0;
+    while (i < text.size()) {
+        uint32_t cp;
+        unsigned char c = text[i];
+        if (c < 0x80) {
+            cp = c;
+            i += 1;
+        } else if ((c & 0xE0) == 0xC0) {
+            cp = c & 0x1F;
+            if (i + 1 < text.size()) cp = (cp << 6) | (text[i+1] & 0x3F);
+            i += 2;
+        } else if ((c & 0xF0) == 0xE0) {
+            cp = c & 0x0F;
+            if (i + 1 < text.size()) cp = (cp << 6) | (text[i+1] & 0x3F);
+            if (i + 2 < text.size()) cp = (cp << 6) | (text[i+2] & 0x3F);
+            i += 3;
+        } else if ((c & 0xF8) == 0xF0) {
+            cp = c & 0x07;
+            if (i + 1 < text.size()) cp = (cp << 6) | (text[i+1] & 0x3F);
+            if (i + 2 < text.size()) cp = (cp << 6) | (text[i+2] & 0x3F);
+            if (i + 3 < text.size()) cp = (cp << 6) | (text[i+3] & 0x3F);
+            i += 4;
+        } else {
+            cp = '?';
+            i += 1;
+        }
+
+        auto [font_idx, glyph_id] = font_.find_glyph(cp);
         const GlyphEntry *ge = atlas_.get(font_, font_idx, glyph_id);
         if (ge && ge->w > 0) {
             float gx = x + ge->bearing_x;

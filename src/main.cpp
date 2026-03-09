@@ -1,407 +1,23 @@
 #include "platform/platform.h"
 #include "core/event_loop.h"
 #include "core/config.h"
-#include "terminal/vt_parser.h"
-#include "terminal/screen_buffer.h"
+#include "core/tab_manager.h"
+#include "core/input_encoder.h"
 #include "render/renderer.h"
-#include "pty/pty.h"
 
 #include <xkbcommon/xkbcommon-keysyms.h>
 #include <cstdio>
 #include <cstring>
 #include <chrono>
+#include <climits>
 #include <signal.h>
 
 using namespace rivt;
 
 static volatile sig_atomic_t got_sigchld = 0;
 
-// Encode a mouse event as an SGR or legacy X11 escape sequence.
-// Returns empty string if the event should not be reported.
-static std::string encode_mouse(const MouseEvent &mouse, int cell_col, int cell_row,
-                                bool sgr) {
-    // Determine button code for the protocol
-    int cb;
-    if (mouse.motion && mouse.button == MouseButton::NoButton) {
-        // Motion with no button held (mode 1003 only)
-        cb = 3 + 32;  // "no button" motion
-    } else if (mouse.motion) {
-        // Button-motion event: add 32 for motion flag
-        switch (mouse.button) {
-            case MouseButton::Left:   cb = 0 + 32; break;
-            case MouseButton::Middle: cb = 1 + 32; break;
-            case MouseButton::Right:  cb = 2 + 32; break;
-            default: return {};
-        }
-    } else if (mouse.button == MouseButton::ScrollUp) {
-        cb = 64;
-    } else if (mouse.button == MouseButton::ScrollDown) {
-        cb = 65;
-    } else if (!mouse.pressed && !sgr) {
-        // Legacy encoding uses button 3 for release
-        cb = 3;
-    } else {
-        switch (mouse.button) {
-            case MouseButton::Left:   cb = 0; break;
-            case MouseButton::Middle: cb = 1; break;
-            case MouseButton::Right:  cb = 2; break;
-            default: return {};
-        }
-    }
-
-    // Add modifier bits
-    if (mouse.mods & KeyMod::Shift) cb |= 4;
-    if (mouse.mods & KeyMod::Alt)   cb |= 8;
-    if (mouse.mods & KeyMod::Ctrl)  cb |= 16;
-
-    // 1-based coordinates
-    int cx = cell_col + 1;
-    int cy = cell_row + 1;
-
-    if (sgr) {
-        // SGR format: CSI < cb ; cx ; cy M/m
-        char final_ch = mouse.pressed || mouse.motion ? 'M' : 'm';
-        char buf[64];
-        snprintf(buf, sizeof(buf), "\033[<%d;%d;%d%c", cb, cx, cy, final_ch);
-        return buf;
-    } else {
-        // Legacy X11 format: CSI M cb+32 cx+32 cy+32 (max 223)
-        if (cx > 223 || cy > 223) return {};
-        char buf[6];
-        buf[0] = '\033';
-        buf[1] = '[';
-        buf[2] = 'M';
-        buf[3] = (char)(cb + 32);
-        buf[4] = (char)(cx + 32);
-        buf[5] = (char)(cy + 32);
-        return std::string(buf, 6);
-    }
-}
-
 static void sigchld_handler(int) {
     got_sigchld = 1;
-}
-
-static int base64_val(unsigned char c) {
-    if (c >= 'A' && c <= 'Z') return c - 'A';
-    if (c >= 'a' && c <= 'z') return c - 'a' + 26;
-    if (c >= '0' && c <= '9') return c - '0' + 52;
-    if (c == '+') return 62;
-    if (c == '/') return 63;
-    return -1;
-}
-
-static std::string base64_decode(const std::string &in) {
-    std::string out;
-    int val = 0, bits = -8;
-    for (unsigned char c : in) {
-        int v = base64_val(c);
-        if (v < 0) continue;
-        val = (val << 6) | v;
-        bits += 6;
-        if (bits >= 0) {
-            out += (char)((val >> bits) & 0xFF);
-            bits -= 8;
-        }
-    }
-    return out;
-}
-
-static std::string base64_encode(const std::string &in) {
-    static const char E[] = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
-    std::string out;
-    int val = 0, bits = -6;
-    for (unsigned char c : in) {
-        val = (val << 8) | c;
-        bits += 8;
-        while (bits >= 0) {
-            out += E[(val >> bits) & 0x3F];
-            bits -= 6;
-        }
-    }
-    if (bits > -6) out += E[(val << (-bits)) & 0x3F];
-    while (out.size() % 4) out += '=';
-    return out;
-}
-
-// Kitty keyboard protocol: map xkb keysym to kitty key number
-// Returns 0 if not a special key (use Unicode codepoint instead)
-static int kitty_keycode(uint32_t keysym) {
-    switch (keysym) {
-        case XKB_KEY_Escape:    return 27;
-        case XKB_KEY_Return:    return 13;
-        case XKB_KEY_KP_Enter:  return 13;
-        case XKB_KEY_Tab:       return 9;
-        case XKB_KEY_BackSpace: return 127;
-        case XKB_KEY_Insert:    return 57348;
-        case XKB_KEY_Delete:    return 57349;
-        case XKB_KEY_Left:      return 57350;
-        case XKB_KEY_Right:     return 57351;
-        case XKB_KEY_Up:        return 57352;
-        case XKB_KEY_Down:      return 57353;
-        case XKB_KEY_Page_Up:   return 57354;
-        case XKB_KEY_Page_Down: return 57355;
-        case XKB_KEY_Home:      return 57356;
-        case XKB_KEY_End:       return 57357;
-        case XKB_KEY_Caps_Lock: return 57358;
-        case XKB_KEY_Scroll_Lock: return 57359;
-        case XKB_KEY_Num_Lock:  return 57360;
-        case XKB_KEY_Print:     return 57361;
-        case XKB_KEY_Pause:     return 57362;
-        case XKB_KEY_Menu:      return 57363;
-        case XKB_KEY_F1:  return 57364;
-        case XKB_KEY_F2:  return 57365;
-        case XKB_KEY_F3:  return 57366;
-        case XKB_KEY_F4:  return 57367;
-        case XKB_KEY_F5:  return 57368;
-        case XKB_KEY_F6:  return 57369;
-        case XKB_KEY_F7:  return 57370;
-        case XKB_KEY_F8:  return 57371;
-        case XKB_KEY_F9:  return 57372;
-        case XKB_KEY_F10: return 57373;
-        case XKB_KEY_F11: return 57374;
-        case XKB_KEY_F12: return 57375;
-        case XKB_KEY_Shift_L: case XKB_KEY_Shift_R:     return 57441;
-        case XKB_KEY_Control_L: case XKB_KEY_Control_R: return 57442;
-        case XKB_KEY_Alt_L: case XKB_KEY_Alt_R:         return 57443;
-        case XKB_KEY_Super_L: case XKB_KEY_Super_R:     return 57444;
-        default: return 0;
-    }
-}
-
-// Kitty modifier encoding: 1-based bitmask (1=shift, 2=alt, 4=ctrl, 8=super)
-static int kitty_modifiers(KeyMod mods) {
-    int m = 0;
-    if (mods & KeyMod::Shift) m |= 1;
-    if (mods & KeyMod::Alt)   m |= 2;
-    if (mods & KeyMod::Ctrl)  m |= 4;
-    if (mods & KeyMod::Super) m |= 8;
-    return m;
-}
-
-// Legacy CSI sequence for functional keys.
-// Returns the CSI parameter number and final char, or {0,0} if not a legacy key.
-struct LegacyKey { int num; char final_char; };
-
-static LegacyKey legacy_csi_key(uint32_t keysym) {
-    switch (keysym) {
-        case XKB_KEY_Up:        return {1, 'A'};
-        case XKB_KEY_Down:      return {1, 'B'};
-        case XKB_KEY_Right:     return {1, 'C'};
-        case XKB_KEY_Left:      return {1, 'D'};
-        case XKB_KEY_Home:      return {1, 'H'};
-        case XKB_KEY_End:       return {1, 'F'};
-        case XKB_KEY_Insert:    return {2, '~'};
-        case XKB_KEY_Delete:    return {3, '~'};
-        case XKB_KEY_Page_Up:   return {5, '~'};
-        case XKB_KEY_Page_Down: return {6, '~'};
-        case XKB_KEY_F1:  return {1, 'P'};
-        case XKB_KEY_F2:  return {1, 'Q'};
-        case XKB_KEY_F3:  return {1, 'R'};
-        case XKB_KEY_F4:  return {1, 'S'};
-        case XKB_KEY_F5:  return {15, '~'};
-        case XKB_KEY_F6:  return {17, '~'};
-        case XKB_KEY_F7:  return {18, '~'};
-        case XKB_KEY_F8:  return {19, '~'};
-        case XKB_KEY_F9:  return {20, '~'};
-        case XKB_KEY_F10: return {21, '~'};
-        case XKB_KEY_F11: return {23, '~'};
-        case XKB_KEY_F12: return {24, '~'};
-        default: return {0, 0};
-    }
-}
-
-// Encode key event for kitty keyboard protocol
-static std::string encode_key_kitty(const KeyEvent &key, const ScreenBuffer &buffer) {
-    if (!key.pressed) return "";
-
-    int flags = buffer.kitty_kbd_flags();
-    int mods = kitty_modifiers(key.mods);
-    int mod_param = mods + 1;  // 1-based modifier parameter
-
-    // Check if this key has a legacy CSI representation
-    LegacyKey lk = legacy_csi_key(key.keysym);
-    if (lk.num != 0) {
-        // Functional key with legacy CSI encoding — keep the legacy form
-        // Format: CSI [num] [;mod] final
-        char buf[32];
-        if (lk.final_char == '~') {
-            // CSI num [;mod] ~
-            if (mod_param > 1)
-                snprintf(buf, sizeof(buf), "\033[%d;%d~", lk.num, mod_param);
-            else
-                snprintf(buf, sizeof(buf), "\033[%d~", lk.num);
-        } else {
-            // CSI [1;mod] X  (arrows: A/B/C/D, Home: H, End: F, F1-F4: P/Q/R/S)
-            if (mod_param > 1)
-                snprintf(buf, sizeof(buf), "\033[1;%d%c", mod_param, lk.final_char);
-            else
-                snprintf(buf, sizeof(buf), "\033[%c", lk.final_char);
-        }
-        return buf;
-    }
-
-    // For non-functional keys, determine the keycode
-    int kc = kitty_keycode(key.keysym);
-
-    if (kc == 0) {
-        // Not a named special key — use the Unicode codepoint
-        uint32_t sym = key.keysym;
-        if (sym >= XKB_KEY_A && sym <= XKB_KEY_Z)
-            kc = sym - XKB_KEY_A + 'a';
-        else if (sym >= XKB_KEY_a && sym <= XKB_KEY_z)
-            kc = sym - XKB_KEY_a + 'a';
-        else if (sym >= XKB_KEY_0 && sym <= XKB_KEY_9)
-            kc = sym - XKB_KEY_0 + '0';
-        else if (sym >= XKB_KEY_space && sym <= XKB_KEY_asciitilde)
-            kc = sym;
-        else if (sym >= 0x100 && sym <= 0x10FFFF)
-            kc = sym;
-        else
-            kc = sym & 0xFFFF;
-    }
-
-    if (kc == 0) return "";
-
-    // Decide whether we need the CSI u encoding or can use a plain char
-    bool need_csi = false;
-
-    // With disambiguate (flag bit 0): use CSI u for modified keys and special keys
-    if (flags & 1) {
-        bool has_significant_mods = mods != 0;
-        // Shift alone on a printable key doesn't need CSI u
-        if (mods == 1 && kc >= 32 && kc < 127 && !key.text.empty())
-            has_significant_mods = false;
-
-        if (has_significant_mods)
-            need_csi = true;
-
-        // Special keys (Enter, Tab, Backspace, Escape) always use CSI u
-        if (kc == 27 || kc == 13 || kc == 9 || kc == 127)
-            need_csi = true;
-    }
-
-    // With "report all keys" (flag bit 3): everything uses CSI u
-    if (flags & 8)
-        need_csi = true;
-
-    if (need_csi) {
-        char buf[64];
-        if (mod_param == 1)
-            snprintf(buf, sizeof(buf), "\033[%du", kc);
-        else
-            snprintf(buf, sizeof(buf), "\033[%d;%du", kc, mod_param);
-        return buf;
-    }
-
-    // Fall through to plain text for unmodified printable keys
-    if (!key.text.empty())
-        return key.text;
-
-    return "";
-}
-
-// Encode key event into the byte sequence to send to the PTY (legacy mode)
-static std::string encode_key_legacy(const KeyEvent &key, const ScreenBuffer &buffer) {
-    if (!key.pressed) return "";
-
-    bool ctrl  = key.mods & KeyMod::Ctrl;
-    bool shift = key.mods & KeyMod::Shift;
-    bool alt   = key.mods & KeyMod::Alt;
-
-    std::string seq;
-    const char *app = buffer.app_cursor_keys() ? "O" : "[";
-
-    switch (key.keysym) {
-        case XKB_KEY_Return:
-        case XKB_KEY_KP_Enter:
-            seq = "\r";
-            break;
-        case XKB_KEY_BackSpace:
-            seq = ctrl ? "\x08" : "\x7f";
-            break;
-        case XKB_KEY_Tab:
-            seq = shift ? "\033[Z" : "\t";
-            break;
-        case XKB_KEY_Escape:
-            seq = "\033";
-            break;
-        case XKB_KEY_Up:
-            seq = std::string("\033") + app + "A";
-            break;
-        case XKB_KEY_Down:
-            seq = std::string("\033") + app + "B";
-            break;
-        case XKB_KEY_Right:
-            seq = std::string("\033") + app + "C";
-            break;
-        case XKB_KEY_Left:
-            seq = std::string("\033") + app + "D";
-            break;
-        case XKB_KEY_Home:
-            seq = "\033[H";
-            break;
-        case XKB_KEY_End:
-            seq = "\033[F";
-            break;
-        case XKB_KEY_Insert:
-            seq = "\033[2~";
-            break;
-        case XKB_KEY_Delete:
-            seq = "\033[3~";
-            break;
-        case XKB_KEY_Page_Up:
-            if (shift) return ""; // handled as scroll
-            seq = "\033[5~";
-            break;
-        case XKB_KEY_Page_Down:
-            if (shift) return ""; // handled as scroll
-            seq = "\033[6~";
-            break;
-        case XKB_KEY_F1:  seq = "\033OP"; break;
-        case XKB_KEY_F2:  seq = "\033OQ"; break;
-        case XKB_KEY_F3:  seq = "\033OR"; break;
-        case XKB_KEY_F4:  seq = "\033OS"; break;
-        case XKB_KEY_F5:  seq = "\033[15~"; break;
-        case XKB_KEY_F6:  seq = "\033[17~"; break;
-        case XKB_KEY_F7:  seq = "\033[18~"; break;
-        case XKB_KEY_F8:  seq = "\033[19~"; break;
-        case XKB_KEY_F9:  seq = "\033[20~"; break;
-        case XKB_KEY_F10: seq = "\033[21~"; break;
-        case XKB_KEY_F11: seq = "\033[23~"; break;
-        case XKB_KEY_F12: seq = "\033[24~"; break;
-        default:
-            if (!key.text.empty()) {
-                if (ctrl && key.text.size() == 1) {
-                    char c = key.text[0];
-                    if (c >= 'a' && c <= 'z') {
-                        char ctrl_char = c - 'a' + 1;
-                        seq = std::string(1, ctrl_char);
-                        break;
-                    }
-                    if (c >= 'A' && c <= 'Z') {
-                        char ctrl_char = c - 'A' + 1;
-                        seq = std::string(1, ctrl_char);
-                        break;
-                    }
-                }
-                seq = key.text;
-            }
-            break;
-    }
-
-    if (!seq.empty() && alt) {
-        seq = "\033" + seq;
-    }
-
-    return seq;
-}
-
-// Dispatch to kitty or legacy encoding
-static std::string encode_key(const KeyEvent &key, const ScreenBuffer &buffer) {
-    if (buffer.kitty_kbd_active())
-        return encode_key_kitty(key, buffer);
-    return encode_key_legacy(key, buffer);
 }
 
 int main(int argc, char *argv[]) {
@@ -419,7 +35,6 @@ int main(int argc, char *argv[]) {
         return 1;
     }
 
-    // Create initial window
     int win_w = 800, win_h = 600;
     if (!platform->create_window(win_w, win_h, "rivt")) {
         fprintf(stderr, "Failed to create window\n");
@@ -440,79 +55,68 @@ int main(int argc, char *argv[]) {
 
     renderer.set_viewport(win_w, win_h);
 
-    // Compute initial grid size
-    int cols, rows;
-    renderer.compute_grid(win_w, win_h, cols, rows);
-
-    // Create screen buffer and VT parser
-    ScreenBuffer screen(cols, rows, config.scrollback_lines);
-    VtParser parser(screen);
-
-    // Selection state
-    bool selecting = false;
-    int click_count = 0;
-    uint64_t last_click_ms = 0;
-    int last_click_col = -1, last_click_row = -1;
-
-    // Title change callback
-    screen.on_title_change = [&](const std::string &title) {
-        platform->set_title(title);
-    };
-
-    // OSC 52 clipboard callbacks
-    screen.on_osc52_write = [&](const std::string &sel, const std::string &base64) {
-        if (!config.osc52_write) return;
-        std::string text = base64_decode(base64);
-        bool primary = (sel.find('p') != std::string::npos);
-        platform->set_clipboard(text, primary);
-        if (!primary) platform->set_clipboard(text, false);  // 'c' or 's' → CLIPBOARD
-    };
-
-    // Spawn PTY
-    Pty pty;
-
-    // Write-back callback (for DSR, DA, kitty keyboard query responses)
-    screen.on_write_back = [&](const std::string &data) {
-        pty.write(data);
-    };
-    screen.on_osc52_read = [&](const std::string &sel) {
-        if (!config.osc52_read) return;
-        bool primary = (sel.find('p') != std::string::npos);
-        std::string text = platform->get_clipboard(primary);
-        std::string response = "\033]52;" + sel + ";" + base64_encode(text) + "\033\\";
-        pty.write(response);
-    };
-
-    if (!pty.spawn(cols, rows)) {
-        fprintf(stderr, "Failed to spawn PTY\n");
-        return 1;
-    }
+    // Create tab manager
+    TabManager tabs(config, loop, platform.get());
 
     bool needs_render = true;
 
-    // Platform callbacks
+    tabs.on_needs_render = [&]() { needs_render = true; };
+    tabs.on_quit = [&]() { loop.request_quit(); };
+
+    // Set cell dimensions
+    const auto &m = renderer.metrics();
+    tabs.set_cell_size(m.cell_width, m.cell_height);
+
+    // Compute tab bar height
+    auto tab_bar_height = [&]() -> int {
+        return tabs.tab_count() > 1 ? m.cell_height + 8 : 0;
+    };
+
+    // Recompute layout helper
+    auto recompute = [&]() {
+        int bar_h = tab_bar_height();
+        tabs.recompute_layout(0, bar_h, win_w, win_h - bar_h);
+    };
+
+    // Create first tab
+    if (!tabs.new_tab()) {
+        fprintf(stderr, "Failed to spawn initial shell\n");
+        return 1;
+    }
+    recompute();
+
+    // Search helpers for focused pane
     auto search_navigate = [&](int delta) {
-        auto &s = screen.search;
+        Pane *pane = tabs.focused_pane();
+        if (!pane) return;
+        auto &s = pane->screen().search;
         if (s.matches.empty()) return;
         s.current_match = (s.current_match + delta + (int)s.matches.size()) % (int)s.matches.size();
-        // Scroll to make current match visible
         const auto &match = s.matches[s.current_match];
-        int vis_row = match.abs_line - screen.absolute_line(0);
+        int rows = pane->screen().rows();
+        int vis_row = match.abs_line - pane->screen().absolute_line(0);
         if (vis_row < 0 || vis_row >= rows) {
-            int target_offset = -(int)screen.scrollback_count() + match.abs_line - rows / 2;
-            screen.scroll_viewport(target_offset - screen.viewport_offset());
+            int target_offset = -(int)pane->screen().scrollback_count() + match.abs_line - rows / 2;
+            pane->screen().scroll_viewport(target_offset - pane->screen().viewport_offset());
         }
         needs_render = true;
     };
 
     auto search_update = [&]() {
-        screen.find_matches(screen.search.query, screen.search.case_sensitive);
+        Pane *pane = tabs.focused_pane();
+        if (!pane) return;
+        pane->screen().find_matches(pane->screen().search.query, pane->screen().search.case_sensitive);
         needs_render = true;
     };
 
+    // Keyboard handler
     platform->on_key = [&](const KeyEvent &key) {
         if (!key.pressed) return;
 
+        Pane *pane = tabs.focused_pane();
+        if (!pane) return;
+
+        ScreenBuffer &screen = pane->screen();
         bool ctrl  = key.mods & KeyMod::Ctrl;
         bool shift = key.mods & KeyMod::Shift;
 
@@ -520,7 +124,6 @@ int main(int argc, char *argv[]) {
         if (screen.search.focused) {
             switch (key.keysym) {
                 case XKB_KEY_Escape:
-                    // Unfocus search bar but keep highlights
                     screen.search.focused = false;
                     needs_render = true;
                     return;
@@ -555,7 +158,6 @@ int main(int argc, char *argv[]) {
                 case XKB_KEY_F:
                 case XKB_KEY_f:
                     if (screen.search.active && !screen.search.focused) {
-                        // Re-focus existing search
                         screen.search.focused = true;
                     } else {
                         screen.search.active = true;
@@ -568,15 +170,14 @@ int main(int argc, char *argv[]) {
                     return;
                 case XKB_KEY_V:
                 case XKB_KEY_v: {
-                    // Paste from clipboard
                     std::string text = platform->get_clipboard(false);
                     if (!text.empty()) {
                         if (screen.bracketed_paste()) {
-                            pty.write("\033[200~");
-                            pty.write(text);
-                            pty.write("\033[201~");
+                            pane->write("\033[200~");
+                            pane->write(text);
+                            pane->write("\033[201~");
                         } else {
-                            pty.write(text);
+                            pane->write(text);
                         }
                     }
                     return;
@@ -591,13 +192,10 @@ int main(int argc, char *argv[]) {
                 }
                 case XKB_KEY_plus:
                 case XKB_KEY_equal: {
-                    // Increase font size
                     config.font_size += 1.0f;
                     renderer.font().set_size(config.font_size, platform->get_dpi_scale() * 96.0f);
-                    int new_cols, new_rows;
-                    renderer.compute_grid(win_w, win_h, new_cols, new_rows);
-                    screen.resize(new_cols, new_rows);
-                    pty.resize(new_cols, new_rows);
+                    tabs.set_cell_size(renderer.metrics().cell_width, renderer.metrics().cell_height);
+                    recompute();
                     needs_render = true;
                     return;
                 }
@@ -605,10 +203,8 @@ int main(int argc, char *argv[]) {
                     if (config.font_size > 6.0f) {
                         config.font_size -= 1.0f;
                         renderer.font().set_size(config.font_size, platform->get_dpi_scale() * 96.0f);
-                        int new_cols, new_rows;
-                        renderer.compute_grid(win_w, win_h, new_cols, new_rows);
-                        screen.resize(new_cols, new_rows);
-                        pty.resize(new_cols, new_rows);
+                        tabs.set_cell_size(renderer.metrics().cell_width, renderer.metrics().cell_height);
+                        recompute();
                         needs_render = true;
                     }
                     return;
@@ -616,24 +212,86 @@ int main(int argc, char *argv[]) {
                 case XKB_KEY_0: {
                     config.font_size = 12.0f;
                     renderer.font().set_size(config.font_size, platform->get_dpi_scale() * 96.0f);
-                    int new_cols, new_rows;
-                    renderer.compute_grid(win_w, win_h, new_cols, new_rows);
-                    screen.resize(new_cols, new_rows);
-                    pty.resize(new_cols, new_rows);
+                    tabs.set_cell_size(renderer.metrics().cell_width, renderer.metrics().cell_height);
+                    recompute();
                     needs_render = true;
                     return;
                 }
+                // Pane splits
+                case XKB_KEY_D:
+                case XKB_KEY_d:
+                    tabs.split_pane(SplitDir::Vertical);
+                    needs_render = true;
+                    return;
+                case XKB_KEY_E:
+                case XKB_KEY_e:
+                    tabs.split_pane(SplitDir::Horizontal);
+                    needs_render = true;
+                    return;
+                case XKB_KEY_W:
+                case XKB_KEY_w:
+                    if (!tabs.close_focused_pane()) {
+                        loop.request_quit();
+                    }
+                    needs_render = true;
+                    return;
+                // Pane navigation
+                case XKB_KEY_Left:
+                    tabs.navigate_pane(NavDir::Left);
+                    return;
+                case XKB_KEY_Right:
+                    tabs.navigate_pane(NavDir::Right);
+                    return;
+                case XKB_KEY_Up:
+                    tabs.navigate_pane(NavDir::Up);
+                    return;
+                case XKB_KEY_Down:
+                    tabs.navigate_pane(NavDir::Down);
+                    return;
+                // New tab
+                case XKB_KEY_T:
+                case XKB_KEY_t:
+                    tabs.new_tab();
+                    recompute();
+                    needs_render = true;
+                    return;
             }
+        }
+
+        // Tab cycling: Ctrl+Tab / Ctrl+Shift+Tab
+        if (ctrl && !shift && key.keysym == XKB_KEY_Tab) {
+            tabs.next_tab();
+            recompute();
+            needs_render = true;
+            return;
+        }
+        if (ctrl && shift && key.keysym == XKB_KEY_ISO_Left_Tab) {
+            tabs.prev_tab();
+            recompute();
+            needs_render = true;
+            return;
+        }
+
+        // Alt+1..9: switch to tab by index
+        bool alt = key.mods & KeyMod::Alt;
+        if (alt && key.keysym >= XKB_KEY_1 && key.keysym <= XKB_KEY_9) {
+            int idx = key.keysym - XKB_KEY_1;
+            if (idx < tabs.tab_count()) {
+                tabs.activate_tab(idx);
+                recompute();
+                needs_render = true;
+            }
+            return;
         }
 
         // Shift+PageUp/Down for scrolling
         if (shift && key.keysym == XKB_KEY_Page_Up) {
-            screen.scroll_viewport(-rows / 2);
+            screen.scroll_viewport(-screen.rows() / 2);
             needs_render = true;
             return;
         }
         if (shift && key.keysym == XKB_KEY_Page_Down) {
-            screen.scroll_viewport(rows / 2);
+            screen.scroll_viewport(screen.rows() / 2);
             needs_render = true;
             return;
         }
@@ -641,21 +299,85 @@ int main(int argc, char *argv[]) {
         // Forward to PTY
         std::string seq = encode_key(key, screen);
         if (!seq.empty()) {
-            // Scroll to bottom on input
             if (!screen.at_bottom()) {
                 screen.scroll_to_bottom();
                 needs_render = true;
             }
-            pty.write(seq);
+            pane->write(seq);
         }
     };
 
+    // Mouse handler
     platform->on_mouse = [&](const MouseEvent &mouse) {
-        const auto &m = renderer.metrics();
-        int cell_col = m.cell_width > 0 ? mouse.x / m.cell_width : 0;
-        int cell_row = m.cell_height > 0 ? mouse.y / m.cell_height : 0;
+        Tab *tab = tabs.active_tab();
+        if (!tab) return;
 
-        // Clamp to grid bounds
+        const auto &met = renderer.metrics();
+        int bar_h = tab_bar_height();
+
+        // Tab bar click handling
+        if (bar_h > 0 && mouse.y < bar_h) {
+            if (mouse.button == MouseButton::Left && mouse.pressed && !mouse.motion) {
+                // Determine which tab was clicked
+                float tab_x = 4;
+                for (int i = 0; i < tabs.tab_count(); i++) {
+                    const Tab &t = *tabs.tabs()[i];
+                    std::string title = t.title.empty() ? "Terminal" : t.title;
+                    if (title.size() > 20) title = title.substr(0, 20) + "...";
+                    float tab_w = (title.size() + 2) * met.cell_width;
+                    if (mouse.x >= tab_x && mouse.x < tab_x + tab_w) {
+                        tabs.activate_tab(i);
+                        recompute();
+                        needs_render = true;
+                        return;
+                    }
+                    tab_x += tab_w + 4;
+                }
+            }
+            if (mouse.button == MouseButton::Middle && mouse.pressed && !mouse.motion) {
+                // Middle-click to close tab
+                float tab_x = 4;
+                for (int i = 0; i < tabs.tab_count(); i++) {
+                    const Tab &t = *tabs.tabs()[i];
+                    std::string title = t.title.empty() ? "Terminal" : t.title;
+                    if (title.size() > 20) title = title.substr(0, 20) + "...";
+                    float tab_w = (title.size() + 2) * met.cell_width;
+                    if (mouse.x >= tab_x && mouse.x < tab_x + tab_w) {
+                        if (!tabs.close_tab(i)) {
+                            loop.request_quit();
+                        }
+                        recompute();
+                        needs_render = true;
+                        return;
+                    }
+                    tab_x += tab_w + 4;
+                }
+            }
+            return;
+        }
+
+        // Route mouse to correct pane
+        Pane *target_pane = tab->layout.pane_at(mouse.x, mouse.y);
+        if (!target_pane) return;
+
+        // Focus follows mouse
+        if (target_pane != tab->focused_pane) {
+            tab->focused_pane = target_pane;
+            target_pane->has_activity = false;
+            needs_render = true;
+        }
+
+        ScreenBuffer &screen = target_pane->screen();
+        const auto &pr = target_pane->rect;
+
+        // Compute cell coords relative to pane
+        int local_x = mouse.x - pr.x;
+        int local_y = mouse.y - pr.y;
+        int cell_col = met.cell_width > 0 ? local_x / met.cell_width : 0;
+        int cell_row = met.cell_height > 0 ? local_y / met.cell_height : 0;
+        int cols = screen.cols();
+        int rows = screen.rows();
+
         if (cell_col < 0) cell_col = 0;
         if (cell_row < 0) cell_row = 0;
         if (cell_col >= cols) cell_col = cols - 1;
@@ -663,38 +385,33 @@ int main(int argc, char *argv[]) {
 
         int mm = screen.mouse_mode();
         if (mm) {
-            // Check if this event type should be reported
             bool report = false;
             if (mouse.motion) {
-                if (mm == 1003) report = true;  // any-event tracking
-                else if (mm == 1002 && mouse.button != MouseButton::NoButton) report = true;  // button-event tracking
+                if (mm == 1003) report = true;
+                else if (mm == 1002 && mouse.button != MouseButton::NoButton) report = true;
             } else {
-                // Button press/release
                 report = true;
-                // Scroll events in mouse mode go to PTY, not viewport
             }
 
             if (report) {
                 std::string seq = encode_mouse(mouse, cell_col, cell_row,
                                                screen.sgr_mouse());
                 if (!seq.empty()) {
-                    pty.write(seq);
+                    target_pane->write(seq);
                     return;
                 }
             }
         }
 
-        // Fallback scroll behavior when mouse mode is off
+        // Fallback scroll
         if (mouse.button == MouseButton::ScrollUp || mouse.button == MouseButton::ScrollDown) {
             if (screen.alt_screen()) {
-                // Alt screen (emacs, vim, less, etc.): send arrow keys
                 const char *arrow = mouse.button == MouseButton::ScrollUp
                     ? (screen.app_cursor_keys() ? "\033OA" : "\033[A")
                     : (screen.app_cursor_keys() ? "\033OB" : "\033[B");
                 for (int i = 0; i < 3; i++)
-                    pty.write(arrow, strlen(arrow));
+                    target_pane->write(std::string(arrow));
             } else {
-                // Normal screen: scroll viewport through scrollback
                 int delta = mouse.button == MouseButton::ScrollUp ? -3 : 3;
                 screen.scroll_viewport(delta);
                 needs_render = true;
@@ -709,28 +426,25 @@ int main(int argc, char *argv[]) {
             if (mouse.button == MouseButton::Left && mouse.pressed && !mouse.motion) {
                 int abs_line = screen.absolute_line(cell_row);
 
-                // Detect multi-click (within 400ms and same cell)
-                if (now_ms - last_click_ms < 400 &&
-                    cell_col == last_click_col && cell_row == last_click_row) {
-                    click_count = (click_count % 3) + 1;
+                if (now_ms - target_pane->last_click_ms < 400 &&
+                    cell_col == target_pane->last_click_col && cell_row == target_pane->last_click_row) {
+                    target_pane->click_count = (target_pane->click_count % 3) + 1;
                 } else {
-                    click_count = 1;
+                    target_pane->click_count = 1;
                 }
-                last_click_ms = now_ms;
-                last_click_col = cell_col;
-                last_click_row = cell_row;
+                target_pane->last_click_ms = now_ms;
+                target_pane->last_click_col = cell_col;
+                target_pane->last_click_row = cell_row;
 
-                if (click_count == 1) {
-                    // Single click: start selection
-                    selecting = true;
+                if (target_pane->click_count == 1) {
+                    target_pane->selecting = true;
                     screen.selection.active = true;
                     screen.selection.start_line = abs_line;
                     screen.selection.start_col = cell_col;
                     screen.selection.end_line = abs_line;
                     screen.selection.end_col = cell_col;
-                } else if (click_count == 2) {
-                    // Double click: select word
-                    selecting = false;
+                } else if (target_pane->click_count == 2) {
+                    target_pane->selecting = false;
                     const Line &line = screen.line(cell_row);
                     int wstart = cell_col, wend = cell_col;
                     auto is_word_char = [](uint32_t cp) {
@@ -751,9 +465,8 @@ int main(int argc, char *argv[]) {
                     screen.selection.end_col = wend;
                     std::string text = screen.get_selection_text();
                     if (!text.empty()) platform->set_clipboard(text, true);
-                } else if (click_count == 3) {
-                    // Triple click: select whole line
-                    selecting = false;
+                } else if (target_pane->click_count == 3) {
+                    target_pane->selecting = false;
                     const Line &line = screen.line(cell_row);
                     screen.selection.active = true;
                     screen.selection.start_line = abs_line;
@@ -764,16 +477,13 @@ int main(int argc, char *argv[]) {
                     if (!text.empty()) platform->set_clipboard(text, true);
                 }
                 needs_render = true;
-            } else if (mouse.motion && selecting) {
-                // Drag: extend selection
+            } else if (mouse.motion && target_pane->selecting) {
                 screen.selection.end_line = screen.absolute_line(cell_row);
                 screen.selection.end_col = cell_col;
                 needs_render = true;
             } else if (mouse.button == MouseButton::Left && !mouse.pressed && !mouse.motion) {
-                // Release: finish selection, copy to PRIMARY
-                if (selecting) {
-                    selecting = false;
-                    // Only keep selection if it spans more than zero characters
+                if (target_pane->selecting) {
+                    target_pane->selecting = false;
                     int sl, sc, el, ec;
                     screen.selection.normalized(sl, sc, el, ec);
                     if (sl == el && sc == ec) {
@@ -781,21 +491,20 @@ int main(int argc, char *argv[]) {
                     } else {
                         std::string text = screen.get_selection_text();
                         if (!text.empty()) {
-                            platform->set_clipboard(text, true);  // PRIMARY
+                            platform->set_clipboard(text, true);
                         }
                     }
                     needs_render = true;
                 }
             } else if (mouse.button == MouseButton::Middle && mouse.pressed) {
-                // Middle click: paste from PRIMARY
                 std::string text = platform->get_clipboard(true);
                 if (!text.empty()) {
                     if (screen.bracketed_paste()) {
-                        pty.write("\033[200~");
-                        pty.write(text);
-                        pty.write("\033[201~");
+                        target_pane->write("\033[200~");
+                        target_pane->write(text);
+                        target_pane->write("\033[201~");
                     } else {
-                        pty.write(text);
+                        target_pane->write(text);
                     }
                 }
             }
@@ -806,23 +515,17 @@ int main(int argc, char *argv[]) {
         win_w = width;
         win_h = height;
         renderer.set_viewport(width, height);
-
-        int new_cols, new_rows;
-        renderer.compute_grid(width, height, new_cols, new_rows);
-        if (new_cols != cols || new_rows != rows) {
-            cols = new_cols;
-            rows = new_rows;
-            screen.resize(cols, rows);
-            pty.resize(cols, rows);
-        }
+        tabs.set_cell_size(renderer.metrics().cell_width, renderer.metrics().cell_height);
+        recompute();
         needs_render = true;
     };
 
     platform->on_focus = [&](bool focused) {
         renderer.set_focused(focused);
         needs_render = true;
-        if (screen.focus_reporting()) {
-            pty.write(focused ? "\033[I" : "\033[O");
+        Pane *pane = tabs.focused_pane();
+        if (pane && pane->screen().focus_reporting()) {
+            pane->write(focused ? "\033[I" : "\033[O");
         }
     };
 
@@ -830,30 +533,9 @@ int main(int argc, char *argv[]) {
         loop.request_quit();
     };
 
-    // Add fds to event loop
+    // Add platform fd to event loop
     loop.add_fd(platform->get_event_fd(), [&](uint32_t) {
         platform->process_events();
-    });
-
-    loop.add_fd(pty.fd(), [&](uint32_t events) {
-        if (events & EPOLLIN) {
-            char buf[65536];
-            int n;
-            while ((n = pty.read(buf, sizeof(buf))) > 0) {
-                parser.feed(buf, n);
-                needs_render = true;
-            }
-            // Incrementally update search matches for new output
-            if (screen.search.active && !screen.search.query.empty()) {
-                screen.find_matches_incremental();
-            }
-            if (n < 0) {
-                loop.request_quit();
-            }
-        }
-        if (events & (EPOLLHUP | EPOLLERR)) {
-            loop.request_quit();
-        }
     });
 
     // Cursor blink timer
@@ -869,14 +551,118 @@ int main(int argc, char *argv[]) {
 
         if (got_sigchld) {
             got_sigchld = 0;
-            if (!pty.alive()) {
+            if (!tabs.reap_dead_panes()) {
                 loop.request_quit();
             }
+            recompute();
+            needs_render = true;
         }
 
         if (needs_render) {
             platform->make_current();
-            renderer.render(screen, config);
+            renderer.begin_frame(config);
+
+            Tab *tab = tabs.active_tab();
+            if (tab) {
+                int bar_h = tab_bar_height();
+
+                // Render tab bar if multiple tabs
+                if (bar_h > 0) {
+                    renderer.render_tab_bar(tabs, config, bar_h);
+                    renderer.flush();
+                }
+
+                // Render each pane with scissor clipping
+                std::vector<Pane *> panes;
+                tab->layout.collect_panes(panes);
+
+                for (Pane *p : panes) {
+                    const auto &r = p->rect;
+                    renderer.render_pane(p->screen(), config, r.x, r.y, r.w, r.h,
+                                         p == tab->focused_pane);
+                }
+
+                // Render borders between panes (over the top, no scissor)
+                if (panes.size() > 1) {
+                    // Walk the layout tree and draw borders at split points
+                    std::function<void(const LayoutNode *)> draw_borders;
+                    draw_borders = [&](const LayoutNode *node) {
+                        if (!node || node->is_leaf()) return;
+
+                        if (node->split_dir == SplitDir::Vertical) {
+                            std::vector<Pane *> fp, sp;
+                            auto collect = [](const LayoutNode *n, std::vector<Pane *> &out, auto &self) -> void {
+                                if (n->is_leaf()) { out.push_back(n->pane); return; }
+                                self(n->first.get(), out, self);
+                                self(n->second.get(), out, self);
+                            };
+                            collect(node->first.get(), fp, collect);
+                            collect(node->second.get(), sp, collect);
+
+                            if (!fp.empty() && !sp.empty()) {
+                                int right_edge = 0;
+                                int top_edge = INT_MAX;
+                                int bottom_edge = 0;
+                                for (auto *p : fp) {
+                                    right_edge = std::max(right_edge, p->rect.x + p->rect.w);
+                                    top_edge = std::min(top_edge, p->rect.y);
+                                    bottom_edge = std::max(bottom_edge, p->rect.y + p->rect.h);
+                                }
+                                int left_edge = INT_MAX;
+                                for (auto *p : sp) {
+                                    left_edge = std::min(left_edge, p->rect.x);
+                                }
+                                int border_x = right_edge;
+                                int border_w = left_edge - right_edge;
+                                if (border_w > 0) {
+                                    renderer.render_border((float)border_x, (float)top_edge,
+                                                           (float)border_w, (float)(bottom_edge - top_edge),
+                                                           0.3f, 0.3f, 0.3f);
+                                }
+                            }
+                        } else {
+                            // Horizontal border
+                            std::vector<Pane *> fp, sp;
+                            auto collect = [](const LayoutNode *n, std::vector<Pane *> &out, auto &self) -> void {
+                                if (n->is_leaf()) { out.push_back(n->pane); return; }
+                                self(n->first.get(), out, self);
+                                self(n->second.get(), out, self);
+                            };
+                            collect(node->first.get(), fp, collect);
+                            collect(node->second.get(), sp, collect);
+
+                            if (!fp.empty() && !sp.empty()) {
+                                int bottom_edge = 0;
+                                int left_edge = INT_MAX;
+                                int right_edge = 0;
+                                for (auto *p : fp) {
+                                    bottom_edge = std::max(bottom_edge, p->rect.y + p->rect.h);
+                                    left_edge = std::min(left_edge, p->rect.x);
+                                    right_edge = std::max(right_edge, p->rect.x + p->rect.w);
+                                }
+                                int top_edge_s = INT_MAX;
+                                for (auto *p : sp) {
+                                    top_edge_s = std::min(top_edge_s, p->rect.y);
+                                }
+                                int border_y = bottom_edge;
+                                int border_h = top_edge_s - bottom_edge;
+                                if (border_h > 0) {
+                                    renderer.render_border((float)left_edge, (float)border_y,
+                                                           (float)(right_edge - left_edge), (float)border_h,
+                                                           0.3f, 0.3f, 0.3f);
+                                }
+                            }
+                        }
+
+                        draw_borders(node->first.get());
+                        draw_borders(node->second.get());
+                    };
+
+                    draw_borders(tab->layout.root());
+                    renderer.flush();
+                }
+            }
+
             platform->swap_buffers();
             needs_render = false;
         }

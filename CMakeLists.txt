@@ -26,6 +26,11 @@ add_executable(rivt
     src/main.cpp
     src/core/event_loop.cpp
     src/core/config.cpp
+    src/core/util.cpp
+    src/core/input_encoder.cpp
+    src/core/pane.cpp
+    src/core/layout.cpp
+    src/core/tab_manager.cpp
     src/platform/platform.cpp
     src/platform/x11_backend.cpp
     src/render/font.cpp
