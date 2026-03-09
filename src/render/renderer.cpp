@@ -117,6 +117,11 @@ void Renderer::build_shaders() {
     glyph_shader_ = link_program(vert, frag);
 }
 
+void Renderer::set_font_size(float size_pt, float dpi) {
+    font_.set_size(size_pt, dpi);
+    atlas_.clear();
+}
+
 void Renderer::set_viewport(int width, int height) {
     viewport_w_ = width;
     viewport_h_ = height;

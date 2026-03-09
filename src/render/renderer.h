@@ -48,6 +48,7 @@ public:
                    float r, float g, float b, float atlas_size);
 
     Font &font() { return font_; }
+    void set_font_size(float size_pt, float dpi);
     const FontMetrics &metrics() const { return font_.metrics(); }
 
     // Compute grid dimensions from pixel size

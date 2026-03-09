@@ -195,6 +195,16 @@ void X11Backend::get_size(int &width, int &height) {
     height = height_;
 }
 
+void X11Backend::resize_window(int width, int height) {
+    uint32_t values[] = { (uint32_t)width, (uint32_t)height };
+    xcb_configure_window(conn_, window_,
+                         XCB_CONFIG_WINDOW_WIDTH | XCB_CONFIG_WINDOW_HEIGHT,
+                         values);
+    xcb_flush(conn_);
+    width_ = width;
+    height_ = height;
+}
+
 int X11Backend::get_event_fd() {
     return xcb_get_file_descriptor(conn_);
 }

@@ -63,9 +63,13 @@ int main(int argc, char *argv[]) {
     tabs.on_needs_render = [&]() { needs_render = true; };
     tabs.on_quit = [&]() { loop.request_quit(); };
 
-    // Set cell dimensions
+    // Set cell dimensions and resize window to match initial_cols x initial_rows
     const auto &m = renderer.metrics();
     tabs.set_cell_size(m.cell_width, m.cell_height);
+    win_w = config.initial_cols * m.cell_width;
+    win_h = config.initial_rows * m.cell_height;
+    platform->resize_window(win_w, win_h);
+    renderer.set_viewport(win_w, win_h);
 
     // Compute tab bar height
     auto tab_bar_height = [&]() -> int {
@@ -76,6 +80,21 @@ int main(int argc, char *argv[]) {
     auto recompute = [&]() {
         int bar_h = tab_bar_height();
         tabs.recompute_layout(0, bar_h, win_w, win_h - bar_h);
+    };
+
+    // Resize font and adjust window to maintain current grid dimensions
+    auto resize_font = [&]() {
+        int cols, rows;
+        renderer.compute_grid(win_w, win_h - tab_bar_height(), cols, rows);
+        renderer.set_font_size(config.font_size, platform->get_dpi_scale() * 96.0f);
+        tabs.set_cell_size(renderer.metrics().cell_width, renderer.metrics().cell_height);
+        const auto &met = renderer.metrics();
+        win_w = cols * met.cell_width;
+        win_h = rows * met.cell_height + tab_bar_height();
+        platform->resize_window(win_w, win_h);
+        renderer.set_viewport(win_w, win_h);
+        recompute();
+        needs_render = true;
     };
 
     // Create first tab
@@ -191,32 +210,20 @@ int main(int argc, char *argv[]) {
                     return;
                 }
                 case XKB_KEY_plus:
-                case XKB_KEY_equal: {
+                case XKB_KEY_equal:
                     config.font_size += 1.0f;
-                    renderer.font().set_size(config.font_size, platform->get_dpi_scale() * 96.0f);
-                    tabs.set_cell_size(renderer.metrics().cell_width, renderer.metrics().cell_height);
-                    recompute();
-                    needs_render = true;
+                    resize_font();
                     return;
-                }
-                case XKB_KEY_minus: {
+                case XKB_KEY_minus:
                     if (config.font_size > 6.0f) {
                         config.font_size -= 1.0f;
-                        renderer.font().set_size(config.font_size, platform->get_dpi_scale() * 96.0f);
-                        tabs.set_cell_size(renderer.metrics().cell_width, renderer.metrics().cell_height);
-                        recompute();
-                        needs_render = true;
+                        resize_font();
                     }
                     return;
-                }
-                case XKB_KEY_0: {
-                    config.font_size = 12.0f;
-                    renderer.font().set_size(config.font_size, platform->get_dpi_scale() * 96.0f);
-                    tabs.set_cell_size(renderer.metrics().cell_width, renderer.metrics().cell_height);
-                    recompute();
-                    needs_render = true;
+                case XKB_KEY_0:
+                    config.font_size = 10.0f;
+                    resize_font();
                     return;
-                }
                 // Pane splits
                 case XKB_KEY_D:
                 case XKB_KEY_d:
@@ -254,6 +261,27 @@ int main(int argc, char *argv[]) {
                     tabs.new_tab();
                     recompute();
                     needs_render = true;
+                    return;
+            }
+        }
+
+        // Font size: Ctrl+plus/minus/0 (without Shift)
+        if (ctrl && !shift) {
+            switch (key.keysym) {
+                case XKB_KEY_plus:
+                case XKB_KEY_equal:
+                    config.font_size += 1.0f;
+                    resize_font();
+                    return;
+                case XKB_KEY_minus:
+                    if (config.font_size > 6.0f) {
+                        config.font_size -= 1.0f;
+                        resize_font();
+                    }
+                    return;
+                case XKB_KEY_0:
+                    config.font_size = 10.0f;
+                    resize_font();
                     return;
             }
         }

@@ -10,7 +10,7 @@ struct Config {
 
     // Font
     std::string font_family;  // empty = system default monospace
-    float font_size = 12.0f;
+    float font_size = 10.0f;
 
     // Colors - default dark theme
     uint32_t fg_color = 0xD4D4D4;
