@@ -1,0 +1,2 @@
+leak:libEGL_nvidia.so
+leak:libnvidia-glsi.so

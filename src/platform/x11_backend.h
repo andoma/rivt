@@ -5,6 +5,7 @@
 #include <xkbcommon/xkbcommon.h>
 #include <xkbcommon/xkbcommon-x11.h>
 #include <EGL/egl.h>
+#include <X11/Xlib.h>
 
 namespace rivt {
 
@@ -51,6 +52,7 @@ private:
     EGLContext egl_context_ = EGL_NO_CONTEXT;
     EGLSurface egl_surface_ = EGL_NO_SURFACE;
 
+    Display *xlib_display_ = nullptr;
     int width_ = 0;
     int height_ = 0;
 

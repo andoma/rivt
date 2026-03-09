@@ -33,14 +33,14 @@ xcb_atom_t X11Backend::intern_atom(const char *name) {
 
 bool X11Backend::create_window(int width, int height, const std::string &title) {
     // Use Xlib to get both Display* (for EGL) and xcb connection
-    Display *xlib_display = XOpenDisplay(nullptr);
-    if (!xlib_display) return false;
+    xlib_display_ = XOpenDisplay(nullptr);
+    if (!xlib_display_) return false;
 
-    conn_ = XGetXCBConnection(xlib_display);
+    conn_ = XGetXCBConnection(xlib_display_);
     if (!conn_ || xcb_connection_has_error(conn_)) return false;
 
     // Let XCB own the event queue
-    XSetEventQueueOwner(xlib_display, XCBOwnsEventQueue);
+    XSetEventQueueOwner(xlib_display_, XCBOwnsEventQueue);
 
     screen_ = xcb_setup_roots_iterator(xcb_get_setup(conn_)).data;
 
@@ -94,7 +94,7 @@ bool X11Backend::create_window(int width, int height, const std::string &title) 
     key_symbols_ = xcb_key_symbols_alloc(conn_);
 
     // EGL setup
-    egl_display_ = eglGetDisplay((EGLNativeDisplayType)xlib_display);
+    egl_display_ = eglGetDisplay((EGLNativeDisplayType)xlib_display_);
     if (egl_display_ == EGL_NO_DISPLAY) return false;
 
     EGLint major, minor;
@@ -148,6 +148,9 @@ void X11Backend::swap_buffers() {
 }
 
 void X11Backend::destroy_window() {
+    if (egl_display_ != EGL_NO_DISPLAY) {
+        eglMakeCurrent(egl_display_, EGL_NO_SURFACE, EGL_NO_SURFACE, EGL_NO_CONTEXT);
+    }
     if (egl_surface_ != EGL_NO_SURFACE) {
         eglDestroySurface(egl_display_, egl_surface_);
         egl_surface_ = EGL_NO_SURFACE;
@@ -160,6 +163,7 @@ void X11Backend::destroy_window() {
         eglTerminate(egl_display_);
         egl_display_ = EGL_NO_DISPLAY;
     }
+    eglReleaseThread();
     if (key_symbols_) {
         xcb_key_symbols_free(key_symbols_);
         key_symbols_ = nullptr;
@@ -167,6 +171,12 @@ void X11Backend::destroy_window() {
     if (window_ && conn_) {
         xcb_destroy_window(conn_, window_);
         window_ = 0;
+    }
+    // XCloseDisplay closes the underlying xcb connection too
+    if (xlib_display_) {
+        XCloseDisplay(xlib_display_);
+        xlib_display_ = nullptr;
+        conn_ = nullptr;
     }
 }
 
