@@ -406,6 +406,27 @@ void Renderer::build_pane_vertices(const ScreenBuffer &buffer, const Config &con
     }
 }
 
+void Renderer::render_dot_grid(int offset_x, int offset_y, int w, int h,
+                                int cell_w, int cell_h) {
+    if (cell_w <= 0 || cell_h <= 0) return;
+
+    float dot_r = 0.25f, dot_g = 0.25f, dot_b = 0.25f;
+    float ds = 2.0f;  // dot size in pixels
+
+    for (int y = offset_y; y < offset_y + h; y += cell_h) {
+        for (int x = offset_x; x < offset_x + w; x += cell_w) {
+            float cx = x + cell_w * 0.5f - ds * 0.5f;
+            float cy = y + cell_h * 0.5f - ds * 0.5f;
+            vertices_.push_back({cx,    cy,    0,0, dot_r,dot_g,dot_b,1, 0});
+            vertices_.push_back({cx+ds, cy,    0,0, dot_r,dot_g,dot_b,1, 0});
+            vertices_.push_back({cx+ds, cy+ds, 0,0, dot_r,dot_g,dot_b,1, 0});
+            vertices_.push_back({cx,    cy,    0,0, dot_r,dot_g,dot_b,1, 0});
+            vertices_.push_back({cx+ds, cy+ds, 0,0, dot_r,dot_g,dot_b,1, 0});
+            vertices_.push_back({cx,    cy+ds, 0,0, dot_r,dot_g,dot_b,1, 0});
+        }
+    }
+}
+
 void Renderer::render_pane(const ScreenBuffer &buffer, const Config &config,
                             int offset_x, int offset_y, int w, int h,
                             bool pane_focused) {

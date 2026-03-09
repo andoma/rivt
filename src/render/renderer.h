@@ -32,6 +32,10 @@ public:
     void render_border(float x, float y, float w, float h,
                        float r, float g, float b);
 
+    // Render dot grid in dead zone (tmux constrained area)
+    void render_dot_grid(int offset_x, int offset_y, int w, int h,
+                         int cell_w, int cell_h);
+
     // Render tab bar
     void render_tab_bar(const TabManager &tabs, const Config &config, int bar_height);
 

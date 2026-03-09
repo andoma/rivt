@@ -777,6 +777,14 @@ void Window::render_if_needed() {
             renderer_.flush();
         }
 
+        // Render dot grid in dead zone for tmux-managed tabs
+        if (tab->tmux_managed) {
+            const auto &m = renderer_.metrics();
+            renderer_.render_dot_grid(0, bar_h, win_w_, win_h_ - bar_h,
+                                       m.cell_width, m.cell_height);
+            renderer_.flush();
+        }
+
         // Render each pane with scissor clipping
         std::vector<Pane *> panes;
         if (tab->tmux_managed) {
