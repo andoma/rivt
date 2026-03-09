@@ -152,6 +152,15 @@ int Window::tab_bar_height() const {
 void Window::recompute() {
     int bar_h = tab_bar_height();
     tabs_->recompute_layout(0, bar_h, win_w_, win_h_ - bar_h);
+    update_size_hints();
+}
+
+void Window::update_size_hints() {
+    const auto &m = renderer_.metrics();
+    if (m.cell_width > 0 && m.cell_height > 0) {
+        int bar_h = tab_bar_height();
+        platform_->set_size_hints(m.cell_width, m.cell_height, 0, bar_h);
+    }
 }
 
 void Window::resize_to_cells(int cols, int rows) {

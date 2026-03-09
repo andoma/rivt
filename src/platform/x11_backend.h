@@ -20,6 +20,7 @@ public:
     void get_size(int &width, int &height) override;
     void resize_window(int width, int height) override;
     void show_window() override;
+    void set_size_hints(int cell_w, int cell_h, int base_w, int base_h) override;
 
     bool create_gl_context() override;
     void make_current() override;

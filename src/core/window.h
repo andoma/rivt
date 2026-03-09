@@ -46,6 +46,7 @@ public:
 private:
     void setup_callbacks();
     void recompute();
+    void update_size_hints();
     void resize_font();
     void handle_key(const KeyEvent &key);
     void handle_mouse(const MouseEvent &mouse);

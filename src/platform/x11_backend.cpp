@@ -209,6 +209,14 @@ void X11Backend::show_window() {
     xcb_flush(conn_);
 }
 
+void X11Backend::set_size_hints(int cell_w, int cell_h, int base_w, int base_h) {
+    xcb_size_hints_t hints{};
+    xcb_icccm_size_hints_set_resize_inc(&hints, cell_w, cell_h);
+    xcb_icccm_size_hints_set_base_size(&hints, base_w, base_h);
+    xcb_icccm_set_wm_normal_hints(conn_, window_, &hints);
+    xcb_flush(conn_);
+}
+
 int X11Backend::get_event_fd() {
     return xcb_get_file_descriptor(conn_);
 }

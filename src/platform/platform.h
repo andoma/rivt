@@ -17,6 +17,7 @@ public:
     virtual void get_size(int &width, int &height) = 0;
     virtual void resize_window(int width, int height) = 0;
     virtual void show_window() = 0;
+    virtual void set_size_hints(int cell_w, int cell_h, int base_w, int base_h) = 0;
 
     // GL context
     virtual bool create_gl_context() = 0;
