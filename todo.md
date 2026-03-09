@@ -16,7 +16,7 @@ Audit of `plan.md` vs codebase as of 2026-03-09.
 | 4c – PTY | forkpty, non-blocking I/O, resize | Done |
 | 4d – Event loop | epoll + timerfd | Done |
 | 4e – Keyboard | Kitty protocol (push/pop/query), legacy encoding | Done |
-| 4f – Mouse | Mode parsing (1000/1002/1003/1006) | Partial — events never forwarded to PTY |
+| 4f – Mouse | Mode parsing + forwarding (1000/1002/1003/1006) | Done |
 | 4g – OSC 133 | Prompt zone markers | Partial — recognized, zones not tracked |
 | 4h – OSC 52 | Clipboard read/write | Partial — write callback exists, not fully wired |
 | 5a – Config | 256-color palette, defaults | Done |
@@ -44,7 +44,7 @@ Audit of `plan.md` vs codebase as of 2026-03-09.
 
 ### High Priority — finish partially-implemented features
 
-- [ ] **Mouse event forwarding**: wire parsed mouse events through to PTY (SGR 1006 encoding)
+- [x] **Mouse event forwarding**: wire parsed mouse events through to PTY (SGR 1006 encoding)
 - [ ] **Selection model**: implement click-drag selection, double-click word, triple-click line; copy to clipboard via Ctrl+Shift+C
 - [ ] **OSC 52 clipboard**: complete read/write wiring to X11 clipboard
 ### Medium Priority — new features that round out the terminal
