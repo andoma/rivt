@@ -14,7 +14,7 @@ struct Config {
 
     // Colors - default dark theme
     uint32_t fg_color = 0xD4D4D4;
-    uint32_t bg_color = 0x1E1E1E;
+    uint32_t bg_color = 0x0F0F0F;
     uint32_t cursor_color = 0xAEAFAD;
     uint32_t selection_color = 0x264F78;
 
