@@ -20,7 +20,7 @@ TmuxController::TmuxController(TmuxClient &client, Window &window,
     client_.on_window_add = [this](int id) { on_window_add(id); };
     client_.on_window_close = [this](int id) { on_window_close(id); };
     client_.on_window_renamed = [this](int id, const std::string &n) { on_window_renamed(id, n); };
-    client_.on_layout_change = [this](int id, const std::string &l) { on_layout_change(id, l); };
+    client_.on_layout_change = [this](int id, const std::string &l, bool active) { on_layout_change(id, l, active); };
     client_.on_session_changed = [this]() { on_session_changed(); };
     client_.on_exit = [this]() { on_exit(); };
 }
@@ -75,10 +75,34 @@ void TmuxController::on_window_add(int window_id) {
     dbg("tmux: window-add @%d (already_known=%d)", window_id, (int)window_map_.count(window_id));
     if (window_map_.count(window_id)) return;
 
-    Tab *tab = tabs_.new_empty_tab("tmux");
-    tab->tmux_managed = true;
-    window_map_[window_id] = tab;
-    if (tabs_.on_needs_render) tabs_.on_needs_render();
+    // Don't create the tab yet — wait for %layout-change which has the
+    // actual pane geometries.  Request the layout explicitly in case
+    // %layout-change doesn't arrive on its own.
+    client_.send_command(
+        "list-windows -F '#{window_id} #{window_layout}'",
+        [this, window_id](const std::string &output) {
+            dbg("tmux: window-add list-windows response (%zu bytes)", output.size());
+            size_t pos = 0;
+            while (pos < output.size()) {
+                size_t nl = output.find('\n', pos);
+                if (nl == std::string::npos) nl = output.size();
+                std::string line = output.substr(pos, nl - pos);
+                pos = nl + 1;
+                if (line.empty()) continue;
+                size_t sp = line.find(' ');
+                if (sp == std::string::npos || sp == 0) continue;
+                std::string id_str = line.substr(0, sp);
+                if (!id_str.empty() && id_str[0] == '@') id_str = id_str.substr(1);
+                if (id_str.empty()) continue;
+                int wid = std::stoi(id_str);
+                if (wid != window_id) continue;
+                std::string layout = line.substr(sp + 1);
+                dbg("tmux: window-add: @%d layout='%s'", wid, layout.c_str());
+                on_layout_change(wid, layout, true);
+                return;
+            }
+            dbg("tmux: window-add: @%d not found in list-windows", window_id);
+        });
 }
 
 void TmuxController::on_window_close(int window_id) {
@@ -114,8 +138,8 @@ void TmuxController::on_window_renamed(int window_id, const std::string &name) {
     }
 }
 
-void TmuxController::on_layout_change(int window_id, const std::string &layout_str) {
-    dbg("tmux: layout-change @%d layout='%s'", window_id, layout_str.c_str());
+void TmuxController::on_layout_change(int window_id, const std::string &layout_str, bool is_active) {
+    dbg("tmux: layout-change @%d layout='%s' active=%d", window_id, layout_str.c_str(), is_active);
     auto wit = window_map_.find(window_id);
     Tab *tab;
     if (wit == window_map_.end()) {
@@ -205,6 +229,16 @@ void TmuxController::on_layout_change(int window_id, const std::string &layout_s
         tabs_.remove_pane(tab, pane);
     }
 
+    // Activate this tab if tmux says it's the active window
+    if (is_active) {
+        for (int i = 0; i < tabs_.tab_count(); i++) {
+            if (tabs_.tabs()[i].get() == tab) {
+                tabs_.activate_tab(i);
+                break;
+            }
+        }
+    }
+
     if (tabs_.on_needs_render) tabs_.on_needs_render();
 }
 
@@ -258,10 +292,13 @@ void TmuxController::on_session_changed() {
                 pos = nl + 1;
                 if (line.empty()) continue;
 
-                // Parse "ID LAYOUT"
+                // Parse "@ID LAYOUT"
                 size_t sp = line.find(' ');
                 if (sp == std::string::npos) continue;
-                int window_id = std::stoi(line.substr(0, sp));
+                std::string id_str = line.substr(0, sp);
+                if (!id_str.empty() && id_str[0] == '@') id_str = id_str.substr(1);
+                if (id_str.empty()) continue;
+                int window_id = std::stoi(id_str);
                 std::string layout = line.substr(sp + 1);
                 dbg("tmux: list-windows: @%d layout='%s'", window_id, layout.c_str());
                 on_layout_change(window_id, layout);

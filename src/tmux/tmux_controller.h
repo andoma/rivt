@@ -32,7 +32,7 @@ private:
     void on_window_add(int window_id);
     void on_window_close(int window_id);
     void on_window_renamed(int window_id, const std::string &name);
-    void on_layout_change(int window_id, const std::string &layout_str);
+    void on_layout_change(int window_id, const std::string &layout_str, bool is_active = false);
     void on_session_changed();
     void on_exit();
 

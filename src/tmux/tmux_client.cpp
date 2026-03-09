@@ -192,7 +192,7 @@ void TmuxClient::parse_line(const std::string &line) {
     }
 
     if (line.substr(0, 14) == "%layout-change") {
-        // %layout-change @ID layout_string [flags...]
+        // %layout-change @ID layout_string visible_layout_string [flags]
         size_t p = 15;
         if (p >= line.size() || line[p] != '@') return;
         size_t id_end = line.find(' ', p + 1);
@@ -205,7 +205,9 @@ void TmuxClient::parse_line(const std::string &line) {
             layout = line.substr(id_end + 1);
         else
             layout = line.substr(id_end + 1, layout_end - id_end - 1);
-        if (on_layout_change) on_layout_change(window_id, layout);
+        // Check for active window flag (*) at end of line
+        bool is_active = !line.empty() && line.back() == '*';
+        if (on_layout_change) on_layout_change(window_id, layout, is_active);
         return;
     }
 
