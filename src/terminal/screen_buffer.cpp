@@ -1,6 +1,7 @@
 #include "terminal/screen_buffer.h"
 #include <algorithm>
 #include <cstring>
+#include <cstdio>
 
 namespace rivt {
 
@@ -534,9 +535,43 @@ void ScreenBuffer::csi_dispatch(const CsiParams &params, char intermediate, char
             break;
         case 't': // Window manipulation (ignored mostly)
             break;
-        case 'n': // DSR - device status report (would need write callback)
+        case 'n': // DSR - device status report
+            if (dec_private && params.get(0) == 6) {
+                // CPR: report cursor position
+                if (on_write_back) {
+                    char buf[32];
+                    snprintf(buf, sizeof(buf), "\033[%d;%dR", cursor_row_ + 1, cursor_col_ + 1);
+                    on_write_back(buf);
+                }
+            }
             break;
-        case 'c': // DA - device attributes (would need write callback)
+        case 'c': // DA - device attributes
+            if (intermediate == '>' && on_write_back) {
+                // DA2: report terminal type. Claim VT220-ish.
+                on_write_back("\033[>0;0;0c");
+            } else if (intermediate == 0 && on_write_back) {
+                // DA1: report basic attributes
+                on_write_back("\033[?62;22c");
+            }
+            break;
+        case 'u': // Kitty keyboard protocol
+            if (intermediate == '?') {
+                // Query: report current flags
+                if (on_write_back) {
+                    char buf[16];
+                    snprintf(buf, sizeof(buf), "\033[?%du", kitty_kbd_flags());
+                    on_write_back(buf);
+                }
+            } else if (intermediate == '>') {
+                // Push flags onto stack
+                int flags = params.get(0, 0);
+                kitty_kbd_stack_.push_back(flags);
+            } else if (intermediate == '<') {
+                // Pop N entries from stack
+                int n = std::max(1, params.get(0, 1));
+                for (int i = 0; i < n && !kitty_kbd_stack_.empty(); i++)
+                    kitty_kbd_stack_.pop_back();
+            }
             break;
     }
 }

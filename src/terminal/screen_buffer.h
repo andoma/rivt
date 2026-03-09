@@ -39,6 +39,15 @@ public:
     int mouse_mode() const { return mouse_mode_; }
     bool sgr_mouse() const { return mode_sgr_mouse_; }
 
+    // Kitty keyboard protocol
+    // Flags: bit 0 = disambiguate, bit 1 = report event types,
+    //        bit 2 = report alternate keys, bit 3 = report all keys as escapes,
+    //        bit 4 = report associated text
+    int kitty_kbd_flags() const {
+        return kitty_kbd_stack_.empty() ? 0 : kitty_kbd_stack_.back();
+    }
+    bool kitty_kbd_active() const { return kitty_kbd_flags() != 0; }
+
     // Dirty tracking
     bool any_dirty() const;
     void clear_dirty();
@@ -48,6 +57,7 @@ public:
     std::function<void()> on_bell;
     std::function<void(const std::string &)> on_osc52_write;
     std::function<void(const std::string &)> on_cwd_change;
+    std::function<void(const std::string &)> on_write_back;  // send response to PTY
 
     // VtHandler interface
     void print(uint32_t codepoint) override;
@@ -117,6 +127,9 @@ private:
     int mouse_mode_ = 0;        // 0=off, 1000/1002/1003
     bool mode_sgr_mouse_ = false;
     bool mode_grapheme_cluster_ = false;
+
+    // Kitty keyboard protocol — stack of flag sets
+    std::vector<int> kitty_kbd_stack_;
 };
 
 } // namespace rivt

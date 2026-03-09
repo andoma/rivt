@@ -19,16 +19,190 @@ static void sigchld_handler(int) {
     got_sigchld = 1;
 }
 
-// Encode key event into the byte sequence to send to the PTY
-static std::string encode_key(const KeyEvent &key, const ScreenBuffer &buffer) {
+// Kitty keyboard protocol: map xkb keysym to kitty key number
+// Returns 0 if not a special key (use Unicode codepoint instead)
+static int kitty_keycode(uint32_t keysym) {
+    switch (keysym) {
+        case XKB_KEY_Escape:    return 27;
+        case XKB_KEY_Return:    return 13;
+        case XKB_KEY_KP_Enter:  return 13;
+        case XKB_KEY_Tab:       return 9;
+        case XKB_KEY_BackSpace: return 127;
+        case XKB_KEY_Insert:    return 57348;
+        case XKB_KEY_Delete:    return 57349;
+        case XKB_KEY_Left:      return 57350;
+        case XKB_KEY_Right:     return 57351;
+        case XKB_KEY_Up:        return 57352;
+        case XKB_KEY_Down:      return 57353;
+        case XKB_KEY_Page_Up:   return 57354;
+        case XKB_KEY_Page_Down: return 57355;
+        case XKB_KEY_Home:      return 57356;
+        case XKB_KEY_End:       return 57357;
+        case XKB_KEY_Caps_Lock: return 57358;
+        case XKB_KEY_Scroll_Lock: return 57359;
+        case XKB_KEY_Num_Lock:  return 57360;
+        case XKB_KEY_Print:     return 57361;
+        case XKB_KEY_Pause:     return 57362;
+        case XKB_KEY_Menu:      return 57363;
+        case XKB_KEY_F1:  return 57364;
+        case XKB_KEY_F2:  return 57365;
+        case XKB_KEY_F3:  return 57366;
+        case XKB_KEY_F4:  return 57367;
+        case XKB_KEY_F5:  return 57368;
+        case XKB_KEY_F6:  return 57369;
+        case XKB_KEY_F7:  return 57370;
+        case XKB_KEY_F8:  return 57371;
+        case XKB_KEY_F9:  return 57372;
+        case XKB_KEY_F10: return 57373;
+        case XKB_KEY_F11: return 57374;
+        case XKB_KEY_F12: return 57375;
+        case XKB_KEY_Shift_L: case XKB_KEY_Shift_R:     return 57441;
+        case XKB_KEY_Control_L: case XKB_KEY_Control_R: return 57442;
+        case XKB_KEY_Alt_L: case XKB_KEY_Alt_R:         return 57443;
+        case XKB_KEY_Super_L: case XKB_KEY_Super_R:     return 57444;
+        default: return 0;
+    }
+}
+
+// Kitty modifier encoding: 1-based bitmask (1=shift, 2=alt, 4=ctrl, 8=super)
+static int kitty_modifiers(KeyMod mods) {
+    int m = 0;
+    if (mods & KeyMod::Shift) m |= 1;
+    if (mods & KeyMod::Alt)   m |= 2;
+    if (mods & KeyMod::Ctrl)  m |= 4;
+    if (mods & KeyMod::Super) m |= 8;
+    return m;
+}
+
+// Legacy CSI sequence for functional keys.
+// Returns the CSI parameter number and final char, or {0,0} if not a legacy key.
+struct LegacyKey { int num; char final_char; };
+
+static LegacyKey legacy_csi_key(uint32_t keysym) {
+    switch (keysym) {
+        case XKB_KEY_Up:        return {1, 'A'};
+        case XKB_KEY_Down:      return {1, 'B'};
+        case XKB_KEY_Right:     return {1, 'C'};
+        case XKB_KEY_Left:      return {1, 'D'};
+        case XKB_KEY_Home:      return {1, 'H'};
+        case XKB_KEY_End:       return {1, 'F'};
+        case XKB_KEY_Insert:    return {2, '~'};
+        case XKB_KEY_Delete:    return {3, '~'};
+        case XKB_KEY_Page_Up:   return {5, '~'};
+        case XKB_KEY_Page_Down: return {6, '~'};
+        case XKB_KEY_F1:  return {1, 'P'};
+        case XKB_KEY_F2:  return {1, 'Q'};
+        case XKB_KEY_F3:  return {1, 'R'};
+        case XKB_KEY_F4:  return {1, 'S'};
+        case XKB_KEY_F5:  return {15, '~'};
+        case XKB_KEY_F6:  return {17, '~'};
+        case XKB_KEY_F7:  return {18, '~'};
+        case XKB_KEY_F8:  return {19, '~'};
+        case XKB_KEY_F9:  return {20, '~'};
+        case XKB_KEY_F10: return {21, '~'};
+        case XKB_KEY_F11: return {23, '~'};
+        case XKB_KEY_F12: return {24, '~'};
+        default: return {0, 0};
+    }
+}
+
+// Encode key event for kitty keyboard protocol
+static std::string encode_key_kitty(const KeyEvent &key, const ScreenBuffer &buffer) {
+    if (!key.pressed) return "";
+
+    int flags = buffer.kitty_kbd_flags();
+    int mods = kitty_modifiers(key.mods);
+    int mod_param = mods + 1;  // 1-based modifier parameter
+
+    // Check if this key has a legacy CSI representation
+    LegacyKey lk = legacy_csi_key(key.keysym);
+    if (lk.num != 0) {
+        // Functional key with legacy CSI encoding — keep the legacy form
+        // Format: CSI [num] [;mod] final
+        char buf[32];
+        if (lk.final_char == '~') {
+            // CSI num [;mod] ~
+            if (mod_param > 1)
+                snprintf(buf, sizeof(buf), "\033[%d;%d~", lk.num, mod_param);
+            else
+                snprintf(buf, sizeof(buf), "\033[%d~", lk.num);
+        } else {
+            // CSI [1;mod] X  (arrows: A/B/C/D, Home: H, End: F, F1-F4: P/Q/R/S)
+            if (mod_param > 1)
+                snprintf(buf, sizeof(buf), "\033[1;%d%c", mod_param, lk.final_char);
+            else
+                snprintf(buf, sizeof(buf), "\033[%c", lk.final_char);
+        }
+        return buf;
+    }
+
+    // For non-functional keys, determine the keycode
+    int kc = kitty_keycode(key.keysym);
+
+    if (kc == 0) {
+        // Not a named special key — use the Unicode codepoint
+        uint32_t sym = key.keysym;
+        if (sym >= XKB_KEY_A && sym <= XKB_KEY_Z)
+            kc = sym - XKB_KEY_A + 'a';
+        else if (sym >= XKB_KEY_a && sym <= XKB_KEY_z)
+            kc = sym - XKB_KEY_a + 'a';
+        else if (sym >= XKB_KEY_0 && sym <= XKB_KEY_9)
+            kc = sym - XKB_KEY_0 + '0';
+        else if (sym >= XKB_KEY_space && sym <= XKB_KEY_asciitilde)
+            kc = sym;
+        else if (sym >= 0x100 && sym <= 0x10FFFF)
+            kc = sym;
+        else
+            kc = sym & 0xFFFF;
+    }
+
+    if (kc == 0) return "";
+
+    // Decide whether we need the CSI u encoding or can use a plain char
+    bool need_csi = false;
+
+    // With disambiguate (flag bit 0): use CSI u for modified keys and special keys
+    if (flags & 1) {
+        bool has_significant_mods = mods != 0;
+        // Shift alone on a printable key doesn't need CSI u
+        if (mods == 1 && kc >= 32 && kc < 127 && !key.text.empty())
+            has_significant_mods = false;
+
+        if (has_significant_mods)
+            need_csi = true;
+
+        // Special keys (Enter, Tab, Backspace, Escape) always use CSI u
+        if (kc == 27 || kc == 13 || kc == 9 || kc == 127)
+            need_csi = true;
+    }
+
+    // With "report all keys" (flag bit 3): everything uses CSI u
+    if (flags & 8)
+        need_csi = true;
+
+    if (need_csi) {
+        char buf[64];
+        if (mod_param == 1)
+            snprintf(buf, sizeof(buf), "\033[%du", kc);
+        else
+            snprintf(buf, sizeof(buf), "\033[%d;%du", kc, mod_param);
+        return buf;
+    }
+
+    // Fall through to plain text for unmodified printable keys
+    if (!key.text.empty())
+        return key.text;
+
+    return "";
+}
+
+// Encode key event into the byte sequence to send to the PTY (legacy mode)
+static std::string encode_key_legacy(const KeyEvent &key, const ScreenBuffer &buffer) {
     if (!key.pressed) return "";
 
     bool ctrl  = key.mods & KeyMod::Ctrl;
     bool shift = key.mods & KeyMod::Shift;
     bool alt   = key.mods & KeyMod::Alt;
-
-    // Terminal internal shortcuts (not forwarded to PTY)
-    // These are handled by the caller
 
     std::string seq;
     const char *app = buffer.app_cursor_keys() ? "O" : "[";
@@ -118,6 +292,13 @@ static std::string encode_key(const KeyEvent &key, const ScreenBuffer &buffer) {
     return seq;
 }
 
+// Dispatch to kitty or legacy encoding
+static std::string encode_key(const KeyEvent &key, const ScreenBuffer &buffer) {
+    if (buffer.kitty_kbd_active())
+        return encode_key_kitty(key, buffer);
+    return encode_key_legacy(key, buffer);
+}
+
 int main(int argc, char *argv[]) {
     (void)argc; (void)argv;
 
@@ -169,6 +350,11 @@ int main(int argc, char *argv[]) {
 
     // Spawn PTY
     Pty pty;
+
+    // Write-back callback (for DSR, DA, kitty keyboard query responses)
+    screen.on_write_back = [&](const std::string &data) {
+        pty.write(data);
+    };
     if (!pty.spawn(cols, rows)) {
         fprintf(stderr, "Failed to spawn PTY\n");
         return 1;

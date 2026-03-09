@@ -359,6 +359,58 @@ TEST(screen_autowrap) {
     ASSERT_EQ(t.screen.cursor_col(), 3);
 }
 
+// --- Kitty keyboard protocol ---
+
+TEST(kitty_kbd_push_pop) {
+    TestTerminal t;
+    ASSERT_FALSE(t.screen.kitty_kbd_active());
+    ASSERT_EQ(t.screen.kitty_kbd_flags(), 0);
+
+    t.feed("\033[>1u");  // push flags=1 (disambiguate)
+    ASSERT_TRUE(t.screen.kitty_kbd_active());
+    ASSERT_EQ(t.screen.kitty_kbd_flags(), 1);
+
+    t.feed("\033[>3u");  // push flags=3 (disambiguate + report events)
+    ASSERT_EQ(t.screen.kitty_kbd_flags(), 3);
+
+    t.feed("\033[<1u");  // pop 1
+    ASSERT_EQ(t.screen.kitty_kbd_flags(), 1);
+
+    t.feed("\033[<1u");  // pop 1
+    ASSERT_EQ(t.screen.kitty_kbd_flags(), 0);
+    ASSERT_FALSE(t.screen.kitty_kbd_active());
+}
+
+TEST(kitty_kbd_pop_empty) {
+    TestTerminal t;
+    t.feed("\033[<5u");  // pop from empty stack — should not crash
+    ASSERT_EQ(t.screen.kitty_kbd_flags(), 0);
+}
+
+TEST(kitty_kbd_query) {
+    TestTerminal t;
+    std::string response;
+    t.screen.on_write_back = [&](const std::string &s) { response = s; };
+
+    t.feed("\033[?u");  // query
+    ASSERT_STR_EQ(response, "\033[?0u");
+
+    t.feed("\033[>5u");  // push flags=5
+    response.clear();
+    t.feed("\033[?u");
+    ASSERT_STR_EQ(response, "\033[?5u");
+}
+
+TEST(kitty_kbd_reset_on_alt_screen) {
+    TestTerminal t;
+    t.feed("\033[>1u");  // push kitty mode
+    ASSERT_TRUE(t.screen.kitty_kbd_active());
+    // Note: kitty spec says the stack persists across alt screen switches
+    // but apps should clean up. We just verify it doesn't crash.
+    t.feed("\033[?1049h");
+    t.feed("\033[?1049l");
+}
+
 int main() {
     return run_tests();
 }

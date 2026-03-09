@@ -46,8 +46,15 @@ bool Pty::spawn(int cols, int rows, const std::string &shell) {
         // Set environment
         setenv("TERM", "xterm-256color", 1);
         setenv("COLORTERM", "truecolor", 1);
-        setenv("TERM_PROGRAM", "rivt", 1);
-        setenv("TERM_PROGRAM_VERSION", "0.1.0", 1);
+        setenv("TERM_PROGRAM", "ghostty", 1);
+        setenv("TERM_PROGRAM_VERSION", "1.2.0", 1);
+
+        // HACK: We claim to be Ghostty because apps like ink/claude-cli check
+        // TERM_PROGRAM against a hardcoded whitelist to decide whether to enable
+        // kitty keyboard protocol, instead of using the standard CSI ? u query.
+        // We fully support the protocol, but there's no standard env var to
+        // advertise that. This should be removed once the ecosystem moves to
+        // runtime capability detection.
 
         // Reset signal handlers
         signal(SIGCHLD, SIG_DFL);
