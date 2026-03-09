@@ -1,5 +1,6 @@
 #include "core/window.h"
 #include "core/event_loop.h"
+#include "core/debug.h"
 #include "tmux/tmux_client.h"
 #include "tmux/tmux_controller.h"
 
@@ -82,6 +83,7 @@ bool Window::init() {
     }
     recompute();
 
+    platform_->show_window();
     setup_callbacks();
     return true;
 }
@@ -137,6 +139,7 @@ bool Window::init_tmux(const std::vector<std::string> &tmux_args) {
     int rows = m.cell_height > 0 ? (win_h_ - bar_h) / m.cell_height : 24;
     tmux_controller_->initialize(cols, rows, m.cell_width, m.cell_height, 0, bar_h);
 
+    platform_->show_window();
     setup_callbacks();
     return true;
 }
@@ -158,6 +161,8 @@ void Window::resize_to_cells(int cols, int rows) {
     int bar_h = m.cell_height + 8;
     win_w_ = cols * m.cell_width;
     win_h_ = rows * m.cell_height + bar_h;
+    dbg("window: resize_to_cells %dx%d -> %dx%d px (bar_h=%d cell=%dx%d)",
+        cols, rows, win_w_, win_h_, bar_h, m.cell_width, m.cell_height);
     platform_->resize_window(win_w_, win_h_);
     renderer_.set_viewport(win_w_, win_h_);
     recompute();
@@ -221,11 +226,12 @@ void Window::setup_callbacks() {
 }
 
 void Window::start_tmux_from_pane(Pane *gateway) {
-    // Delegate to a new window via callback
+    dbg("window: start_tmux_from_pane gateway=%p", (void*)gateway);
     if (on_new_tmux_window) on_new_tmux_window(gateway);
 }
 
 bool Window::init_tmux_pty(Pane *gateway_pane) {
+    dbg("window: init_tmux_pty gateway=%p", (void*)gateway_pane);
     platform_ = Platform::create();
     if (!platform_) return false;
     if (!platform_->create_window(win_w_, win_h_, "rivt [tmux]")) return false;
@@ -271,6 +277,7 @@ bool Window::init_tmux_pty(Pane *gateway_pane) {
     int rows = m.cell_height > 0 ? (win_h_ - bar_h) / m.cell_height : 24;
     tmux_controller_->initialize(cols, rows, m.cell_width, m.cell_height, 0, bar_h);
 
+    platform_->show_window();
     setup_callbacks();
     return true;
 }
@@ -291,6 +298,7 @@ void Window::stop_tmux_pty_mode() {
 }
 
 void Window::handle_resize(int w, int h) {
+    dbg("window: handle_resize %dx%d", w, h);
     win_w_ = w;
     win_h_ = h;
     renderer_.set_viewport(w, h);

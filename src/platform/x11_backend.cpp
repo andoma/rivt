@@ -78,7 +78,6 @@ bool X11Backend::create_window(int width, int height, const std::string &title) 
                         atom_wm_protocols_, XCB_ATOM_ATOM, 32, 1, &atom_wm_delete_);
 
     set_title(title);
-    xcb_map_window(conn_, window_);
     xcb_flush(conn_);
 
     // Setup xkbcommon-x11
@@ -203,6 +202,11 @@ void X11Backend::resize_window(int width, int height) {
     xcb_flush(conn_);
     width_ = width;
     height_ = height;
+}
+
+void X11Backend::show_window() {
+    xcb_map_window(conn_, window_);
+    xcb_flush(conn_);
 }
 
 int X11Backend::get_event_fd() {

@@ -1,8 +1,10 @@
 #include "core/window.h"
 #include "core/event_loop.h"
 #include "core/config.h"
+#include "core/debug.h"
 
 #include <cstdio>
+#include <cstring>
 #include <signal.h>
 #include <vector>
 #include <memory>
@@ -19,6 +21,16 @@ static void sigchld_handler(int) {
 int main(int argc, char *argv[]) {
     signal(SIGCHLD, sigchld_handler);
 
+    // Parse global flags
+    std::vector<std::string> args;
+    for (int i = 1; i < argc; i++) {
+        if (strcmp(argv[i], "--debug") == 0 || strcmp(argv[i], "-d") == 0) {
+            debug_enabled() = true;
+        } else {
+            args.push_back(argv[i]);
+        }
+    }
+
     Config base_config;
     EventLoop loop;
     std::vector<std::unique_ptr<Window>> windows;
@@ -26,10 +38,10 @@ int main(int argc, char *argv[]) {
     // Check for tmux subcommand: rivt tmux <args...>
     bool tmux_mode = false;
     std::vector<std::string> tmux_args;
-    if (argc >= 2 && std::string(argv[1]) == "tmux") {
+    if (!args.empty() && args[0] == "tmux") {
         tmux_mode = true;
-        for (int i = 2; i < argc; i++)
-            tmux_args.push_back(argv[i]);
+        for (size_t i = 1; i < args.size(); i++)
+            tmux_args.push_back(args[i]);
     }
 
     std::function<void(Pane *)> create_tmux_window;

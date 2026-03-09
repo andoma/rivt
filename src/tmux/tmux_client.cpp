@@ -1,4 +1,5 @@
 #include "tmux/tmux_client.h"
+#include "core/debug.h"
 
 #include <unistd.h>
 #include <signal.h>
@@ -114,6 +115,11 @@ void TmuxClient::on_readable() {
 void TmuxClient::parse_line(const std::string &line) {
     if (line.empty()) return;
 
+    // Log non-output lines (output is too frequent)
+    if (line[0] == '%' && line.substr(0, 7) != "%output") {
+        dbg("tmux-client: << %s", line.c_str());
+    }
+
     // Handle %begin/%end/%error blocks
     if (in_block_) {
         if (line.substr(0, 4) == "%end" || line.substr(0, 6) == "%error") {
@@ -227,6 +233,7 @@ std::string TmuxClient::decode_octal(const std::string &s) {
 }
 
 void TmuxClient::send_command(const std::string &cmd, ResponseCallback cb) {
+    dbg("tmux-client: >> %s", cmd.c_str());
     response_queue_.push_back(std::move(cb));
     std::string msg = cmd + "\n";
     if (pty_write_) {

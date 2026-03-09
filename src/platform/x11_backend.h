@@ -19,6 +19,7 @@ public:
     void set_title(const std::string &title) override;
     void get_size(int &width, int &height) override;
     void resize_window(int width, int height) override;
+    void show_window() override;
 
     bool create_gl_context() override;
     void make_current() override;
