@@ -92,7 +92,8 @@ public:
     // Callbacks
     std::function<void(const std::string &)> on_title_change;
     std::function<void()> on_bell;
-    std::function<void(const std::string &)> on_osc52_write;
+    std::function<void(const std::string &sel, const std::string &base64)> on_osc52_write;
+    std::function<void(const std::string &sel)> on_osc52_read;
     std::function<void(const std::string &)> on_cwd_change;
     std::function<void(const std::string &)> on_write_back;  // send response to PTY
 

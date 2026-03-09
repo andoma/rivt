@@ -587,11 +587,19 @@ void ScreenBuffer::osc_dispatch(int command, const std::string &payload) {
         case 7: // Current working directory
             if (on_cwd_change) on_cwd_change(payload);
             break;
-        case 52: // Clipboard
-            if (on_osc52_write && payload.size() > 2 && payload[1] == ';') {
-                on_osc52_write(payload.substr(2));
+        case 52: { // Clipboard: payload is "Pc;Pd" where Pc=selection, Pd=base64 or ?
+            auto semi = payload.find(';');
+            if (semi != std::string::npos) {
+                std::string sel = payload.substr(0, semi);
+                std::string data = payload.substr(semi + 1);
+                if (data == "?") {
+                    if (on_osc52_read) on_osc52_read(sel);
+                } else {
+                    if (on_osc52_write) on_osc52_write(sel, data);
+                }
             }
             break;
+        }
         case 133: // Shell integration / semantic zones
             // TODO: track prompt zones
             break;

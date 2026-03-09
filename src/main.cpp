@@ -82,6 +82,48 @@ static void sigchld_handler(int) {
     got_sigchld = 1;
 }
 
+static int base64_val(unsigned char c) {
+    if (c >= 'A' && c <= 'Z') return c - 'A';
+    if (c >= 'a' && c <= 'z') return c - 'a' + 26;
+    if (c >= '0' && c <= '9') return c - '0' + 52;
+    if (c == '+') return 62;
+    if (c == '/') return 63;
+    return -1;
+}
+
+static std::string base64_decode(const std::string &in) {
+    std::string out;
+    int val = 0, bits = -8;
+    for (unsigned char c : in) {
+        int v = base64_val(c);
+        if (v < 0) continue;
+        val = (val << 6) | v;
+        bits += 6;
+        if (bits >= 0) {
+            out += (char)((val >> bits) & 0xFF);
+            bits -= 8;
+        }
+    }
+    return out;
+}
+
+static std::string base64_encode(const std::string &in) {
+    static const char E[] = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+    std::string out;
+    int val = 0, bits = -6;
+    for (unsigned char c : in) {
+        val = (val << 8) | c;
+        bits += 8;
+        while (bits >= 0) {
+            out += E[(val >> bits) & 0x3F];
+            bits -= 6;
+        }
+    }
+    if (bits > -6) out += E[(val << (-bits)) & 0x3F];
+    while (out.size() % 4) out += '=';
+    return out;
+}
+
 // Kitty keyboard protocol: map xkb keysym to kitty key number
 // Returns 0 if not a special key (use Unicode codepoint instead)
 static int kitty_keycode(uint32_t keysym) {
@@ -417,6 +459,15 @@ int main(int argc, char *argv[]) {
         platform->set_title(title);
     };
 
+    // OSC 52 clipboard callbacks
+    screen.on_osc52_write = [&](const std::string &sel, const std::string &base64) {
+        if (!config.osc52_write) return;
+        std::string text = base64_decode(base64);
+        bool primary = (sel.find('p') != std::string::npos);
+        platform->set_clipboard(text, primary);
+        if (!primary) platform->set_clipboard(text, false);  // 'c' or 's' → CLIPBOARD
+    };
+
     // Spawn PTY
     Pty pty;
 
@@ -424,6 +475,14 @@ int main(int argc, char *argv[]) {
     screen.on_write_back = [&](const std::string &data) {
         pty.write(data);
     };
+    screen.on_osc52_read = [&](const std::string &sel) {
+        if (!config.osc52_read) return;
+        bool primary = (sel.find('p') != std::string::npos);
+        std::string text = platform->get_clipboard(primary);
+        std::string response = "\033]52;" + sel + ";" + base64_encode(text) + "\033\\";
+        pty.write(response);
+    };
+
     if (!pty.spawn(cols, rows)) {
         fprintf(stderr, "Failed to spawn PTY\n");
         return 1;
