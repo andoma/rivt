@@ -38,6 +38,7 @@ public:
     bool focus_reporting() const { return mode_focus_events_; }
     int mouse_mode() const { return mouse_mode_; }
     bool sgr_mouse() const { return mode_sgr_mouse_; }
+    bool alt_screen() const { return using_alt_screen_; }
 
     // Kitty keyboard protocol
     // Flags: bit 0 = disambiguate, bit 1 = report event types,

@@ -15,6 +15,68 @@ using namespace rivt;
 
 static volatile sig_atomic_t got_sigchld = 0;
 
+// Encode a mouse event as an SGR or legacy X11 escape sequence.
+// Returns empty string if the event should not be reported.
+static std::string encode_mouse(const MouseEvent &mouse, int cell_col, int cell_row,
+                                bool sgr) {
+    // Determine button code for the protocol
+    int cb;
+    if (mouse.motion && mouse.button == MouseButton::NoButton) {
+        // Motion with no button held (mode 1003 only)
+        cb = 3 + 32;  // "no button" motion
+    } else if (mouse.motion) {
+        // Button-motion event: add 32 for motion flag
+        switch (mouse.button) {
+            case MouseButton::Left:   cb = 0 + 32; break;
+            case MouseButton::Middle: cb = 1 + 32; break;
+            case MouseButton::Right:  cb = 2 + 32; break;
+            default: return {};
+        }
+    } else if (mouse.button == MouseButton::ScrollUp) {
+        cb = 64;
+    } else if (mouse.button == MouseButton::ScrollDown) {
+        cb = 65;
+    } else if (!mouse.pressed && !sgr) {
+        // Legacy encoding uses button 3 for release
+        cb = 3;
+    } else {
+        switch (mouse.button) {
+            case MouseButton::Left:   cb = 0; break;
+            case MouseButton::Middle: cb = 1; break;
+            case MouseButton::Right:  cb = 2; break;
+            default: return {};
+        }
+    }
+
+    // Add modifier bits
+    if (mouse.mods & KeyMod::Shift) cb |= 4;
+    if (mouse.mods & KeyMod::Alt)   cb |= 8;
+    if (mouse.mods & KeyMod::Ctrl)  cb |= 16;
+
+    // 1-based coordinates
+    int cx = cell_col + 1;
+    int cy = cell_row + 1;
+
+    if (sgr) {
+        // SGR format: CSI < cb ; cx ; cy M/m
+        char final_ch = mouse.pressed || mouse.motion ? 'M' : 'm';
+        char buf[64];
+        snprintf(buf, sizeof(buf), "\033[<%d;%d;%d%c", cb, cx, cy, final_ch);
+        return buf;
+    } else {
+        // Legacy X11 format: CSI M cb+32 cx+32 cy+32 (max 223)
+        if (cx > 223 || cy > 223) return {};
+        char buf[6];
+        buf[0] = '\033';
+        buf[1] = '[';
+        buf[2] = 'M';
+        buf[3] = (char)(cb + 32);
+        buf[4] = (char)(cx + 32);
+        buf[5] = (char)(cy + 32);
+        return std::string(buf, 6);
+    }
+}
+
 static void sigchld_handler(int) {
     got_sigchld = 1;
 }
@@ -453,15 +515,56 @@ int main(int argc, char *argv[]) {
     };
 
     platform->on_mouse = [&](const MouseEvent &mouse) {
-        if (mouse.button == MouseButton::ScrollUp) {
-            screen.scroll_viewport(-3);
-            needs_render = true;
-        } else if (mouse.button == MouseButton::ScrollDown) {
-            screen.scroll_viewport(3);
-            needs_render = true;
+        const auto &m = renderer.metrics();
+        int cell_col = m.cell_width > 0 ? mouse.x / m.cell_width : 0;
+        int cell_row = m.cell_height > 0 ? mouse.y / m.cell_height : 0;
+
+        // Clamp to grid bounds
+        if (cell_col < 0) cell_col = 0;
+        if (cell_row < 0) cell_row = 0;
+        if (cell_col >= cols) cell_col = cols - 1;
+        if (cell_row >= rows) cell_row = rows - 1;
+
+        int mm = screen.mouse_mode();
+        if (mm) {
+            // Check if this event type should be reported
+            bool report = false;
+            if (mouse.motion) {
+                if (mm == 1003) report = true;  // any-event tracking
+                else if (mm == 1002 && mouse.button != MouseButton::NoButton) report = true;  // button-event tracking
+            } else {
+                // Button press/release
+                report = true;
+                // Scroll events in mouse mode go to PTY, not viewport
+            }
+
+            if (report) {
+                std::string seq = encode_mouse(mouse, cell_col, cell_row,
+                                               screen.sgr_mouse());
+                if (!seq.empty()) {
+                    pty.write(seq);
+                    return;
+                }
+            }
         }
 
-        // TODO: mouse reporting to PTY if mouse_mode enabled
+        // Fallback scroll behavior when mouse mode is off
+        if (mouse.button == MouseButton::ScrollUp || mouse.button == MouseButton::ScrollDown) {
+            if (screen.alt_screen()) {
+                // Alt screen (emacs, vim, less, etc.): send arrow keys
+                const char *arrow = mouse.button == MouseButton::ScrollUp
+                    ? (screen.app_cursor_keys() ? "\033OA" : "\033[A")
+                    : (screen.app_cursor_keys() ? "\033OB" : "\033[B");
+                for (int i = 0; i < 3; i++)
+                    pty.write(arrow, strlen(arrow));
+            } else {
+                // Normal screen: scroll viewport through scrollback
+                int delta = mouse.button == MouseButton::ScrollUp ? -3 : 3;
+                screen.scroll_viewport(delta);
+                needs_render = true;
+            }
+        }
+
         // TODO: selection handling
     };
 
