@@ -4,6 +4,7 @@
 #include <GL/gl.h>
 #include <cstdio>
 #include <cmath>
+#include <string>
 
 namespace rivt {
 
@@ -211,6 +212,18 @@ void Renderer::render(const ScreenBuffer &buffer, const Config &config) {
                 fg_r = 1.0f; fg_g = 1.0f; fg_b = 1.0f;
             }
 
+            // Search highlight
+            int mt = buffer.search.match_type(abs_line, col);
+            if (mt == 2) {
+                // Current match: bright orange
+                cell_bg_r = 0.9f; cell_bg_g = 0.6f; cell_bg_b = 0.1f;
+                fg_r = 0.0f; fg_g = 0.0f; fg_b = 0.0f;
+            } else if (mt == 1) {
+                // Other matches: yellow
+                cell_bg_r = 0.6f; cell_bg_g = 0.5f; cell_bg_b = 0.1f;
+                fg_r = 0.0f; fg_g = 0.0f; fg_b = 0.0f;
+            }
+
             // Handle inverse
             if (cell.attrs & ATTR_INVERSE) {
                 std::swap(fg_r, cell_bg_r);
@@ -223,8 +236,8 @@ void Renderer::render(const ScreenBuffer &buffer, const Config &config) {
                 fg_r *= 0.5f; fg_g *= 0.5f; fg_b *= 0.5f;
             }
 
-            // Background quad (only if non-default, inverse, or selected)
-            if (!(cell.bg & COLOR_FLAG_DEFAULT) || (cell.attrs & ATTR_INVERSE) || selected) {
+            // Background quad (only if non-default, inverse, selected, or search match)
+            if (!(cell.bg & COLOR_FLAG_DEFAULT) || (cell.attrs & ATTR_INVERSE) || selected || mt) {
                 // Triangle 1
                 vertices_.push_back({x_left,  y_top,    0, 0, cell_bg_r, cell_bg_g, cell_bg_b, 1.0f, 0});
                 vertices_.push_back({x_right, y_top,    0, 0, cell_bg_r, cell_bg_g, cell_bg_b, 1.0f, 0});
@@ -349,6 +362,67 @@ void Renderer::render(const ScreenBuffer &buffer, const Config &config) {
         }
     }
 
+    // Search bar overlay (only when focused)
+    if (buffer.search.focused) {
+        float bar_h = m.cell_height + 8;
+        float bar_y = 0;
+        float bar_w = (float)viewport_w_;
+
+        // Bar background (dark gray)
+        float bar_r = 0.15f, bar_g = 0.15f, bar_b = 0.15f;
+        vertices_.push_back({0,     bar_y,         0,0, bar_r,bar_g,bar_b,0.95f, 0});
+        vertices_.push_back({bar_w, bar_y,         0,0, bar_r,bar_g,bar_b,0.95f, 0});
+        vertices_.push_back({bar_w, bar_y + bar_h, 0,0, bar_r,bar_g,bar_b,0.95f, 0});
+        vertices_.push_back({0,     bar_y,         0,0, bar_r,bar_g,bar_b,0.95f, 0});
+        vertices_.push_back({bar_w, bar_y + bar_h, 0,0, bar_r,bar_g,bar_b,0.95f, 0});
+        vertices_.push_back({0,     bar_y + bar_h, 0,0, bar_r,bar_g,bar_b,0.95f, 0});
+
+        // Bottom border (subtle highlight)
+        float bdr_y = bar_y + bar_h - 1;
+        vertices_.push_back({0,     bdr_y,     0,0, 0.3f,0.3f,0.3f,1, 0});
+        vertices_.push_back({bar_w, bdr_y,     0,0, 0.3f,0.3f,0.3f,1, 0});
+        vertices_.push_back({bar_w, bdr_y + 1, 0,0, 0.3f,0.3f,0.3f,1, 0});
+        vertices_.push_back({0,     bdr_y,     0,0, 0.3f,0.3f,0.3f,1, 0});
+        vertices_.push_back({bar_w, bdr_y + 1, 0,0, 0.3f,0.3f,0.3f,1, 0});
+        vertices_.push_back({0,     bdr_y + 1, 0,0, 0.3f,0.3f,0.3f,1, 0});
+
+        float text_y = bar_y + 4;
+        float text_x = 4;
+
+        // "Find: " label
+        draw_text(text_x, text_y, "Find: ", 0.6f, 0.6f, 0.6f, atlas_size);
+        text_x += 6 * m.cell_width;
+
+        // Query text
+        draw_text(text_x, text_y, buffer.search.query, 1.0f, 1.0f, 1.0f, atlas_size);
+        text_x += buffer.search.query.size() * m.cell_width;
+
+        // Cursor
+        float cur_x = text_x;
+        vertices_.push_back({cur_x,   text_y,                     0,0, 0.8f,0.8f,0.8f,0.8f, 0});
+        vertices_.push_back({cur_x+2, text_y,                     0,0, 0.8f,0.8f,0.8f,0.8f, 0});
+        vertices_.push_back({cur_x+2, text_y + (float)m.cell_height, 0,0, 0.8f,0.8f,0.8f,0.8f, 0});
+        vertices_.push_back({cur_x,   text_y,                     0,0, 0.8f,0.8f,0.8f,0.8f, 0});
+        vertices_.push_back({cur_x+2, text_y + (float)m.cell_height, 0,0, 0.8f,0.8f,0.8f,0.8f, 0});
+        vertices_.push_back({cur_x,   text_y + (float)m.cell_height, 0,0, 0.8f,0.8f,0.8f,0.8f, 0});
+
+        // Match count (right-aligned)
+        if (!buffer.search.query.empty()) {
+            std::string info;
+            if (buffer.search.total_matches() == 0) {
+                info = "No matches";
+            } else {
+                info = std::to_string(buffer.search.current_match + 1) + " of "
+                     + std::to_string(buffer.search.total_matches());
+            }
+            float info_x = bar_w - (info.size() + 1) * m.cell_width;
+            float info_r = buffer.search.total_matches() == 0 ? 0.8f : 0.6f;
+            float info_g = buffer.search.total_matches() == 0 ? 0.3f : 0.6f;
+            float info_b = buffer.search.total_matches() == 0 ? 0.3f : 0.6f;
+            draw_text(info_x, text_y, info, info_r, info_g, info_b, atlas_size);
+        }
+    }
+
     if (vertices_.empty()) return;
 
     // Upload and draw
@@ -388,6 +462,35 @@ void Renderer::render(const ScreenBuffer &buffer, const Config &config) {
     glDrawArrays(GL_TRIANGLES, 0, (int)vertices_.size());
 
     glBindVertexArray(0);
+}
+
+void Renderer::draw_text(float x, float y, const std::string &text,
+                         float r, float g, float b, float atlas_size) {
+    const auto &m = font_.metrics();
+    for (unsigned char ch : text) {
+        auto [font_idx, glyph_id] = font_.find_glyph(ch);
+        const GlyphEntry *ge = atlas_.get(font_, font_idx, glyph_id);
+        if (ge && ge->w > 0) {
+            float gx = x + ge->bearing_x;
+            float gy = y + m.ascender - ge->bearing_y;
+            float gx2 = gx + ge->w;
+            float gy2 = gy + ge->h;
+
+            float tu = ge->u / atlas_size;
+            float tv = ge->v / atlas_size;
+            float tu2 = (ge->u + ge->w) / atlas_size;
+            float tv2 = (ge->v + ge->h) / atlas_size;
+
+            float type = (ge->type == GlyphType::Color) ? 2.0f : 1.0f;
+            vertices_.push_back({gx,  gy,  tu,  tv,  r,g,b,1, type});
+            vertices_.push_back({gx2, gy,  tu2, tv,  r,g,b,1, type});
+            vertices_.push_back({gx2, gy2, tu2, tv2, r,g,b,1, type});
+            vertices_.push_back({gx,  gy,  tu,  tv,  r,g,b,1, type});
+            vertices_.push_back({gx2, gy2, tu2, tv2, r,g,b,1, type});
+            vertices_.push_back({gx,  gy2, tu,  tv2, r,g,b,1, type});
+        }
+        x += m.cell_width;
+    }
 }
 
 } // namespace rivt

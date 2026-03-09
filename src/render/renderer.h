@@ -18,6 +18,8 @@ public:
     void set_viewport(int width, int height);
     void set_focused(bool focused) { focused_ = focused; }
     void render(const ScreenBuffer &buffer, const Config &config);
+    void draw_text(float x, float y, const std::string &text,
+                   float r, float g, float b, float atlas_size);
 
     Font &font() { return font_; }
     const FontMetrics &metrics() const { return font_.metrics(); }

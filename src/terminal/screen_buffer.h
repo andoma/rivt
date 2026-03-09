@@ -3,9 +3,49 @@
 #include "terminal/vt_parser.h"
 #include <deque>
 #include <string>
+#include <vector>
 #include <functional>
 
 namespace rivt {
+
+struct SearchMatch {
+    int abs_line;
+    int start_col;
+    int end_col;  // inclusive
+};
+
+struct SearchState {
+    bool active = false;    // highlights visible
+    bool focused = false;   // search bar has keyboard focus
+    std::string query;
+    std::vector<SearchMatch> matches;
+    int current_match = -1;  // index into matches, -1 = none
+    bool case_sensitive = false;
+
+    int searched_up_to = 0;  // absolute line count last fully searched
+
+    void clear() {
+        active = false;
+        focused = false;
+        query.clear();
+        matches.clear();
+        current_match = -1;
+        searched_up_to = 0;
+    }
+
+    int total_matches() const { return (int)matches.size(); }
+
+    // Check if a cell is part of any match; returns 0=no, 1=match, 2=current match
+    int match_type(int abs_line, int col) const {
+        for (int i = 0; i < (int)matches.size(); i++) {
+            const auto &m = matches[i];
+            if (m.abs_line == abs_line && col >= m.start_col && col <= m.end_col) {
+                return (i == current_match) ? 2 : 1;
+            }
+        }
+        return 0;
+    }
+};
 
 struct Selection {
     bool active = false;
@@ -75,6 +115,12 @@ public:
         return (int)scrollback_.size() + viewport_offset_ + screen_row;
     }
     std::string get_selection_text() const;
+
+    // Search
+    SearchState search;
+    void find_matches(const std::string &query, bool case_sensitive);
+    void find_matches_incremental();  // only search new lines since last call
+    int total_lines() const { return (int)scrollback_.size() + rows_; }
 
     // Kitty keyboard protocol
     // Flags: bit 0 = disambiguate, bit 1 = report event types,

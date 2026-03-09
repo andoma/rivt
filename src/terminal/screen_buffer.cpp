@@ -645,6 +645,87 @@ void ScreenBuffer::esc_dispatch(char intermediate, char final_byte) {
     }
 }
 
+static void search_lines(const std::deque<Line> &scrollback,
+                         const std::vector<Line> &screen,
+                         const std::vector<uint32_t> &qcps,
+                         bool case_sensitive, int from, int to,
+                         std::vector<SearchMatch> &out) {
+    auto tolower_cp = [](uint32_t cp) -> uint32_t {
+        return (cp >= 'A' && cp <= 'Z') ? cp + 32 : cp;
+    };
+    int sb_size = (int)scrollback.size();
+    for (int ln = from; ln < to; ln++) {
+        const Line &line = (ln < sb_size) ? scrollback[ln]
+            : ((ln - sb_size < (int)screen.size()) ? screen[ln - sb_size]
+               : *(const Line *)nullptr);
+        int ncols = (int)line.cells.size();
+        int qlen = (int)qcps.size();
+        for (int col = 0; col <= ncols - qlen; col++) {
+            bool match = true;
+            for (int k = 0; k < qlen; k++) {
+                uint32_t cp = line.cells[col + k].codepoint;
+                if (!case_sensitive) cp = tolower_cp(cp);
+                if (cp != qcps[k]) { match = false; break; }
+            }
+            if (match) {
+                out.push_back({ln, col, col + qlen - 1});
+            }
+        }
+    }
+}
+
+static std::vector<uint32_t> build_query_cps(const std::string &query, bool case_sensitive) {
+    auto tolower_cp = [](uint32_t cp) -> uint32_t {
+        return (cp >= 'A' && cp <= 'Z') ? cp + 32 : cp;
+    };
+    std::vector<uint32_t> qcps;
+    for (unsigned char c : query)
+        qcps.push_back(case_sensitive ? (uint32_t)c : tolower_cp(c));
+    return qcps;
+}
+
+void ScreenBuffer::find_matches(const std::string &query, bool case_sensitive) {
+    search.matches.clear();
+    search.current_match = -1;
+    search.searched_up_to = 0;
+    if (query.empty()) return;
+
+    auto qcps = build_query_cps(query, case_sensitive);
+    int total = total_lines();
+    search_lines(scrollback_, screen_, qcps, case_sensitive, 0, total, search.matches);
+    search.searched_up_to = total;
+
+    // Set current match to the one nearest the viewport bottom
+    if (!search.matches.empty()) {
+        int bottom_line = (int)scrollback_.size() + viewport_offset_ + rows_ - 1;
+        search.current_match = 0;
+        for (int i = 0; i < (int)search.matches.size(); i++) {
+            if (search.matches[i].abs_line <= bottom_line)
+                search.current_match = i;
+        }
+    }
+}
+
+void ScreenBuffer::find_matches_incremental() {
+    if (search.query.empty()) return;
+    int total = total_lines();
+    if (total <= search.searched_up_to) return;
+
+    auto qcps = build_query_cps(search.query, search.case_sensitive);
+    // Re-search the active screen area (last rows_ lines) since those
+    // lines mutate in place, plus any new scrollback lines.
+    int screen_start = (int)scrollback_.size();
+    int rescan_from = std::min(search.searched_up_to, screen_start);
+
+    // Remove stale matches from the screen area being rescanned
+    while (!search.matches.empty() && search.matches.back().abs_line >= rescan_from)
+        search.matches.pop_back();
+
+    search_lines(scrollback_, screen_, qcps, search.case_sensitive,
+                 rescan_from, total, search.matches);
+    search.searched_up_to = total;
+}
+
 std::string ScreenBuffer::get_selection_text() const {
     if (!selection.active) return {};
 

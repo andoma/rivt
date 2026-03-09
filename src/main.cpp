@@ -491,15 +491,81 @@ int main(int argc, char *argv[]) {
     bool needs_render = true;
 
     // Platform callbacks
+    auto search_navigate = [&](int delta) {
+        auto &s = screen.search;
+        if (s.matches.empty()) return;
+        s.current_match = (s.current_match + delta + (int)s.matches.size()) % (int)s.matches.size();
+        // Scroll to make current match visible
+        const auto &match = s.matches[s.current_match];
+        int vis_row = match.abs_line - screen.absolute_line(0);
+        if (vis_row < 0 || vis_row >= rows) {
+            int target_offset = -(int)screen.scrollback_count() + match.abs_line - rows / 2;
+            screen.scroll_viewport(target_offset - screen.viewport_offset());
+        }
+        needs_render = true;
+    };
+
+    auto search_update = [&]() {
+        screen.find_matches(screen.search.query, screen.search.case_sensitive);
+        needs_render = true;
+    };
+
     platform->on_key = [&](const KeyEvent &key) {
         if (!key.pressed) return;
 
         bool ctrl  = key.mods & KeyMod::Ctrl;
         bool shift = key.mods & KeyMod::Shift;
 
+        // Search mode input handling
+        if (screen.search.focused) {
+            switch (key.keysym) {
+                case XKB_KEY_Escape:
+                    // Unfocus search bar but keep highlights
+                    screen.search.focused = false;
+                    needs_render = true;
+                    return;
+                case XKB_KEY_Return:
+                    search_navigate(shift ? -1 : 1);
+                    return;
+                case XKB_KEY_BackSpace:
+                    if (!screen.search.query.empty()) {
+                        screen.search.query.pop_back();
+                        search_update();
+                    }
+                    return;
+                default:
+                    if (!key.text.empty() && key.text[0] >= ' ') {
+                        screen.search.query += key.text;
+                        search_update();
+                    }
+                    return;
+            }
+        }
+
+        // Escape when search is active but unfocused: close search
+        if (key.keysym == XKB_KEY_Escape && screen.search.active) {
+            screen.search.clear();
+            needs_render = true;
+            return;
+        }
+
         // Internal shortcuts
         if (ctrl && shift) {
             switch (key.keysym) {
+                case XKB_KEY_F:
+                case XKB_KEY_f:
+                    if (screen.search.active && !screen.search.focused) {
+                        // Re-focus existing search
+                        screen.search.focused = true;
+                    } else {
+                        screen.search.active = true;
+                        screen.search.focused = true;
+                        screen.search.query.clear();
+                        screen.search.matches.clear();
+                        screen.search.current_match = -1;
+                    }
+                    needs_render = true;
+                    return;
                 case XKB_KEY_V:
                 case XKB_KEY_v: {
                     // Paste from clipboard
@@ -776,6 +842,10 @@ int main(int argc, char *argv[]) {
             while ((n = pty.read(buf, sizeof(buf))) > 0) {
                 parser.feed(buf, n);
                 needs_render = true;
+            }
+            // Incrementally update search matches for new output
+            if (screen.search.active && !screen.search.query.empty()) {
+                screen.find_matches_incremental();
             }
             if (n < 0) {
                 loop.request_quit();
