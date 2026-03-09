@@ -31,6 +31,7 @@ add_executable(rivt
     src/core/pane.cpp
     src/core/layout.cpp
     src/core/tab_manager.cpp
+    src/core/window.cpp
     src/platform/platform.cpp
     src/platform/x11_backend.cpp
     src/render/font.cpp

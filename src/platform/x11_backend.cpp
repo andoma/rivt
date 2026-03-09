@@ -326,6 +326,10 @@ void X11Backend::process_events() {
                 handle_configure_event((xcb_configure_notify_event_t *)ev);
                 break;
             case XCB_FOCUS_IN:
+                // Re-sync xkb state from X server to fix modifier
+                // desync (e.g. Ctrl/Shift released while unfocused)
+                if (xkb_state_) xkb_state_unref(xkb_state_);
+                xkb_state_ = xkb_x11_state_new_from_device(xkb_keymap_, conn_, xkb_device_id_);
                 if (on_focus) on_focus(true);
                 break;
             case XCB_FOCUS_OUT:
