@@ -76,3 +76,32 @@ if(CMAKE_BUILD_TYPE STREQUAL "Debug")
     target_compile_options(rivt PRIVATE -Og -ggdb -fsanitize=address)
     target_link_options(rivt PRIVATE -fsanitize=address)
 endif()
+
+# Tests
+enable_testing()
+
+add_executable(test_vt_parser
+    tests/test_vt_parser.cpp
+    src/terminal/vt_parser.cpp
+)
+target_include_directories(test_vt_parser PRIVATE src)
+target_compile_options(test_vt_parser PRIVATE -Wall -Wextra -Wpedantic)
+if(CMAKE_BUILD_TYPE STREQUAL "Debug")
+    target_compile_options(test_vt_parser PRIVATE -Og -ggdb -fsanitize=address)
+    target_link_options(test_vt_parser PRIVATE -fsanitize=address)
+endif()
+add_test(NAME vt_parser COMMAND test_vt_parser)
+
+add_executable(test_screen_buffer
+    tests/test_screen_buffer.cpp
+    src/terminal/vt_parser.cpp
+    src/terminal/screen_buffer.cpp
+    src/core/config.cpp
+)
+target_include_directories(test_screen_buffer PRIVATE src)
+target_compile_options(test_screen_buffer PRIVATE -Wall -Wextra -Wpedantic)
+if(CMAKE_BUILD_TYPE STREQUAL "Debug")
+    target_compile_options(test_screen_buffer PRIVATE -Og -ggdb -fsanitize=address)
+    target_link_options(test_screen_buffer PRIVATE -fsanitize=address)
+endif()
+add_test(NAME screen_buffer COMMAND test_screen_buffer)

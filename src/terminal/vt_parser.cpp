@@ -118,7 +118,8 @@ void VtParser::feed(const uint8_t *data, size_t len) {
         }
 
         // C0 controls are handled in most states (anywhere transitions)
-        if (byte == 0x1B) {
+        // But NOT in OSC/DCS states where ESC is part of ST (ESC \)
+        if (byte == 0x1B && state_ != State::OscString && state_ != State::DcsPassthrough) {
             transition(State::Escape);
             continue;
         }
