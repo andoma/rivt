@@ -36,6 +36,7 @@ private:
     void on_session_changed();
     void on_session_window_changed(int window_id);
     void request_window_names();
+    void reposition_all_panes();
     void on_exit();
 
     Pane *create_tmux_pane(Tab *tab, int tmux_pane_id, int cols, int rows);

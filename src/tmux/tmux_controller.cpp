@@ -132,6 +132,9 @@ void TmuxController::on_window_close(int window_id) {
         window_.mark_closing();
     }
     window_map_.erase(it);
+
+    // Tab bar may have appeared/disappeared — reposition all panes
+    reposition_all_panes();
 }
 
 void TmuxController::on_window_renamed(int window_id, const std::string &name) {
@@ -174,8 +177,8 @@ void TmuxController::on_layout_change(int window_id, const std::string &layout_s
         }
     }
 
-    // Always refresh content_y_ — tab bar may have appeared/disappeared
-    content_y_ = window_.tab_bar_height();
+    // Tab bar may have appeared/disappeared — reposition all existing panes
+    reposition_all_panes();
     dbg("tmux: content_y_=%d (tab_bar_height)", content_y_);
 
     // Determine which panes are new, existing, or gone
@@ -357,6 +360,20 @@ void TmuxController::request_window_names() {
                 }
             }
         });
+}
+
+void TmuxController::reposition_all_panes() {
+    int new_y = window_.tab_bar_height();
+    if (new_y == content_y_) return;
+    dbg("tmux: reposition_all_panes content_y %d -> %d", content_y_, new_y);
+    int delta = new_y - content_y_;
+    content_y_ = new_y;
+    for (auto &[wid, tab] : window_map_) {
+        for (auto &p : tab->panes) {
+            p->rect.y += delta;
+        }
+    }
+    if (tabs_.on_needs_render) tabs_.on_needs_render();
 }
 
 void TmuxController::on_session_window_changed(int window_id) {
