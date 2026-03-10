@@ -166,13 +166,19 @@ private:
     void handle_sgr(const CsiParams &params);
     void set_mode(int mode, bool enable, bool dec_private);
 
-    void push_scrollback(const Line &line);
+    void push_scrollback(Line &&line);
+    void linearize_screen();
+
+    // Ring-buffer access: maps logical row to physical index
+    Line& sline(int row) { return screen_[(screen_top_ + row) % (int)screen_.size()]; }
+    const Line& sline(int row) const { return screen_[(screen_top_ + row) % (int)screen_.size()]; }
 
     int cols_, rows_;
     int scrollback_limit_;
 
     // Grid
-    std::vector<Line> screen_;       // active screen
+    std::vector<Line> screen_;       // active screen (ring buffer, screen_top_ is index of row 0)
+    int screen_top_ = 0;            // ring buffer offset
     std::vector<Line> alt_screen_;   // alternate screen buffer
     bool using_alt_screen_ = false;
 

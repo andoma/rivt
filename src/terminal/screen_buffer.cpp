@@ -12,7 +12,15 @@ ScreenBuffer::ScreenBuffer(int cols, int rows, int scrollback_limit)
     alt_screen_.resize(rows, Line(cols));
 }
 
+void ScreenBuffer::linearize_screen() {
+    if (screen_top_ == 0) return;
+    std::rotate(screen_.begin(), screen_.begin() + screen_top_, screen_.end());
+    screen_top_ = 0;
+}
+
 void ScreenBuffer::resize(int cols, int rows) {
+    linearize_screen();
+
     // Reflow: for now, simple truncate/pad approach
     // TODO: proper reflow of soft-wrapped lines
 
@@ -20,7 +28,7 @@ void ScreenBuffer::resize(int cols, int rows) {
     if (rows < rows_ && cursor_row_ >= rows) {
         int lines_to_push = cursor_row_ - rows + 1;
         for (int i = 0; i < lines_to_push && !screen_.empty(); i++) {
-            push_scrollback(screen_.front());
+            push_scrollback(std::move(screen_.front()));
             screen_.erase(screen_.begin());
         }
         cursor_row_ -= lines_to_push;
@@ -69,7 +77,7 @@ const Line &ScreenBuffer::line(int row) const {
         row = sb_row - (int)scrollback_.size();
     }
     if (row >= 0 && row < (int)screen_.size())
-        return screen_[row];
+        return sline(row);
     static Line empty(0);
     return empty;
 }
@@ -110,9 +118,9 @@ void ScreenBuffer::clear_dirty() {
         line.dirty = false;
 }
 
-void ScreenBuffer::push_scrollback(const Line &line) {
+void ScreenBuffer::push_scrollback(Line &&line) {
     if (!using_alt_screen_) {
-        scrollback_.push_back(line);
+        scrollback_.push_back(std::move(line));
         while ((int)scrollback_.size() > scrollback_limit_)
             scrollback_.pop_front();
     }
@@ -121,18 +129,20 @@ void ScreenBuffer::push_scrollback(const Line &line) {
 void ScreenBuffer::put_char(uint32_t cp) {
     if (cursor_col_ >= cols_) {
         // Auto-wrap
-        screen_[cursor_row_].cells[cols_ - 1].attrs |= ATTR_WRAP;
-        screen_[cursor_row_].wrapped = true;
+        Line &wl = sline(cursor_row_);
+        wl.cells[cols_ - 1].attrs |= ATTR_WRAP;
+        wl.wrapped = true;
         new_line();
         cursor_col_ = 0;
     }
 
-    Cell &c = screen_[cursor_row_].cells[cursor_col_];
+    Line &cl = sline(cursor_row_);
+    Cell &c = cl.cells[cursor_col_];
     c.codepoint = cp;
     c.fg = cur_fg_;
     c.bg = bg_;
     c.attrs = cur_attrs_;
-    screen_[cursor_row_].dirty = true;
+    cl.dirty = true;
     cursor_col_++;
 }
 
@@ -148,30 +158,43 @@ void ScreenBuffer::scroll_up(int top, int bottom, int count) {
     count = std::min(count, bottom - top + 1);
     for (int i = 0; i < count; i++) {
         if (top == 0 && !using_alt_screen_) {
-            push_scrollback(screen_[top]);
-
-            // Auto-scroll viewport if at bottom
+            push_scrollback(std::move(sline(0)));
             if (viewport_offset_ < 0)
                 viewport_offset_--;
         }
-        for (int r = top; r < bottom; r++) {
-            screen_[r] = std::move(screen_[r + 1]);
-            screen_[r].dirty = true;
+        if (top == 0 && bottom == rows_ - 1) {
+            // Fast path: rotate ring buffer instead of shifting all lines
+            sline(0) = Line(cols_);
+            screen_top_ = (screen_top_ + 1) % (int)screen_.size();
+            sline(rows_ - 1).dirty = true;
+        } else {
+            // Scroll region: shift lines within region
+            for (int r = top; r < bottom; r++) {
+                sline(r) = std::move(sline(r + 1));
+                sline(r).dirty = true;
+            }
+            sline(bottom) = Line(cols_);
+            sline(bottom).dirty = true;
         }
-        screen_[bottom] = Line(cols_);
-        screen_[bottom].dirty = true;
     }
 }
 
 void ScreenBuffer::scroll_down(int top, int bottom, int count) {
     count = std::min(count, bottom - top + 1);
     for (int i = 0; i < count; i++) {
-        for (int r = bottom; r > top; r--) {
-            screen_[r] = std::move(screen_[r - 1]);
-            screen_[r].dirty = true;
+        if (top == 0 && bottom == rows_ - 1) {
+            // Fast path: rotate ring buffer backwards
+            screen_top_ = (screen_top_ + (int)screen_.size() - 1) % (int)screen_.size();
+            sline(0) = Line(cols_);
+            sline(0).dirty = true;
+        } else {
+            for (int r = bottom; r > top; r--) {
+                sline(r) = std::move(sline(r - 1));
+                sline(r).dirty = true;
+            }
+            sline(top) = Line(cols_);
+            sline(top).dirty = true;
         }
-        screen_[top] = Line(cols_);
-        screen_[top].dirty = true;
     }
 }
 
@@ -179,11 +202,12 @@ void ScreenBuffer::erase_cells(int row, int start_col, int end_col) {
     if (row < 0 || row >= rows_) return;
     start_col = std::max(start_col, 0);
     end_col = std::min(end_col, cols_ - 1);
+    Line &l = sline(row);
     for (int c = start_col; c <= end_col; c++) {
-        screen_[row].cells[c].reset();
-        screen_[row].cells[c].bg = bg_;
+        l.cells[c].reset();
+        l.cells[c].bg = bg_;
     }
-    screen_[row].dirty = true;
+    l.dirty = true;
 }
 
 void ScreenBuffer::erase_line(int row) {
@@ -215,7 +239,7 @@ void ScreenBuffer::erase_display(int mode) {
 }
 
 void ScreenBuffer::insert_chars(int count) {
-    auto &line = screen_[cursor_row_];
+    auto &line = sline(cursor_row_);
     for (int i = cols_ - 1; i >= cursor_col_ + count; i--) {
         line.cells[i] = line.cells[i - count];
     }
@@ -227,7 +251,7 @@ void ScreenBuffer::insert_chars(int count) {
 }
 
 void ScreenBuffer::delete_chars(int count) {
-    auto &line = screen_[cursor_row_];
+    auto &line = sline(cursor_row_);
     for (int i = cursor_col_; i < cols_ - count; i++) {
         line.cells[i] = line.cells[i + count];
     }
@@ -425,10 +449,12 @@ void ScreenBuffer::set_mode(int mode, bool enable, bool dec_private) {
         case 1049:
             if (enable) {
                 // Save cursor, switch to alt screen, clear
+                linearize_screen();
                 saved_cursor_ = { cursor_row_, cursor_col_, cur_fg_, bg_, cur_attrs_ };
                 if (!using_alt_screen_) {
                     std::swap(screen_, alt_screen_);
                     using_alt_screen_ = true;
+                    screen_top_ = 0;
                 }
                 for (auto &line : screen_) {
                     line = Line(cols_);
@@ -437,8 +463,10 @@ void ScreenBuffer::set_mode(int mode, bool enable, bool dec_private) {
             } else {
                 // Restore from alt screen
                 if (using_alt_screen_) {
+                    linearize_screen();
                     std::swap(screen_, alt_screen_);
                     using_alt_screen_ = false;
+                    screen_top_ = 0;
                 }
                 cursor_row_ = saved_cursor_.row;
                 cursor_col_ = saved_cursor_.col;
@@ -647,6 +675,7 @@ void ScreenBuffer::esc_dispatch(char intermediate, char final_byte) {
 
 static void search_lines(const std::deque<Line> &scrollback,
                          const std::vector<Line> &screen,
+                         int screen_top,
                          const std::vector<uint32_t> &qcps,
                          bool case_sensitive, int from, int to,
                          std::vector<SearchMatch> &out) {
@@ -654,9 +683,10 @@ static void search_lines(const std::deque<Line> &scrollback,
         return (cp >= 'A' && cp <= 'Z') ? cp + 32 : cp;
     };
     int sb_size = (int)scrollback.size();
+    int screen_size = (int)screen.size();
     for (int ln = from; ln < to; ln++) {
         const Line &line = (ln < sb_size) ? scrollback[ln]
-            : ((ln - sb_size < (int)screen.size()) ? screen[ln - sb_size]
+            : ((ln - sb_size < screen_size) ? screen[(screen_top + ln - sb_size) % screen_size]
                : *(const Line *)nullptr);
         int ncols = (int)line.cells.size();
         int qlen = (int)qcps.size();
@@ -692,7 +722,7 @@ void ScreenBuffer::find_matches(const std::string &query, bool case_sensitive) {
 
     auto qcps = build_query_cps(query, case_sensitive);
     int total = total_lines();
-    search_lines(scrollback_, screen_, qcps, case_sensitive, 0, total, search.matches);
+    search_lines(scrollback_, screen_, screen_top_, qcps, case_sensitive, 0, total, search.matches);
     search.searched_up_to = total;
 
     // Set current match to the one nearest the viewport bottom
@@ -721,7 +751,7 @@ void ScreenBuffer::find_matches_incremental() {
     while (!search.matches.empty() && search.matches.back().abs_line >= rescan_from)
         search.matches.pop_back();
 
-    search_lines(scrollback_, screen_, qcps, search.case_sensitive,
+    search_lines(scrollback_, screen_, screen_top_, qcps, search.case_sensitive,
                  rescan_from, total, search.matches);
     search.searched_up_to = total;
 }
@@ -736,7 +766,7 @@ std::string ScreenBuffer::get_selection_text() const {
         int sb_size = (int)scrollback_.size();
         if (abs < sb_size) return scrollback_[abs];
         int row = abs - sb_size;
-        if (row >= 0 && row < (int)screen_.size()) return screen_[row];
+        if (row >= 0 && row < (int)screen_.size()) return sline(row);
         static Line empty(0);
         return empty;
     };

@@ -135,6 +135,7 @@ bool X11Backend::create_gl_context() {
     if (egl_surface_ == EGL_NO_SURFACE) return false;
 
     eglMakeCurrent(egl_display_, egl_surface_, egl_surface_, egl_context_);
+    eglSwapInterval(egl_display_, 1);
     return true;
 }
 

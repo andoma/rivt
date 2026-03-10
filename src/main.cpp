@@ -94,6 +94,9 @@ int main(int argc, char *argv[]) {
         for (auto &w : windows) {
             if (w->needs_render()) { any_render = true; break; }
         }
+
+        // Drain pending I/O without blocking when a render is pending.
+        // Otherwise sleep until an event arrives (up to 16ms for cursor blink).
         loop.poll(any_render ? 0 : 16);
 
         // Clean up closing windows (deferred from on_close callback)
@@ -117,6 +120,8 @@ int main(int argc, char *argv[]) {
 
         if (windows.empty()) { loop.request_quit(); break; }
 
+        // render_if_needed() calls swap_buffers() which blocks until
+        // vsync, naturally pacing the loop to the display refresh rate.
         for (auto &w : windows) w->render_if_needed();
     }
 

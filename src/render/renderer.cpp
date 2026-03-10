@@ -184,11 +184,25 @@ void Renderer::build_pane_vertices(const ScreenBuffer &buffer, const Config &con
     float ox = (float)offset_x;
     float oy = (float)offset_y;
 
+    bool has_selection = buffer.selection.active;
+    bool has_search = buffer.search.active && !buffer.search.matches.empty();
+    float sel_bg_r = 0, sel_bg_g = 0, sel_bg_b = 0;
+    if (has_selection) {
+        sel_bg_r = ((config.selection_color >> 16) & 0xFF) / 255.0f;
+        sel_bg_g = ((config.selection_color >> 8) & 0xFF) / 255.0f;
+        sel_bg_b = (config.selection_color & 0xFF) / 255.0f;
+    }
+
+    // Pre-reserve to avoid reallocation (estimate ~12 vertices per cell)
+    vertices_.reserve(vertices_.size() + buffer.rows() * buffer.cols() * 12);
+
     for (int row = 0; row < buffer.rows(); row++) {
         const Line &line = buffer.line(row);
         float y_top = oy + row * m.cell_height;
 
         if (y_top >= oy + clip_h) break;
+
+        int abs_line = buffer.absolute_line(row);
 
         for (int col = 0; col < buffer.cols() && col < (int)line.cells.size(); col++) {
             const Cell &cell = line.cells[col];
@@ -212,16 +226,15 @@ void Renderer::build_pane_vertices(const ScreenBuffer &buffer, const Config &con
                 resolve_color(cell.bg, config, cell_bg_r, cell_bg_g, cell_bg_b);
             }
 
-            int abs_line = buffer.absolute_line(row);
-            bool selected = buffer.selection.contains(abs_line, col);
+            bool selected = has_selection && buffer.selection.contains(abs_line, col);
             if (selected) {
-                cell_bg_r = ((config.selection_color >> 16) & 0xFF) / 255.0f;
-                cell_bg_g = ((config.selection_color >> 8) & 0xFF) / 255.0f;
-                cell_bg_b = (config.selection_color & 0xFF) / 255.0f;
+                cell_bg_r = sel_bg_r;
+                cell_bg_g = sel_bg_g;
+                cell_bg_b = sel_bg_b;
                 fg_r = 1.0f; fg_g = 1.0f; fg_b = 1.0f;
             }
 
-            int mt = buffer.search.match_type(abs_line, col);
+            int mt = has_search ? buffer.search.match_type(abs_line, col) : 0;
             if (mt == 2) {
                 cell_bg_r = 0.9f; cell_bg_g = 0.6f; cell_bg_b = 0.1f;
                 fg_r = 0.0f; fg_g = 0.0f; fg_b = 0.0f;
