@@ -38,7 +38,10 @@ void TmuxController::initialize(int cols, int rows, int cell_w, int cell_h,
 
     // Send initial client size so tmux knows our dimensions and sends
     // layout-change notifications for all windows in the session.
-    if (cols > 0 && rows > 0) {
+    // In PTY mode, defer this — %session-changed will trigger list-windows.
+    // Sending commands before tmux is ready risks them reaching the shell
+    // if tmux exits immediately (e.g., no session to attach to).
+    if (cols > 0 && rows > 0 && !client_.is_pty_mode()) {
         client_.refresh_client_size(cols, rows);
     }
 }
@@ -100,6 +103,7 @@ void TmuxController::on_window_add(int window_id) {
                 std::string layout = line.substr(sp + 1);
                 dbg("tmux: window-add: @%d layout='%s'", wid, layout.c_str());
                 on_layout_change(wid, layout, true);
+                request_window_names();
                 return;
             }
             dbg("tmux: window-add: @%d not found in list-windows", window_id);
@@ -284,7 +288,6 @@ void TmuxController::on_session_changed() {
         "list-windows -F '#{window_id} #{window_layout}'",
         [this](const std::string &output) {
             dbg("tmux: list-windows response (%zu bytes)", output.size());
-            // Each line: "ID LAYOUT_STRING\n"
             size_t pos = 0;
             while (pos < output.size()) {
                 size_t nl = output.find('\n', pos);
@@ -293,7 +296,6 @@ void TmuxController::on_session_changed() {
                 pos = nl + 1;
                 if (line.empty()) continue;
 
-                // Parse "@ID LAYOUT"
                 size_t sp = line.find(' ');
                 if (sp == std::string::npos) continue;
                 std::string id_str = line.substr(0, sp);
@@ -303,6 +305,56 @@ void TmuxController::on_session_changed() {
                 std::string layout = line.substr(sp + 1);
                 dbg("tmux: list-windows: @%d layout='%s'", window_id, layout.c_str());
                 on_layout_change(window_id, layout);
+            }
+            // After layouts are set up, fetch window names
+            request_window_names();
+        });
+}
+
+void TmuxController::request_window_names() {
+    client_.send_command(
+        "list-windows -F '#{window_id} #{window_active} #{window_name} #{pane_title}'",
+        [this](const std::string &output) {
+            size_t pos = 0;
+            while (pos < output.size()) {
+                size_t nl = output.find('\n', pos);
+                if (nl == std::string::npos) nl = output.size();
+                std::string line = output.substr(pos, nl - pos);
+                pos = nl + 1;
+                if (line.empty()) continue;
+
+                // Parse: @ID ACTIVE WINDOW_NAME PANE_TITLE
+                size_t sp1 = line.find(' ');
+                if (sp1 == std::string::npos) continue;
+                std::string id_str = line.substr(0, sp1);
+                if (!id_str.empty() && id_str[0] == '@') id_str = id_str.substr(1);
+                if (id_str.empty()) continue;
+                int window_id = std::stoi(id_str);
+
+                size_t sp2 = line.find(' ', sp1 + 1);
+                if (sp2 == std::string::npos) continue;
+                bool active = line.substr(sp1 + 1, sp2 - sp1 - 1) == "1";
+
+                size_t sp3 = line.find(' ', sp2 + 1);
+                std::string window_name;
+                std::string pane_title;
+                if (sp3 == std::string::npos) {
+                    window_name = line.substr(sp2 + 1);
+                } else {
+                    window_name = line.substr(sp2 + 1, sp3 - sp2 - 1);
+                    pane_title = line.substr(sp3 + 1);
+                }
+
+                dbg("tmux: window @%d name='%s' pane_title='%s' active=%d",
+                    window_id, window_name.c_str(), pane_title.c_str(), active);
+
+                // Tab title: just the short window name
+                on_window_renamed(window_id, window_name);
+
+                // X11 window title: full pane title for active window
+                if (active && !pane_title.empty()) {
+                    window_.platform()->set_title("rivt [tmux] " + pane_title);
+                }
             }
         });
 }

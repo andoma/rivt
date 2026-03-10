@@ -175,13 +175,14 @@ void TmuxClient::parse_line(const std::string &line) {
         return;
     }
 
-    if (line.substr(0, 15) == "%window-renamed") {
-        // %window-renamed @ID name
-        size_t p = 16;
-        if (p >= line.size() || line[p] != '@') return;
-        size_t id_end = line.find(' ', p + 1);
+    if (line.substr(0, 15) == "%window-renamed" ||
+        line.substr(0, 24) == "%unlinked-window-renamed") {
+        // %window-renamed @ID name  or  %unlinked-window-renamed @ID name
+        size_t at = line.find('@');
+        if (at == std::string::npos) return;
+        size_t id_end = line.find(' ', at + 1);
         if (id_end == std::string::npos) return;
-        int window_id = std::stoi(line.substr(p + 1, id_end - p - 1));
+        int window_id = std::stoi(line.substr(at + 1, id_end - at - 1));
         std::string name = line.substr(id_end + 1);
         if (on_window_renamed) on_window_renamed(window_id, name);
         return;

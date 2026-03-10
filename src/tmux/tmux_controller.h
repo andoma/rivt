@@ -35,6 +35,7 @@ private:
     void on_layout_change(int window_id, const std::string &layout_str, bool is_active = false);
     void on_session_changed();
     void on_session_window_changed(int window_id);
+    void request_window_names();
     void on_exit();
 
     Pane *create_tmux_pane(Tab *tab, int tmux_pane_id, int cols, int rows);
