@@ -103,7 +103,10 @@ void Pane::feed_data(const char *buf, size_t len) {
 
 void Pane::resize(int cols, int rows) {
     screen_.resize(cols, rows);
-    if (pty_fd_registered_ >= 0) pty_.resize(cols, rows);
+    // Don't resize the PTY if this pane is a tmux gateway — the tmux
+    // window controls the client size via refresh-client -C, and a
+    // TIOCSWINSZ here would cause tmux to fight over the dimensions.
+    if (pty_fd_registered_ >= 0 && !pty_data_override_) pty_.resize(cols, rows);
 }
 
 void Pane::setup_callbacks(Platform *platform, const Config &config) {

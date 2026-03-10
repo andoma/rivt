@@ -36,6 +36,13 @@ void TmuxController::initialize(int cols, int rows, int cell_w, int cell_h,
     dbg("tmux: initialize cell=%dx%d content_origin=%d,%d cols=%d rows=%d",
         cell_w, cell_h, content_x, content_y, cols, rows);
 
+    // In PTY mode, the tmux window (B) should keep its own size and tell
+    // tmux to adapt — never resize to match the session layout.  Mark the
+    // initial resize as done so on_layout_change won't call resize_to_cells.
+    if (client_.is_pty_mode()) {
+        initial_resize_done_ = true;
+    }
+
     // Send initial client size so tmux knows our dimensions and sends
     // layout-change notifications for all windows in the session.
     // In PTY mode, defer this — %session-changed will trigger list-windows.
@@ -287,6 +294,20 @@ Pane *TmuxController::create_tmux_pane(Tab *tab, int tmux_pane_id, int cols, int
 
 void TmuxController::on_session_changed() {
     dbg("tmux: session-changed, requesting window list");
+
+    // Tell tmux our actual window size so it adjusts the session layout.
+    // This is critical in PTY mode where we skip the initial refresh-client
+    // in initialize() to avoid commands leaking to the shell.
+    int w, h;
+    window_.platform()->get_size(w, h);
+    int bar_h = window_.tab_bar_height();
+    if (cell_w_ > 0 && cell_h_ > 0) {
+        int cols = w / cell_w_;
+        int rows = (h - bar_h) / cell_h_;
+        dbg("tmux: session-changed sending refresh-client %dx%d", cols, rows);
+        client_.refresh_client_size(cols, rows);
+    }
+
     client_.send_command(
         "list-windows -F '#{window_id} #{window_layout}'",
         [this](const std::string &output) {

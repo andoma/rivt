@@ -170,8 +170,8 @@ void Window::resize_to_cells(int cols, int rows) {
     int bar_h = m.cell_height + 8;
     win_w_ = cols * m.cell_width;
     win_h_ = rows * m.cell_height + bar_h;
-    dbg("window: resize_to_cells %dx%d -> %dx%d px (bar_h=%d cell=%dx%d)",
-        cols, rows, win_w_, win_h_, bar_h, m.cell_width, m.cell_height);
+    dbg("window(%p): resize_to_cells %dx%d -> %dx%d px (bar_h=%d cell=%dx%d)",
+        (void*)this, cols, rows, win_w_, win_h_, bar_h, m.cell_width, m.cell_height);
     platform_->resize_window(win_w_, win_h_);
     renderer_.set_viewport(win_w_, win_h_);
     recompute();
@@ -307,7 +307,10 @@ void Window::stop_tmux_pty_mode() {
 }
 
 void Window::handle_resize(int w, int h) {
-    dbg("window: handle_resize %dx%d", w, h);
+    dbg("window(%p): handle_resize %dx%d tmux=%d gateway=%p",
+        (void*)this, w, h,
+        tmux_controller_ && tmux_controller_->is_active(),
+        (void*)tmux_gateway_pane_);
     win_w_ = w;
     win_h_ = h;
     renderer_.set_viewport(w, h);
@@ -318,6 +321,7 @@ void Window::handle_resize(int w, int h) {
         int bar_h = tab_bar_height();
         int cols = m.cell_width > 0 ? w / m.cell_width : 80;
         int rows = m.cell_height > 0 ? (h - bar_h) / m.cell_height : 24;
+        dbg("window(%p): tmux resize -> %dx%d cells (bar_h=%d)", (void*)this, cols, rows, bar_h);
         tmux_controller_->handle_resize(cols, rows, m.cell_width, m.cell_height, 0, bar_h);
     }
 

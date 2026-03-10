@@ -160,6 +160,11 @@ void Renderer::clear(const Config &/*config*/) {
 }
 
 void Renderer::begin_frame(const Config &config) {
+    // Re-apply glViewport every frame.  set_viewport() is called from
+    // handle_resize() which may fire while a *different* window's GL context
+    // is current, sending the glViewport to the wrong context.  Doing it
+    // here, after make_current(), guarantees the correct context.
+    glViewport(0, 0, viewport_w_, viewport_h_);
     clear(config);
     vertices_.clear();
 }
