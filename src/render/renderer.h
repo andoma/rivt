@@ -42,6 +42,10 @@ public:
     // Hit-test tab bar, returns tab index or -1
     int tab_hit_test(const TabManager &tabs, int x);
 
+    // Render inline images for a pane
+    void render_images(ScreenBuffer &buffer, int offset_x, int offset_y,
+                       int clip_w, int clip_h);
+
     // Flush all accumulated vertices (call after building all quads)
     void flush();
 
@@ -80,6 +84,7 @@ private:
 
     unsigned int bg_shader_ = 0;
     unsigned int glyph_shader_ = 0;
+    unsigned int image_shader_ = 0;
     unsigned int vao_ = 0;
     unsigned int vbo_ = 0;
 

@@ -1,6 +1,7 @@
 #pragma once
 #include "core/types.h"
 #include "terminal/vt_parser.h"
+#include "terminal/image_store.h"
 #include <deque>
 #include <string>
 #include <vector>
@@ -138,8 +139,8 @@ public:
     // Callbacks
     std::function<void(const std::string &)> on_title_change;
     std::function<void()> on_bell;
-    std::function<void(const std::string &sel, const std::string &base64)> on_osc52_write;
-    std::function<void(const std::string &sel)> on_osc52_read;
+    std::function<void(const std::string &sel, const std::string &base64, const std::string &mime_type)> on_osc52_write;
+    std::function<void(const std::string &sel, const std::string &mime_type)> on_osc52_read;
     std::function<void(const std::string &)> on_cwd_change;
     std::function<void(const std::string &)> on_write_back;  // send response to PTY
 
@@ -149,6 +150,7 @@ public:
     void csi_dispatch(const CsiParams &params, char intermediate, char final_byte) override;
     void osc_dispatch(int command, const std::string &payload) override;
     void esc_dispatch(char intermediate, char final_byte) override;
+    void apc_dispatch(const std::string &payload) override;
 
 private:
     void put_char(uint32_t cp);
@@ -220,6 +222,10 @@ private:
 
     // Kitty keyboard protocol — stack of flag sets
     std::vector<int> kitty_kbd_stack_;
+
+public:
+    // Image storage for Kitty graphics protocol
+    ImageStore images;
 };
 
 } // namespace rivt

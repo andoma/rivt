@@ -31,6 +31,8 @@ public:
 
     void set_clipboard(const std::string &text, bool primary) override;
     std::string get_clipboard(bool primary) override;
+    void set_clipboard_data(const std::string &data, const std::string &mime_type, bool primary) override;
+    std::string get_clipboard_data(const std::string &mime_type, bool primary) override;
 
     float get_dpi_scale() override;
 
@@ -66,8 +68,17 @@ private:
     xcb_atom_t atom_rivt_sel_ = 0;
     xcb_atom_t atom_wm_protocols_ = 0;
     xcb_atom_t atom_wm_delete_ = 0;
+    xcb_atom_t atom_image_png_ = 0;
     std::string clipboard_text_;
     std::string primary_text_;
+
+    // Typed clipboard storage
+    struct ClipboardEntry {
+        std::string data;
+        std::string mime_type;
+    };
+    ClipboardEntry clipboard_typed_;
+    ClipboardEntry primary_typed_;
 
     xcb_atom_t intern_atom(const char *name);
 };

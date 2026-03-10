@@ -1,4 +1,5 @@
 #include "terminal/screen_buffer.h"
+#include "terminal/kitty_graphics.h"
 #include <algorithm>
 #include <cstring>
 #include <cstdio>
@@ -121,8 +122,10 @@ void ScreenBuffer::clear_dirty() {
 void ScreenBuffer::push_scrollback(Line &&line) {
     if (!using_alt_screen_) {
         scrollback_.push_back(std::move(line));
-        while ((int)scrollback_.size() > scrollback_limit_)
+        while ((int)scrollback_.size() > scrollback_limit_) {
             scrollback_.pop_front();
+            images.gc_placements((int)scrollback_.size());
+        }
     }
 }
 
@@ -232,6 +235,7 @@ void ScreenBuffer::erase_display(int mode) {
             break;
         case 3: // All + scrollback
             scrollback_.clear();
+            images.remove_all();
             for (int r = 0; r < rows_; r++)
                 erase_line(r);
             break;
@@ -616,20 +620,111 @@ void ScreenBuffer::osc_dispatch(int command, const std::string &payload) {
             if (on_cwd_change) on_cwd_change(payload);
             break;
         case 52: { // Clipboard: payload is "Pc;Pd" where Pc=selection, Pd=base64 or ?
+            // Kitty extended: "Pc;key=val;...base64data" with metadata before payload
             auto semi = payload.find(';');
             if (semi != std::string::npos) {
                 std::string sel = payload.substr(0, semi);
                 std::string data = payload.substr(semi + 1);
+
+                // Parse optional metadata key=value pairs (Kitty clipboard protocol)
+                std::string mime_type;
+                while (!data.empty()) {
+                    auto eq = data.find('=');
+                    auto sc = data.find(';');
+                    if (eq != std::string::npos && (sc == std::string::npos || eq < sc)) {
+                        // Found a key=value pair before any semicolon
+                        std::string segment = data.substr(0, sc != std::string::npos ? sc : data.size());
+                        std::string key = segment.substr(0, eq);
+                        std::string val = segment.substr(eq + 1);
+                        if (key == "type") mime_type = val;
+                        if (sc != std::string::npos)
+                            data = data.substr(sc + 1);
+                        else
+                            data.clear();
+                    } else {
+                        break;  // No more metadata, rest is payload
+                    }
+                }
+
                 if (data == "?") {
-                    if (on_osc52_read) on_osc52_read(sel);
+                    if (on_osc52_read) on_osc52_read(sel, mime_type);
                 } else {
-                    if (on_osc52_write) on_osc52_write(sel, data);
+                    if (on_osc52_write) on_osc52_write(sel, data, mime_type);
                 }
             }
             break;
         }
         case 133: // Shell integration / semantic zones
             // TODO: track prompt zones
+            break;
+    }
+}
+
+void ScreenBuffer::apc_dispatch(const std::string &payload) {
+    if (payload.empty() || payload[0] != 'G') return;
+
+    auto cmd = parse_kitty_graphics(payload.substr(1));
+
+    auto send_response = [&](const std::string &msg, bool ok) {
+        if (cmd.quiet >= 2) return;
+        if (cmd.quiet >= 1 && ok) return;
+        if (!on_write_back) return;
+        std::string resp = "\033_G";
+        if (cmd.image_id) resp += "i=" + std::to_string(cmd.image_id) + ",";
+        if (cmd.placement_id) resp += "p=" + std::to_string(cmd.placement_id) + ",";
+        resp += ok ? "OK" : msg;
+        resp += "\033\\";
+        on_write_back(resp);
+    };
+
+    switch (cmd.action) {
+        case 't':  // transmit only
+        case 'T': { // transmit + display
+            if (cmd.more) {
+                images.begin_transfer(cmd);
+                images.append_data(cmd.payload);
+            } else {
+                if (images.has_pending_transfer()) {
+                    images.append_data(cmd.payload);
+                    auto finished_cmd = images.finish_transfer();
+                    finished_cmd.action = cmd.action;
+                    if (finished_cmd.action == 'T') {
+                        int abs = absolute_line(cursor_row_);
+                        images.place_image(finished_cmd.image_id, finished_cmd.placement_id,
+                                          abs, cursor_col_, finished_cmd.columns, finished_cmd.rows,
+                                          finished_cmd.z_index);
+                    }
+                    send_response("OK", true);
+                } else {
+                    images.store_image(cmd);
+                    if (cmd.action == 'T') {
+                        int abs = absolute_line(cursor_row_);
+                        images.place_image(cmd.image_id, cmd.placement_id,
+                                          abs, cursor_col_, cmd.columns, cmd.rows, cmd.z_index);
+                    }
+                    send_response("OK", true);
+                }
+            }
+            break;
+        }
+        case 'p': { // place
+            int abs = absolute_line(cursor_row_);
+            images.place_image(cmd.image_id, cmd.placement_id,
+                              abs, cursor_col_, cmd.columns, cmd.rows, cmd.z_index);
+            send_response("OK", true);
+            break;
+        }
+        case 'd': { // delete
+            images.delete_images(cmd);
+            send_response("OK", true);
+            break;
+        }
+        case 'q': { // query
+            // Just respond OK to queries about supported formats
+            send_response("OK", true);
+            break;
+        }
+        default:
             break;
     }
 }

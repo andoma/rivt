@@ -115,23 +115,34 @@ void Pane::setup_callbacks(Platform *platform, const Config &config) {
         if (on_title_change) on_title_change(this, title);
     };
 
-    screen_.on_osc52_write = [platform, &config](const std::string &sel, const std::string &base64) {
+    screen_.on_osc52_write = [platform, &config](const std::string &sel, const std::string &base64, const std::string &mime_type) {
         if (!config.osc52_write) return;
-        std::string text = base64_decode(base64);
+        std::string data = base64_decode(base64);
         bool primary = (sel.find('p') != std::string::npos);
-        platform->set_clipboard(text, primary);
-        if (!primary) platform->set_clipboard(text, false);
+        if (!mime_type.empty() && mime_type != "text/plain") {
+            platform->set_clipboard_data(data, mime_type, primary);
+        } else {
+            platform->set_clipboard(data, primary);
+            if (!primary) platform->set_clipboard(data, false);
+        }
     };
 
     screen_.on_write_back = [this](const std::string &data) {
         write(data);
     };
 
-    screen_.on_osc52_read = [this, platform, &config](const std::string &sel) {
+    screen_.on_osc52_read = [this, platform, &config](const std::string &sel, const std::string &mime_type) {
         if (!config.osc52_read) return;
         bool primary = (sel.find('p') != std::string::npos);
-        std::string text = platform->get_clipboard(primary);
-        std::string response = "\033]52;" + sel + ";" + base64_encode(text) + "\033\\";
+        std::string data;
+        std::string response;
+        if (!mime_type.empty() && mime_type != "text/plain") {
+            data = platform->get_clipboard_data(mime_type, primary);
+            response = "\033]52;" + sel + ";type=" + mime_type + ";" + base64_encode(data) + "\033\\";
+        } else {
+            data = platform->get_clipboard(primary);
+            response = "\033]52;" + sel + ";" + base64_encode(data) + "\033\\";
+        }
         write(response);
     };
 }

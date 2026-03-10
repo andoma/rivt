@@ -37,6 +37,7 @@ public:
     virtual void dcs_start() {}
     virtual void dcs_put(uint8_t byte) { (void)byte; }
     virtual void dcs_end() {}
+    virtual void apc_dispatch(const std::string &payload) { (void)payload; }
 };
 
 class VtParser {
@@ -61,6 +62,7 @@ private:
         DcsEntry,
         DcsPassthrough,
         DcsIgnore,
+        ApcString,
         Utf8,
     };
 
@@ -89,6 +91,9 @@ private:
 
     // OSC accumulation
     std::string osc_string_;
+
+    // APC accumulation
+    std::string apc_string_;
 
     // DCS
     std::string dcs_param_str_;

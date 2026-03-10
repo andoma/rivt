@@ -21,6 +21,9 @@ void VtParser::transition(State new_state) {
         case State::DcsEntry:
             dcs_param_str_.clear();
             break;
+        case State::ApcString:
+            apc_string_.clear();
+            break;
         default:
             break;
     }
@@ -118,14 +121,14 @@ void VtParser::feed(const uint8_t *data, size_t len) {
         }
 
         // C0 controls are handled in most states (anywhere transitions)
-        // But NOT in OSC/DCS states where ESC is part of ST (ESC \)
-        if (byte == 0x1B && state_ != State::OscString && state_ != State::DcsPassthrough) {
+        // But NOT in OSC/DCS/APC states where ESC is part of ST (ESC \)
+        if (byte == 0x1B && state_ != State::OscString && state_ != State::DcsPassthrough && state_ != State::ApcString) {
             transition(State::Escape);
             continue;
         }
 
         // In Ground or when applicable, handle C0 controls
-        if (byte < 0x20 && byte != 0x1B && state_ != State::OscString && state_ != State::DcsPassthrough) {
+        if (byte < 0x20 && byte != 0x1B && state_ != State::OscString && state_ != State::DcsPassthrough && state_ != State::ApcString) {
             if (byte == 0x07 && state_ == State::OscString) {
                 // BEL terminates OSC (handled below)
             } else if (byte < 0x20) {
@@ -162,6 +165,8 @@ void VtParser::feed(const uint8_t *data, size_t len) {
                 } else if (byte == 'P') {
                     transition(State::DcsEntry);
                     handler_.dcs_start();
+                } else if (byte == '_') {
+                    transition(State::ApcString);
                 } else if (byte >= 0x20 && byte <= 0x2F) {
                     esc_intermediate_ = byte;
                     state_ = State::EscapeIntermediate;
@@ -259,8 +264,23 @@ void VtParser::feed(const uint8_t *data, size_t len) {
                         action_osc_dispatch();
                         state_ = State::Ground;
                     }
-                } else {
+                } else if (osc_string_.size() < 16 * 1024 * 1024) {
                     osc_string_ += (char)byte;
+                }
+                break;
+
+            case State::ApcString:
+                if (byte == 0x07) {
+                    handler_.apc_dispatch(apc_string_);
+                    state_ = State::Ground;
+                } else if (byte == 0x1B) {
+                    if (i + 1 < len && data[i + 1] == '\\') {
+                        i++;
+                        handler_.apc_dispatch(apc_string_);
+                        state_ = State::Ground;
+                    }
+                } else if (apc_string_.size() < 32 * 1024 * 1024) {
+                    apc_string_ += (char)byte;
                 }
                 break;
 

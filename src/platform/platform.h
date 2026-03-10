@@ -34,6 +34,18 @@ public:
     virtual void set_clipboard(const std::string &text, bool primary = false) = 0;
     virtual std::string get_clipboard(bool primary = false) = 0;
 
+    // Typed clipboard (for Kitty clipboard protocol)
+    virtual void set_clipboard_data(const std::string &data, const std::string &mime_type, bool primary = false) {
+        // Default: fall back to text clipboard for text types
+        if (mime_type.empty() || mime_type == "text/plain")
+            set_clipboard(data, primary);
+    }
+    virtual std::string get_clipboard_data(const std::string &mime_type, bool primary = false) {
+        if (mime_type.empty() || mime_type == "text/plain")
+            return get_clipboard(primary);
+        return {};
+    }
+
     // Display info
     virtual float get_dpi_scale() = 0;
 

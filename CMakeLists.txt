@@ -39,6 +39,8 @@ add_executable(rivt
     src/render/renderer.cpp
     src/terminal/vt_parser.cpp
     src/terminal/screen_buffer.cpp
+    src/terminal/kitty_graphics.cpp
+    src/terminal/image_store.cpp
     src/pty/pty.cpp
     src/tmux/tmux_client.cpp
     src/tmux/tmux_controller.cpp
@@ -46,6 +48,7 @@ add_executable(rivt
 
 target_include_directories(rivt PRIVATE
     src
+    src/third_party
     ${FREETYPE_INCLUDE_DIRS}
     ${HARFBUZZ_INCLUDE_DIRS}
     ${FONTCONFIG_INCLUDE_DIRS}
@@ -85,6 +88,11 @@ if(CMAKE_BUILD_TYPE STREQUAL "Debug")
     target_link_options(rivt PRIVATE -fsanitize=address)
 endif()
 
+# Profile-friendly build: optimized but with debug info and frame pointers
+if(CMAKE_BUILD_TYPE STREQUAL "RelWithDebInfo")
+    target_compile_options(rivt PRIVATE -O2 -g -fno-omit-frame-pointer)
+endif()
+
 # Tests
 enable_testing()
 
@@ -104,10 +112,14 @@ add_executable(test_screen_buffer
     tests/test_screen_buffer.cpp
     src/terminal/vt_parser.cpp
     src/terminal/screen_buffer.cpp
+    src/terminal/kitty_graphics.cpp
+    src/terminal/image_store.cpp
     src/core/config.cpp
+    src/core/util.cpp
 )
-target_include_directories(test_screen_buffer PRIVATE src)
+target_include_directories(test_screen_buffer PRIVATE src src/third_party)
 target_compile_options(test_screen_buffer PRIVATE -Wall -Wextra -Wpedantic)
+target_link_libraries(test_screen_buffer PRIVATE OpenGL::GL)
 if(CMAKE_BUILD_TYPE STREQUAL "Debug")
     target_compile_options(test_screen_buffer PRIVATE -Og -ggdb -fsanitize=address)
     target_link_options(test_screen_buffer PRIVATE -fsanitize=address)

@@ -1,6 +1,7 @@
 #define GL_GLEXT_PROTOTYPES
 #include "render/renderer.h"
 #include "terminal/screen_buffer.h"
+#include "terminal/image_store.h"
 #include "core/tab_manager.h"
 #include <GL/gl.h>
 #include <cstdio>
@@ -49,6 +50,28 @@ void main() {
 }
 )";
 
+static const char *image_vertex_src = R"(
+#version 330 core
+layout(location = 0) in vec2 aPos;
+layout(location = 1) in vec2 aTexCoord;
+out vec2 vTexCoord;
+uniform mat4 uProjection;
+void main() {
+    gl_Position = uProjection * vec4(aPos, 0.0, 1.0);
+    vTexCoord = aTexCoord;
+}
+)";
+
+static const char *image_fragment_src = R"(
+#version 330 core
+in vec2 vTexCoord;
+out vec4 FragColor;
+uniform sampler2D uImage;
+void main() {
+    FragColor = texture(uImage, vTexCoord);
+}
+)";
+
 static unsigned int compile_shader(GLenum type, const char *src) {
     unsigned int shader = glCreateShader(type);
     glShaderSource(shader, 1, &src, nullptr);
@@ -90,6 +113,7 @@ Renderer::~Renderer() {
     if (vbo_) glDeleteBuffers(1, &vbo_);
     if (bg_shader_) glDeleteProgram(bg_shader_);
     if (glyph_shader_) glDeleteProgram(glyph_shader_);
+    if (image_shader_) glDeleteProgram(image_shader_);
 }
 
 bool Renderer::init(const Config &config) {
@@ -115,6 +139,10 @@ void Renderer::build_shaders() {
     auto vert = compile_shader(GL_VERTEX_SHADER, glyph_vertex_src);
     auto frag = compile_shader(GL_FRAGMENT_SHADER, glyph_fragment_src);
     glyph_shader_ = link_program(vert, frag);
+
+    auto img_vert = compile_shader(GL_VERTEX_SHADER, image_vertex_src);
+    auto img_frag = compile_shader(GL_FRAGMENT_SHADER, image_fragment_src);
+    image_shader_ = link_program(img_vert, img_frag);
 }
 
 void Renderer::set_font_size(float size_pt, float dpi) {
@@ -445,6 +473,92 @@ void Renderer::render_dot_grid(int offset_x, int offset_y, int w, int h,
     }
 }
 
+void Renderer::render_images(ScreenBuffer &buffer, int offset_x, int offset_y,
+                              int clip_w, int clip_h) {
+    auto &store = buffer.images;
+    if (store.placements().empty()) return;
+
+    const auto &m = font_.metrics();
+    int sb_count = buffer.scrollback_count();
+    int vp_offset = buffer.viewport_offset();
+
+    // Set up projection
+    float proj[16] = {};
+    proj[0] = 2.0f / viewport_w_;
+    proj[5] = -2.0f / viewport_h_;
+    proj[10] = -1.0f;
+    proj[12] = -1.0f;
+    proj[13] = 1.0f;
+    proj[15] = 1.0f;
+
+    glUseProgram(image_shader_);
+    int proj_loc = glGetUniformLocation(image_shader_, "uProjection");
+    glUniformMatrix4fv(proj_loc, 1, GL_FALSE, proj);
+    int tex_loc = glGetUniformLocation(image_shader_, "uImage");
+    glUniform1i(tex_loc, 0);
+
+    for (const auto &placement : store.placements()) {
+        auto it = store.images().find(placement.image_id);
+        if (it == store.images().end()) continue;
+        auto &img = it->second;
+
+        store.ensure_texture(img);
+        if (!img.gl_texture) continue;
+
+        // Compute screen row from absolute line
+        int screen_row = placement.anchor_abs_line - sb_count - vp_offset;
+
+        // Compute pixel rect
+        float px = offset_x + placement.anchor_col * m.cell_width;
+        float py = offset_y + screen_row * m.cell_height;
+        float pw, ph;
+
+        if (placement.columns > 0)
+            pw = placement.columns * m.cell_width;
+        else
+            pw = (float)img.width;
+
+        if (placement.rows > 0)
+            ph = placement.rows * m.cell_height;
+        else
+            ph = (float)img.height;
+
+        // Clip: skip if entirely off screen
+        if (py + ph < offset_y || py >= offset_y + clip_h) continue;
+        if (px + pw < offset_x || px >= offset_x + clip_w) continue;
+
+        // Draw textured quad
+        float verts[] = {
+            px,      py,      0.0f, 0.0f,
+            px + pw, py,      1.0f, 0.0f,
+            px + pw, py + ph, 1.0f, 1.0f,
+            px,      py,      0.0f, 0.0f,
+            px + pw, py + ph, 1.0f, 1.0f,
+            px,      py + ph, 0.0f, 1.0f,
+        };
+
+        glActiveTexture(GL_TEXTURE0);
+        glBindTexture(GL_TEXTURE_2D, img.gl_texture);
+
+        glBindVertexArray(vao_);
+        glBindBuffer(GL_ARRAY_BUFFER, vbo_);
+        glBufferData(GL_ARRAY_BUFFER, sizeof(verts), verts, GL_DYNAMIC_DRAW);
+
+        glVertexAttribPointer(0, 2, GL_FLOAT, GL_FALSE, 4 * sizeof(float), (void *)0);
+        glEnableVertexAttribArray(0);
+        glVertexAttribPointer(1, 2, GL_FLOAT, GL_FALSE, 4 * sizeof(float), (void *)(2 * sizeof(float)));
+        glEnableVertexAttribArray(1);
+        // Disable unused attribs from glyph shader
+        glDisableVertexAttribArray(2);
+        glDisableVertexAttribArray(3);
+
+        glDrawArrays(GL_TRIANGLES, 0, 6);
+    }
+
+    glBindVertexArray(0);
+    glBindTexture(GL_TEXTURE_2D, 0);
+}
+
 void Renderer::render_pane(const ScreenBuffer &buffer, const Config &config,
                             int offset_x, int offset_y, int w, int h,
                             bool pane_focused) {
@@ -470,8 +584,11 @@ void Renderer::render_pane(const ScreenBuffer &buffer, const Config &config,
 
     build_pane_vertices(buffer, config, offset_x, offset_y, w, h, pane_focused);
 
-    // Flush vertices for this pane while scissor is active
+    // Flush text/glyph vertices for this pane while scissor is active
     flush();
+
+    // Render inline images on top of text
+    render_images(const_cast<ScreenBuffer &>(buffer), offset_x, offset_y, w, h);
 
     glDisable(GL_SCISSOR_TEST);
 }

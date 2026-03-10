@@ -72,6 +72,7 @@ bool X11Backend::create_window(int width, int height, const std::string &title) 
     atom_rivt_sel_ = intern_atom("RIVT_SELECTION");
     atom_wm_protocols_ = intern_atom("WM_PROTOCOLS");
     atom_wm_delete_ = intern_atom("WM_DELETE_WINDOW");
+    atom_image_png_ = intern_atom("image/png");
 
     // Register for WM_DELETE_WINDOW
     xcb_change_property(conn_, XCB_PROP_MODE_REPLACE, window_,
@@ -359,6 +360,7 @@ void X11Backend::process_events() {
                 // Respond to selection requests from other apps
                 auto *sr = (xcb_selection_request_event_t *)ev;
                 const std::string &text = (sr->selection == XCB_ATOM_PRIMARY) ? primary_text_ : clipboard_text_;
+                const ClipboardEntry &typed = (sr->selection == XCB_ATOM_PRIMARY) ? primary_typed_ : clipboard_typed_;
 
                 xcb_selection_notify_event_t notify{};
                 notify.response_type = XCB_SELECTION_NOTIFY;
@@ -367,17 +369,31 @@ void X11Backend::process_events() {
                 notify.target = sr->target;
                 notify.time = sr->time;
 
-                if (sr->target == atom_utf8_string_ || sr->target == XCB_ATOM_STRING) {
+                if (sr->target == atom_image_png_ && typed.mime_type == "image/png") {
+                    if (typed.data.size() <= 256 * 1024) {
+                        xcb_change_property(conn_, XCB_PROP_MODE_REPLACE,
+                                            sr->requestor, sr->property,
+                                            atom_image_png_, 8,
+                                            typed.data.size(), typed.data.data());
+                        notify.property = sr->property;
+                    } else {
+                        // INCR not implemented yet — reject oversized transfers
+                        fprintf(stderr, "rivt: clipboard image too large for non-INCR transfer (%zu bytes)\n", typed.data.size());
+                        notify.property = XCB_ATOM_NONE;
+                    }
+                } else if (sr->target == atom_utf8_string_ || sr->target == XCB_ATOM_STRING) {
                     xcb_change_property(conn_, XCB_PROP_MODE_REPLACE,
                                         sr->requestor, sr->property,
                                         atom_utf8_string_, 8,
                                         text.size(), text.c_str());
                     notify.property = sr->property;
                 } else if (sr->target == atom_targets_) {
-                    xcb_atom_t targets[] = { atom_targets_, atom_utf8_string_, XCB_ATOM_STRING };
+                    std::vector<xcb_atom_t> targets = { atom_targets_, atom_utf8_string_, XCB_ATOM_STRING };
+                    if (!typed.data.empty() && typed.mime_type == "image/png")
+                        targets.push_back(atom_image_png_);
                     xcb_change_property(conn_, XCB_PROP_MODE_REPLACE,
                                         sr->requestor, sr->property,
-                                        XCB_ATOM_ATOM, 32, 3, targets);
+                                        XCB_ATOM_ATOM, 32, targets.size(), targets.data());
                     notify.property = sr->property;
                 } else {
                     notify.property = XCB_ATOM_NONE;
@@ -448,6 +464,66 @@ std::string X11Backend::get_clipboard(bool primary) {
         free(ev);
     }
     return "";
+}
+
+void X11Backend::set_clipboard_data(const std::string &data, const std::string &mime_type, bool primary) {
+    ClipboardEntry &entry = primary ? primary_typed_ : clipboard_typed_;
+    entry.data = data;
+    entry.mime_type = mime_type;
+
+    xcb_atom_t selection = primary ? (xcb_atom_t)XCB_ATOM_PRIMARY : atom_clipboard_;
+    xcb_set_selection_owner(conn_, window_, selection, XCB_CURRENT_TIME);
+    xcb_flush(conn_);
+}
+
+std::string X11Backend::get_clipboard_data(const std::string &mime_type, bool primary) {
+    if (mime_type.empty() || mime_type == "text/plain")
+        return get_clipboard(primary);
+
+    xcb_atom_t selection = primary ? (xcb_atom_t)XCB_ATOM_PRIMARY : atom_clipboard_;
+
+    // Check if we own it
+    xcb_get_selection_owner_cookie_t owner_cookie = xcb_get_selection_owner(conn_, selection);
+    xcb_get_selection_owner_reply_t *owner = xcb_get_selection_owner_reply(conn_, owner_cookie, nullptr);
+    if (owner && owner->owner == window_) {
+        free(owner);
+        const ClipboardEntry &entry = primary ? primary_typed_ : clipboard_typed_;
+        return (entry.mime_type == mime_type) ? entry.data : std::string{};
+    }
+    free(owner);
+
+    // Request from owner using the appropriate atom
+    xcb_atom_t target = atom_image_png_;  // only image/png supported for now
+    if (mime_type != "image/png") return {};
+
+    xcb_convert_selection(conn_, window_, selection, target, atom_rivt_sel_, XCB_CURRENT_TIME);
+    xcb_flush(conn_);
+
+    for (int i = 0; i < 50; i++) {
+        xcb_generic_event_t *ev = xcb_wait_for_event(conn_);
+        if (!ev) break;
+        uint8_t type = ev->response_type & ~0x80;
+        if (type == XCB_SELECTION_NOTIFY) {
+            auto *sn = (xcb_selection_notify_event_t *)ev;
+            if (sn->property != XCB_ATOM_NONE) {
+                xcb_get_property_cookie_t prop_cookie = xcb_get_property(
+                    conn_, 1, window_, atom_rivt_sel_, XCB_ATOM_ANY, 0, 1 << 20);
+                xcb_get_property_reply_t *prop = xcb_get_property_reply(conn_, prop_cookie, nullptr);
+                std::string result;
+                if (prop) {
+                    result = std::string((char *)xcb_get_property_value(prop),
+                                         xcb_get_property_value_length(prop));
+                    free(prop);
+                }
+                free(ev);
+                return result;
+            }
+            free(ev);
+            break;
+        }
+        free(ev);
+    }
+    return {};
 }
 
 float X11Backend::get_dpi_scale() {
