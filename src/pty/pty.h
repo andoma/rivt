@@ -10,7 +10,7 @@ public:
     ~Pty();
 
     // Spawn a shell process, returns true on success
-    bool spawn(int cols, int rows, const std::string &shell = "");
+    bool spawn(int cols, int rows, const std::string &shell = "", const std::string &cwd = "");
 
     // Read from PTY master, returns bytes read (0 = would block, -1 = error/closed)
     int read(char *buf, int max_len);

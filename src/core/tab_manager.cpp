@@ -24,7 +24,11 @@ Pane *TabManager::create_pane() {
     setup_pane(raw);
     pane->setup_callbacks(m_platform, m_config);
 
-    if (!pane->spawn_shell(m_loop)) {
+    std::string start_cwd;
+    if (Pane *fp = focused_pane())
+        start_cwd = fp->cwd;
+
+    if (!pane->spawn_shell(m_loop, start_cwd)) {
         return nullptr;
     }
 
@@ -76,6 +80,11 @@ void TabManager::setup_pane(Pane *pane) {
 }
 
 Tab *TabManager::new_tab() {
+    // Grab CWD from current focused pane before switching tabs
+    std::string start_cwd;
+    if (Pane *fp = focused_pane())
+        start_cwd = fp->cwd;
+
     auto tab = std::make_unique<Tab>();
     tab->id = m_next_tab_id++;
     tab->title = "Terminal";
@@ -92,7 +101,7 @@ Tab *TabManager::new_tab() {
     setup_pane(pane_raw);
     pane_raw->setup_callbacks(m_platform, m_config);
 
-    if (!pane_raw->spawn_shell(m_loop)) {
+    if (!pane_raw->spawn_shell(m_loop, start_cwd)) {
         m_tabs.pop_back();
         m_active_index = m_tabs.empty() ? -1 : (int)m_tabs.size() - 1;
         return nullptr;

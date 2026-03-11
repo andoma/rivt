@@ -1,4 +1,5 @@
 #include "core/pane.h"
+#include "core/debug.h"
 #include "platform/platform.h"
 #include <sys/epoll.h>
 #include <cstring>
@@ -13,8 +14,9 @@ Pane::Pane(int cols, int rows, const Config &config)
 
 Pane::~Pane() = default;
 
-bool Pane::spawn_shell(EventLoop &loop) {
-    if (!m_pty.spawn(m_screen.cols(), m_screen.rows()))
+bool Pane::spawn_shell(EventLoop &loop, const std::string &start_cwd) {
+    dbg("spawn_shell: cwd='%s'", start_cwd.c_str());
+    if (!m_pty.spawn(m_screen.cols(), m_screen.rows(), "", start_cwd))
         return false;
 
     m_pty_fd_registered = m_pty.fd();
@@ -113,6 +115,22 @@ void Pane::setup_callbacks(Platform *platform, const Config &config) {
     m_screen.on_title_change = [this, platform](const std::string &title) {
         platform->set_title(title);
         if (on_title_change) on_title_change(this, title);
+    };
+
+    m_screen.on_cwd_change = [this](const std::string &uri) {
+        dbg("OSC 7 received: '%s'", uri.c_str());
+        // OSC 7 sends file://hostname/path — extract the path
+        const std::string prefix = "file://";
+        if (uri.substr(0, prefix.size()) == prefix) {
+            auto slash = uri.find('/', prefix.size());
+            if (slash != std::string::npos)
+                cwd = uri.substr(slash);
+            else
+                cwd = uri.substr(prefix.size());
+        } else {
+            cwd = uri;
+        }
+        dbg("pane cwd set to: '%s'", cwd.c_str());
     };
 
     m_screen.on_osc52_write = [platform, &config](const std::string &sel, const std::string &base64, const std::string &mime_type) {

@@ -18,7 +18,7 @@ Pty::~Pty() {
     close();
 }
 
-bool Pty::spawn(int cols, int rows, const std::string &shell) {
+bool Pty::spawn(int cols, int rows, const std::string &shell, const std::string &cwd) {
     struct winsize ws {};
     ws.ws_col = cols;
     ws.ws_row = rows;
@@ -55,6 +55,13 @@ bool Pty::spawn(int cols, int rows, const std::string &shell) {
         // We fully support the protocol, but there's no standard env var to
         // advertise that. This should be removed once the ecosystem moves to
         // runtime capability detection.
+
+        // Change to working directory if specified
+        if (!cwd.empty()) {
+            if (chdir(cwd.c_str()) != 0) {
+                // Fall through to default CWD (inherited from parent)
+            }
+        }
 
         // Reset signal handlers
         signal(SIGCHLD, SIG_DFL);

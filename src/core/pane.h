@@ -23,7 +23,7 @@ public:
     ~Pane();
 
     // Spawn shell and register PTY fd with event loop
-    bool spawn_shell(EventLoop &loop);
+    bool spawn_shell(EventLoop &loop, const std::string &start_cwd = "");
 
     // Remove PTY fd from event loop (called before destruction)
     void detach(EventLoop &loop);
@@ -73,6 +73,9 @@ public:
 
     // Activity flag (set when output received while not focused)
     bool has_activity = false;
+
+    // Current working directory (from OSC 7)
+    std::string cwd;
 
     // Callback: tmux control mode detected in PTY output (\033P1000p)
     std::function<void(Pane *)> on_tmux_control_mode;
