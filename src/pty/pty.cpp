@@ -23,7 +23,7 @@ bool Pty::spawn(int cols, int rows, const std::string &shell) {
     ws.ws_col = cols;
     ws.ws_row = rows;
 
-    pid_t pid = forkpty(&master_fd_, nullptr, nullptr, &ws);
+    pid_t pid = forkpty(&m_master_fd, nullptr, nullptr, &ws);
     if (pid < 0)
         return false;
 
@@ -71,18 +71,18 @@ bool Pty::spawn(int cols, int rows, const std::string &shell) {
     }
 
     // Parent
-    child_pid_ = pid;
+    m_child_pid = pid;
 
     // Set master fd to non-blocking
-    int flags = fcntl(master_fd_, F_GETFL);
-    fcntl(master_fd_, F_SETFL, flags | O_NONBLOCK);
+    int flags = fcntl(m_master_fd, F_GETFL);
+    fcntl(m_master_fd, F_SETFL, flags | O_NONBLOCK);
 
     return true;
 }
 
 int Pty::read(char *buf, int max_len) {
-    if (master_fd_ < 0) return -1;
-    ssize_t n = ::read(master_fd_, buf, max_len);
+    if (m_master_fd < 0) return -1;
+    ssize_t n = ::read(m_master_fd, buf, max_len);
     if (n < 0) {
         if (errno == EAGAIN || errno == EWOULDBLOCK)
             return 0;
@@ -92,36 +92,36 @@ int Pty::read(char *buf, int max_len) {
 }
 
 int Pty::write(const char *buf, int len) {
-    if (master_fd_ < 0) return -1;
-    ssize_t n = ::write(master_fd_, buf, len);
+    if (m_master_fd < 0) return -1;
+    ssize_t n = ::write(m_master_fd, buf, len);
     return (int)n;
 }
 
 void Pty::resize(int cols, int rows) {
-    if (master_fd_ < 0) return;
+    if (m_master_fd < 0) return;
     struct winsize ws {};
     ws.ws_col = cols;
     ws.ws_row = rows;
-    ioctl(master_fd_, TIOCSWINSZ, &ws);
+    ioctl(m_master_fd, TIOCSWINSZ, &ws);
 }
 
 bool Pty::alive() const {
-    if (child_pid_ <= 0) return false;
+    if (m_child_pid <= 0) return false;
     int status;
-    pid_t result = waitpid(child_pid_, &status, WNOHANG);
+    pid_t result = waitpid(m_child_pid, &status, WNOHANG);
     return result == 0;
 }
 
 void Pty::close() {
-    if (master_fd_ >= 0) {
-        ::close(master_fd_);
-        master_fd_ = -1;
+    if (m_master_fd >= 0) {
+        ::close(m_master_fd);
+        m_master_fd = -1;
     }
-    if (child_pid_ > 0) {
-        kill(child_pid_, SIGHUP);
+    if (m_child_pid > 0) {
+        kill(m_child_pid, SIGHUP);
         int status;
-        waitpid(child_pid_, &status, 0);
-        child_pid_ = -1;
+        waitpid(m_child_pid, &status, 0);
+        m_child_pid = -1;
     }
 }
 

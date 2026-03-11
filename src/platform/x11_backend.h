@@ -43,42 +43,42 @@ private:
     void handle_configure_event(xcb_configure_notify_event_t *ev);
     KeyMod translate_mods(uint16_t state);
 
-    xcb_connection_t *conn_ = nullptr;
-    xcb_screen_t *screen_ = nullptr;
-    xcb_window_t window_ = 0;
-    xcb_key_symbols_t *key_symbols_ = nullptr;
+    xcb_connection_t *m_conn = nullptr;
+    xcb_screen_t *m_screen = nullptr;
+    xcb_window_t m_window = 0;
+    xcb_key_symbols_t *m_key_symbols = nullptr;
 
-    struct xkb_context *xkb_ctx_ = nullptr;
-    struct xkb_keymap *xkb_keymap_ = nullptr;
-    struct xkb_state *xkb_state_ = nullptr;
-    int32_t xkb_device_id_ = -1;
+    struct xkb_context *m_xkb_ctx = nullptr;
+    struct xkb_keymap *m_xkb_keymap = nullptr;
+    struct xkb_state *m_xkb_state = nullptr;
+    int32_t m_xkb_device_id = -1;
 
-    EGLDisplay egl_display_ = EGL_NO_DISPLAY;
-    EGLContext egl_context_ = EGL_NO_CONTEXT;
-    EGLSurface egl_surface_ = EGL_NO_SURFACE;
+    EGLDisplay m_egl_display = EGL_NO_DISPLAY;
+    EGLContext m_egl_context = EGL_NO_CONTEXT;
+    EGLSurface m_egl_surface = EGL_NO_SURFACE;
 
-    Display *xlib_display_ = nullptr;
-    int width_ = 0;
-    int height_ = 0;
+    Display *m_xlib_display = nullptr;
+    int m_width = 0;
+    int m_height = 0;
 
     // Clipboard
-    xcb_atom_t atom_clipboard_ = 0;
-    xcb_atom_t atom_utf8_string_ = 0;
-    xcb_atom_t atom_targets_ = 0;
-    xcb_atom_t atom_rivt_sel_ = 0;
-    xcb_atom_t atom_wm_protocols_ = 0;
-    xcb_atom_t atom_wm_delete_ = 0;
-    xcb_atom_t atom_image_png_ = 0;
-    std::string clipboard_text_;
-    std::string primary_text_;
+    xcb_atom_t m_atom_clipboard = 0;
+    xcb_atom_t m_atom_utf8_string = 0;
+    xcb_atom_t m_atom_targets = 0;
+    xcb_atom_t m_atom_rivt_sel = 0;
+    xcb_atom_t m_atom_wm_protocols = 0;
+    xcb_atom_t m_atom_wm_delete = 0;
+    xcb_atom_t m_atom_image_png = 0;
+    std::string m_clipboard_text;
+    std::string m_primary_text;
 
     // Typed clipboard storage
     struct ClipboardEntry {
         std::string data;
         std::string mime_type;
     };
-    ClipboardEntry clipboard_typed_;
-    ClipboardEntry primary_typed_;
+    ClipboardEntry m_clipboard_typed;
+    ClipboardEntry m_primary_typed;
 
     xcb_atom_t intern_atom(const char *name);
 };

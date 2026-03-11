@@ -82,38 +82,38 @@ public:
     ScreenBuffer(int cols, int rows, int scrollback_limit = 10000);
 
     void resize(int cols, int rows);
-    int cols() const { return cols_; }
-    int rows() const { return rows_; }
+    int cols() const { return m_cols; }
+    int rows() const { return m_rows; }
 
     // Access
     const Line &line(int row) const;    // 0 = top of visible area
     const Cell &cell(int row, int col) const;
 
     // Scrollback
-    int scrollback_count() const { return (int)scrollback_.size(); }
+    int scrollback_count() const { return (int)m_scrollback.size(); }
     const Line &scrollback_line(int idx) const;  // 0 = most recent scrollback line
-    int viewport_offset() const { return viewport_offset_; }
+    int viewport_offset() const { return m_viewport_offset; }
     void scroll_viewport(int delta);  // negative = scroll up into history
     void scroll_to_bottom();
-    bool at_bottom() const { return viewport_offset_ == 0; }
+    bool at_bottom() const { return m_viewport_offset == 0; }
 
     // Cursor
-    int cursor_row() const { return cursor_row_; }
-    int cursor_col() const { return cursor_col_; }
-    bool cursor_visible() const { return cursor_visible_; }
+    int cursor_row() const { return m_cursor_row; }
+    int cursor_col() const { return m_cursor_col; }
+    bool cursor_visible() const { return m_cursor_visible; }
 
     // Modes
-    bool bracketed_paste() const { return mode_bracketed_paste_; }
-    bool app_cursor_keys() const { return mode_app_cursor_; }
-    bool focus_reporting() const { return mode_focus_events_; }
-    int mouse_mode() const { return mouse_mode_; }
-    bool sgr_mouse() const { return mode_sgr_mouse_; }
-    bool alt_screen() const { return using_alt_screen_; }
+    bool bracketed_paste() const { return m_mode_bracketed_paste; }
+    bool app_cursor_keys() const { return m_mode_app_cursor; }
+    bool focus_reporting() const { return m_mode_focus_events; }
+    int mouse_mode() const { return m_mouse_mode; }
+    bool sgr_mouse() const { return m_mode_sgr_mouse; }
+    bool alt_screen() const { return m_using_alt_screen; }
 
     // Selection
     Selection selection;
     int absolute_line(int screen_row) const {
-        return (int)scrollback_.size() + viewport_offset_ + screen_row;
+        return (int)m_scrollback.size() + m_viewport_offset + screen_row;
     }
     std::string get_selection_text() const;
 
@@ -121,14 +121,14 @@ public:
     SearchState search;
     void find_matches(const std::string &query, bool case_sensitive);
     void find_matches_incremental();  // only search new lines since last call
-    int total_lines() const { return (int)scrollback_.size() + rows_; }
+    int total_lines() const { return (int)m_scrollback.size() + m_rows; }
 
     // Kitty keyboard protocol
     // Flags: bit 0 = disambiguate, bit 1 = report event types,
     //        bit 2 = report alternate keys, bit 3 = report all keys as escapes,
     //        bit 4 = report associated text
     int kitty_kbd_flags() const {
-        return kitty_kbd_stack_.empty() ? 0 : kitty_kbd_stack_.back();
+        return m_kitty_kbd_stack.empty() ? 0 : m_kitty_kbd_stack.back();
     }
     bool kitty_kbd_active() const { return kitty_kbd_flags() != 0; }
 
@@ -172,26 +172,26 @@ private:
     void linearize_screen();
 
     // Ring-buffer access: maps logical row to physical index
-    Line& sline(int row) { return screen_[(screen_top_ + row) % (int)screen_.size()]; }
-    const Line& sline(int row) const { return screen_[(screen_top_ + row) % (int)screen_.size()]; }
+    Line& sline(int row) { return m_screen[(m_screen_top + row) % (int)m_screen.size()]; }
+    const Line& sline(int row) const { return m_screen[(m_screen_top + row) % (int)m_screen.size()]; }
 
-    int cols_, rows_;
-    int scrollback_limit_;
+    int m_cols, m_rows;
+    int m_scrollback_limit;
 
     // Grid
-    std::vector<Line> screen_;       // active screen (ring buffer, screen_top_ is index of row 0)
-    int screen_top_ = 0;            // ring buffer offset
-    std::vector<Line> alt_screen_;   // alternate screen buffer
-    bool using_alt_screen_ = false;
+    std::vector<Line> m_screen;       // active screen (ring buffer, m_screen_top is index of row 0)
+    int m_screen_top = 0;            // ring buffer offset
+    std::vector<Line> m_alt_screen;   // alternate screen buffer
+    bool m_using_alt_screen = false;
 
     // Scrollback
-    std::deque<Line> scrollback_;
-    int viewport_offset_ = 0;
+    std::deque<Line> m_scrollback;
+    int m_viewport_offset = 0;
 
     // Cursor state
-    int cursor_row_ = 0;
-    int cursor_col_ = 0;
-    bool cursor_visible_ = true;
+    int m_cursor_row = 0;
+    int m_cursor_col = 0;
+    bool m_cursor_visible = true;
 
     // Saved cursor (DECSC/DECRC)
     struct SavedCursor {
@@ -200,28 +200,28 @@ private:
         uint32_t bg = COLOR_FLAG_DEFAULT;
         uint16_t attrs = 0;
     };
-    SavedCursor saved_cursor_;
+    SavedCursor m_saved_cursor;
 
     // Current text attributes
-    uint32_t cur_fg_ = COLOR_FLAG_DEFAULT;
-    uint32_t bg_ = COLOR_FLAG_DEFAULT;
-    uint16_t cur_attrs_ = 0;
+    uint32_t m_cur_fg = COLOR_FLAG_DEFAULT;
+    uint32_t m_bg = COLOR_FLAG_DEFAULT;
+    uint16_t m_cur_attrs = 0;
 
     // Scroll region
-    int scroll_top_ = 0;
-    int scroll_bottom_;  // initialized to rows_ - 1
+    int m_scroll_top = 0;
+    int m_scroll_bottom;  // initialized to m_rows - 1
 
     // Modes
-    bool mode_app_cursor_ = false;
-    bool mode_cursor_blink_ = false;
-    bool mode_focus_events_ = false;
-    bool mode_bracketed_paste_ = false;
-    int mouse_mode_ = 0;        // 0=off, 1000/1002/1003
-    bool mode_sgr_mouse_ = false;
-    bool mode_grapheme_cluster_ = false;
+    bool m_mode_app_cursor = false;
+    bool m_mode_cursor_blink = false;
+    bool m_mode_focus_events = false;
+    bool m_mode_bracketed_paste = false;
+    int m_mouse_mode = 0;        // 0=off, 1000/1002/1003
+    bool m_mode_sgr_mouse = false;
+    bool m_mode_grapheme_cluster = false;
 
     // Kitty keyboard protocol — stack of flag sets
-    std::vector<int> kitty_kbd_stack_;
+    std::vector<int> m_kitty_kbd_stack;
 
 public:
     // Image storage for Kitty graphics protocol

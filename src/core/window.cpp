@@ -12,22 +12,22 @@
 namespace rivt {
 
 Window::Window(const Config &base_config, EventLoop &loop)
-    : config_(base_config), loop_(loop) {}
+    : m_config(base_config), m_loop(loop) {}
 
 Window::~Window() {
     // Replace the gateway pane's override with a drain that swallows remaining
     // tmux protocol (up to the DCS terminator \033\\) before restoring normal
     // operation. Don't touch on_tmux_control_mode — it stays active so the
     // user can run tmux -CC again.
-    if (tmux_gateway_pane_) {
-        Pane *gw = tmux_gateway_pane_;
-        gw->pty_data_override_ = [gw](const char *buf, int len) {
+    if (m_tmux_gateway_pane) {
+        Pane *gw = m_tmux_gateway_pane;
+        gw->m_pty_data_override = [gw](const char *buf, int len) {
             // Swallow tmux protocol. Look for ST (\033\\) which terminates
             // the DCS that started CC mode — everything after it is normal.
             std::string_view sv(buf, len);
             auto pos = sv.find("\033\\");
             if (pos != std::string_view::npos) {
-                gw->pty_data_override_ = nullptr;
+                gw->m_pty_data_override = nullptr;
                 // Feed any data after ST to the pane normally
                 const char *after = buf + pos + 2;
                 int remaining = len - (int)(pos + 2);
@@ -36,200 +36,200 @@ Window::~Window() {
                 }
             }
         };
-        tmux_gateway_pane_ = nullptr;
+        m_tmux_gateway_pane = nullptr;
     }
 }
 
 bool Window::init() {
-    platform_ = Platform::create();
-    if (!platform_) {
+    m_platform = Platform::create();
+    if (!m_platform) {
         fprintf(stderr, "Failed to create platform\n");
         return false;
     }
 
-    if (!platform_->create_window(win_w_, win_h_, "rivt")) {
+    if (!m_platform->create_window(m_win_w, m_win_h, "rivt")) {
         fprintf(stderr, "Failed to create window\n");
         return false;
     }
 
-    if (!platform_->create_gl_context()) {
+    if (!m_platform->create_gl_context()) {
         fprintf(stderr, "Failed to create GL context\n");
         return false;
     }
 
-    if (!renderer_.init(config_)) {
+    if (!m_renderer.init(m_config)) {
         fprintf(stderr, "Failed to initialize renderer\n");
         return false;
     }
 
-    renderer_.set_viewport(win_w_, win_h_);
+    m_renderer.set_viewport(m_win_w, m_win_h);
 
-    tabs_ = std::make_unique<TabManager>(config_, loop_, platform_.get());
-    tabs_->on_needs_render = [this]() { needs_render_ = true; };
-    tabs_->on_quit = [this]() {
+    m_tabs = std::make_unique<TabManager>(m_config, m_loop, m_platform.get());
+    m_tabs->on_needs_render = [this]() { m_needs_render = true; };
+    m_tabs->on_quit = [this]() {
         if (on_close) on_close(this);
     };
 
-    const auto &m = renderer_.metrics();
-    tabs_->set_cell_size(m.cell_width, m.cell_height);
-    win_w_ = config_.initial_cols * m.cell_width;
-    win_h_ = config_.initial_rows * m.cell_height;
-    platform_->resize_window(win_w_, win_h_);
-    renderer_.set_viewport(win_w_, win_h_);
+    const auto &m = m_renderer.metrics();
+    m_tabs->set_cell_size(m.cell_width, m.cell_height);
+    m_win_w = m_config.initial_cols * m.cell_width;
+    m_win_h = m_config.initial_rows * m.cell_height;
+    m_platform->resize_window(m_win_w, m_win_h);
+    m_renderer.set_viewport(m_win_w, m_win_h);
 
-    if (!tabs_->new_tab()) {
+    if (!m_tabs->new_tab()) {
         fprintf(stderr, "Failed to spawn initial shell\n");
         return false;
     }
     recompute();
 
-    platform_->show_window();
+    m_platform->show_window();
     setup_callbacks();
     return true;
 }
 
 bool Window::init_tmux(const std::vector<std::string> &tmux_args) {
-    platform_ = Platform::create();
-    if (!platform_) {
+    m_platform = Platform::create();
+    if (!m_platform) {
         fprintf(stderr, "Failed to create platform\n");
         return false;
     }
 
-    if (!platform_->create_window(win_w_, win_h_, "rivt [tmux]")) {
+    if (!m_platform->create_window(m_win_w, m_win_h, "rivt [tmux]")) {
         fprintf(stderr, "Failed to create window\n");
         return false;
     }
 
-    if (!platform_->create_gl_context()) {
+    if (!m_platform->create_gl_context()) {
         fprintf(stderr, "Failed to create GL context\n");
         return false;
     }
 
-    if (!renderer_.init(config_)) {
+    if (!m_renderer.init(m_config)) {
         fprintf(stderr, "Failed to initialize renderer\n");
         return false;
     }
 
-    renderer_.set_viewport(win_w_, win_h_);
+    m_renderer.set_viewport(m_win_w, m_win_h);
 
-    tabs_ = std::make_unique<TabManager>(config_, loop_, platform_.get());
-    tabs_->on_needs_render = [this]() { needs_render_ = true; };
-    tabs_->on_quit = [this]() {
+    m_tabs = std::make_unique<TabManager>(m_config, m_loop, m_platform.get());
+    m_tabs->on_needs_render = [this]() { m_needs_render = true; };
+    m_tabs->on_quit = [this]() {
         if (on_close) on_close(this);
     };
 
-    const auto &m = renderer_.metrics();
-    tabs_->set_cell_size(m.cell_width, m.cell_height);
-    win_w_ = config_.initial_cols * m.cell_width;
-    win_h_ = config_.initial_rows * m.cell_height;
-    platform_->resize_window(win_w_, win_h_);
-    renderer_.set_viewport(win_w_, win_h_);
+    const auto &m = m_renderer.metrics();
+    m_tabs->set_cell_size(m.cell_width, m.cell_height);
+    m_win_w = m_config.initial_cols * m.cell_width;
+    m_win_h = m_config.initial_rows * m.cell_height;
+    m_platform->resize_window(m_win_w, m_win_h);
+    m_renderer.set_viewport(m_win_w, m_win_h);
 
     // Create tmux client and controller (no initial tab — tmux notifications create them)
-    tmux_client_ = std::make_unique<TmuxClient>(loop_);
-    tmux_controller_ = std::make_unique<TmuxController>(*tmux_client_, *this, *tabs_, loop_);
+    m_tmux_client = std::make_unique<TmuxClient>(m_loop);
+    m_tmux_controller = std::make_unique<TmuxController>(*m_tmux_client, *this, *m_tabs, m_loop);
 
-    if (!tmux_client_->start(tmux_args)) {
+    if (!m_tmux_client->start(tmux_args)) {
         fprintf(stderr, "Failed to start tmux -CC\n");
         return false;
     }
 
     int bar_h = tab_bar_height();
-    int cols = m.cell_width > 0 ? win_w_ / m.cell_width : 80;
-    int rows = m.cell_height > 0 ? (win_h_ - bar_h) / m.cell_height : 24;
-    tmux_controller_->initialize(cols, rows, m.cell_width, m.cell_height, 0, bar_h);
+    int cols = m.cell_width > 0 ? m_win_w / m.cell_width : 80;
+    int rows = m.cell_height > 0 ? (m_win_h - bar_h) / m.cell_height : 24;
+    m_tmux_controller->initialize(cols, rows, m.cell_width, m.cell_height, 0, bar_h);
 
-    platform_->show_window();
+    m_platform->show_window();
     setup_callbacks();
     return true;
 }
 
 int Window::tab_bar_height() const {
-    const auto &m = renderer_.metrics();
-    return tabs_->tab_count() > 1 ? m.cell_height + 8 : 0;
+    const auto &m = m_renderer.metrics();
+    return m_tabs->tab_count() > 1 ? m.cell_height + 8 : 0;
 }
 
 void Window::recompute() {
     int bar_h = tab_bar_height();
-    tabs_->recompute_layout(0, bar_h, win_w_, win_h_ - bar_h);
+    m_tabs->recompute_layout(0, bar_h, m_win_w, m_win_h - bar_h);
     update_size_hints();
 }
 
 void Window::update_size_hints() {
-    const auto &m = renderer_.metrics();
+    const auto &m = m_renderer.metrics();
     if (m.cell_width > 0 && m.cell_height > 0) {
         int bar_h = tab_bar_height();
-        platform_->set_size_hints(m.cell_width, m.cell_height, 0, bar_h);
+        m_platform->set_size_hints(m.cell_width, m.cell_height, 0, bar_h);
     }
 }
 
 void Window::resize_to_cells(int cols, int rows) {
-    const auto &m = renderer_.metrics();
+    const auto &m = m_renderer.metrics();
     // Always reserve space for the tab bar — tmux sessions typically have
     // multiple windows, and the bar will appear once the second tab arrives.
     int bar_h = m.cell_height + 8;
-    win_w_ = cols * m.cell_width;
-    win_h_ = rows * m.cell_height + bar_h;
+    m_win_w = cols * m.cell_width;
+    m_win_h = rows * m.cell_height + bar_h;
     dbg("window(%p): resize_to_cells %dx%d -> %dx%d px (bar_h=%d cell=%dx%d)",
-        (void*)this, cols, rows, win_w_, win_h_, bar_h, m.cell_width, m.cell_height);
-    platform_->resize_window(win_w_, win_h_);
-    renderer_.set_viewport(win_w_, win_h_);
+        (void*)this, cols, rows, m_win_w, m_win_h, bar_h, m.cell_width, m.cell_height);
+    m_platform->resize_window(m_win_w, m_win_h);
+    m_renderer.set_viewport(m_win_w, m_win_h);
     recompute();
-    needs_render_ = true;
+    m_needs_render = true;
 }
 
 void Window::resize_font() {
     int cols, rows;
-    renderer_.compute_grid(win_w_, win_h_ - tab_bar_height(), cols, rows);
-    renderer_.set_font_size(config_.font_size, platform_->get_dpi_scale() * 96.0f);
-    tabs_->set_cell_size(renderer_.metrics().cell_width, renderer_.metrics().cell_height);
-    const auto &met = renderer_.metrics();
-    win_w_ = cols * met.cell_width;
-    win_h_ = rows * met.cell_height + tab_bar_height();
-    platform_->resize_window(win_w_, win_h_);
-    renderer_.set_viewport(win_w_, win_h_);
+    m_renderer.compute_grid(m_win_w, m_win_h - tab_bar_height(), cols, rows);
+    m_renderer.set_font_size(m_config.font_size, m_platform->get_dpi_scale() * 96.0f);
+    m_tabs->set_cell_size(m_renderer.metrics().cell_width, m_renderer.metrics().cell_height);
+    const auto &met = m_renderer.metrics();
+    m_win_w = cols * met.cell_width;
+    m_win_h = rows * met.cell_height + tab_bar_height();
+    m_platform->resize_window(m_win_w, m_win_h);
+    m_renderer.set_viewport(m_win_w, m_win_h);
     recompute();
-    needs_render_ = true;
+    m_needs_render = true;
 }
 
 void Window::toggle_cursor_blink() {
-    cursor_blink_on_ = !cursor_blink_on_;
-    needs_render_ = true;
+    m_cursor_blink_on = !m_cursor_blink_on;
+    m_needs_render = true;
 }
 
 bool Window::reap_dead_panes() {
-    if (!tabs_->reap_dead_panes()) {
+    if (!m_tabs->reap_dead_panes()) {
         return false;
     }
     recompute();
-    needs_render_ = true;
+    m_needs_render = true;
     return true;
 }
 
 void Window::setup_callbacks() {
-    platform_->on_key = [this](const KeyEvent &key) { handle_key(key); };
-    platform_->on_mouse = [this](const MouseEvent &mouse) { handle_mouse(mouse); };
-    platform_->on_resize = [this](int w, int h) { handle_resize(w, h); };
+    m_platform->on_key = [this](const KeyEvent &key) { handle_key(key); };
+    m_platform->on_mouse = [this](const MouseEvent &mouse) { handle_mouse(mouse); };
+    m_platform->on_resize = [this](int w, int h) { handle_resize(w, h); };
 
-    platform_->on_focus = [this](bool focused) {
-        focused_ = focused;
-        renderer_.set_focused(focused);
-        needs_render_ = true;
-        Pane *pane = tabs_->focused_pane();
+    m_platform->on_focus = [this](bool focused) {
+        m_focused = focused;
+        m_renderer.set_focused(focused);
+        m_needs_render = true;
+        Pane *pane = m_tabs->focused_pane();
         if (pane && pane->screen().focus_reporting()) {
             pane->write(focused ? "\033[I" : "\033[O");
         }
     };
 
-    platform_->on_close = [this]() {
-        if (tmux_controller_ && tmux_controller_->is_active()) {
-            tmux_controller_->detach();
+    m_platform->on_close = [this]() {
+        if (m_tmux_controller && m_tmux_controller->is_active()) {
+            m_tmux_controller->detach();
         }
-        closing_ = true;
+        m_closing = true;
     };
 
     // Detect tmux -CC control mode in any pane's PTY output
-    tabs_->on_tmux_control_mode = [this](Pane *pane) {
+    m_tabs->on_tmux_control_mode = [this](Pane *pane) {
         start_tmux_from_pane(pane);
     };
 }
@@ -241,98 +241,98 @@ void Window::start_tmux_from_pane(Pane *gateway) {
 
 bool Window::init_tmux_pty(Pane *gateway_pane) {
     dbg("window: init_tmux_pty gateway=%p", (void*)gateway_pane);
-    platform_ = Platform::create();
-    if (!platform_) return false;
-    if (!platform_->create_window(win_w_, win_h_, "rivt [tmux]")) return false;
-    if (!platform_->create_gl_context()) return false;
-    if (!renderer_.init(config_)) return false;
+    m_platform = Platform::create();
+    if (!m_platform) return false;
+    if (!m_platform->create_window(m_win_w, m_win_h, "rivt [tmux]")) return false;
+    if (!m_platform->create_gl_context()) return false;
+    if (!m_renderer.init(m_config)) return false;
 
-    renderer_.set_viewport(win_w_, win_h_);
+    m_renderer.set_viewport(m_win_w, m_win_h);
 
-    tabs_ = std::make_unique<TabManager>(config_, loop_, platform_.get());
-    tabs_->on_needs_render = [this]() { needs_render_ = true; };
-    tabs_->on_quit = [this]() {
+    m_tabs = std::make_unique<TabManager>(m_config, m_loop, m_platform.get());
+    m_tabs->on_needs_render = [this]() { m_needs_render = true; };
+    m_tabs->on_quit = [this]() {
         if (on_close) on_close(this);
     };
 
-    const auto &m = renderer_.metrics();
-    tabs_->set_cell_size(m.cell_width, m.cell_height);
-    win_w_ = config_.initial_cols * m.cell_width;
-    win_h_ = config_.initial_rows * m.cell_height;
-    platform_->resize_window(win_w_, win_h_);
-    renderer_.set_viewport(win_w_, win_h_);
+    const auto &m = m_renderer.metrics();
+    m_tabs->set_cell_size(m.cell_width, m.cell_height);
+    m_win_w = m_config.initial_cols * m.cell_width;
+    m_win_h = m_config.initial_rows * m.cell_height;
+    m_platform->resize_window(m_win_w, m_win_h);
+    m_renderer.set_viewport(m_win_w, m_win_h);
 
-    tmux_gateway_pane_ = gateway_pane;
+    m_tmux_gateway_pane = gateway_pane;
 
     // Create tmux client in PTY mode — writes go to the gateway pane's PTY
-    tmux_client_ = std::make_unique<TmuxClient>(loop_);
-    tmux_client_->start_pty_mode([gateway_pane](const std::string &data) {
+    m_tmux_client = std::make_unique<TmuxClient>(m_loop);
+    m_tmux_client->start_pty_mode([gateway_pane](const std::string &data) {
         gateway_pane->pty().write(data);
     });
 
-    tmux_controller_ = std::make_unique<TmuxController>(*tmux_client_, *this, *tabs_, loop_);
-    tmux_controller_->set_gateway_pane(gateway_pane);
-    tmux_controller_->on_tmux_exit = [this]() {
+    m_tmux_controller = std::make_unique<TmuxController>(*m_tmux_client, *this, *m_tabs, m_loop);
+    m_tmux_controller->set_gateway_pane(gateway_pane);
+    m_tmux_controller->on_tmux_exit = [this]() {
         stop_tmux_pty_mode();
     };
 
     // Redirect gateway pane's PTY reads to our tmux client
-    gateway_pane->pty_data_override_ = [this](const char *buf, int len) {
-        tmux_client_->feed_data(buf, len);
+    gateway_pane->m_pty_data_override = [this](const char *buf, int len) {
+        m_tmux_client->feed_data(buf, len);
     };
 
     int bar_h = tab_bar_height();
-    int cols = m.cell_width > 0 ? win_w_ / m.cell_width : 80;
-    int rows = m.cell_height > 0 ? (win_h_ - bar_h) / m.cell_height : 24;
-    tmux_controller_->initialize(cols, rows, m.cell_width, m.cell_height, 0, bar_h);
+    int cols = m.cell_width > 0 ? m_win_w / m.cell_width : 80;
+    int rows = m.cell_height > 0 ? (m_win_h - bar_h) / m.cell_height : 24;
+    m_tmux_controller->initialize(cols, rows, m.cell_width, m.cell_height, 0, bar_h);
 
-    platform_->show_window();
+    m_platform->show_window();
     setup_callbacks();
     return true;
 }
 
 void Window::stop_tmux_pty_mode() {
-    if (!tmux_gateway_pane_) return;
+    if (!m_tmux_gateway_pane) return;
 
     // Restore gateway pane to normal operation
-    tmux_gateway_pane_->pty_data_override_ = nullptr;
-    tmux_gateway_pane_ = nullptr;
+    m_tmux_gateway_pane->m_pty_data_override = nullptr;
+    m_tmux_gateway_pane = nullptr;
 
-    // Defer destruction — we're likely inside tmux_client_->feed_data() call stack
-    tmux_stale_controller_ = std::move(tmux_controller_);
-    tmux_stale_client_ = std::move(tmux_client_);
+    // Defer destruction — we're likely inside m_tmux_client->feed_data() call stack
+    m_tmux_stale_controller = std::move(m_tmux_controller);
+    m_tmux_stale_client = std::move(m_tmux_client);
 
     // Close this tmux window
-    closing_ = true;
+    m_closing = true;
 }
 
 void Window::handle_resize(int w, int h) {
     dbg("window(%p): handle_resize %dx%d tmux=%d gateway=%p",
         (void*)this, w, h,
-        tmux_controller_ && tmux_controller_->is_active(),
-        (void*)tmux_gateway_pane_);
-    win_w_ = w;
-    win_h_ = h;
-    renderer_.set_viewport(w, h);
-    const auto &m = renderer_.metrics();
-    tabs_->set_cell_size(m.cell_width, m.cell_height);
+        m_tmux_controller && m_tmux_controller->is_active(),
+        (void*)m_tmux_gateway_pane);
+    m_win_w = w;
+    m_win_h = h;
+    m_renderer.set_viewport(w, h);
+    const auto &m = m_renderer.metrics();
+    m_tabs->set_cell_size(m.cell_width, m.cell_height);
 
-    if (tmux_controller_ && tmux_controller_->is_active()) {
+    if (m_tmux_controller && m_tmux_controller->is_active()) {
         int bar_h = tab_bar_height();
         int cols = m.cell_width > 0 ? w / m.cell_width : 80;
         int rows = m.cell_height > 0 ? (h - bar_h) / m.cell_height : 24;
         dbg("window(%p): tmux resize -> %dx%d cells (bar_h=%d)", (void*)this, cols, rows, bar_h);
-        tmux_controller_->handle_resize(cols, rows, m.cell_width, m.cell_height, 0, bar_h);
+        m_tmux_controller->handle_resize(cols, rows, m.cell_width, m.cell_height, 0, bar_h);
     }
 
     recompute();
-    needs_render_ = true;
+    m_needs_render = true;
 }
 
 void Window::handle_key(const KeyEvent &key) {
     if (!key.pressed) return;
 
-    Pane *pane = tabs_->focused_pane();
+    Pane *pane = m_tabs->focused_pane();
     if (!pane) return;
 
     ScreenBuffer &screen = pane->screen();
@@ -344,7 +344,7 @@ void Window::handle_key(const KeyEvent &key) {
         switch (key.keysym) {
             case XKB_KEY_Escape:
                 screen.search.focused = false;
-                needs_render_ = true;
+                m_needs_render = true;
                 return;
             case XKB_KEY_Return: {
                 // search_navigate
@@ -359,7 +359,7 @@ void Window::handle_key(const KeyEvent &key) {
                         int target_offset = -(int)screen.scrollback_count() + match.abs_line - rows / 2;
                         screen.scroll_viewport(target_offset - screen.viewport_offset());
                     }
-                    needs_render_ = true;
+                    m_needs_render = true;
                 }
                 return;
             }
@@ -367,14 +367,14 @@ void Window::handle_key(const KeyEvent &key) {
                 if (!screen.search.query.empty()) {
                     screen.search.query.pop_back();
                     screen.find_matches(screen.search.query, screen.search.case_sensitive);
-                    needs_render_ = true;
+                    m_needs_render = true;
                 }
                 return;
             default:
                 if (!key.text.empty() && key.text[0] >= ' ') {
                     screen.search.query += key.text;
                     screen.find_matches(screen.search.query, screen.search.case_sensitive);
-                    needs_render_ = true;
+                    m_needs_render = true;
                 }
                 return;
         }
@@ -383,7 +383,7 @@ void Window::handle_key(const KeyEvent &key) {
     // Escape when search is active but unfocused: close search
     if (key.keysym == XKB_KEY_Escape && screen.search.active) {
         screen.search.clear();
-        needs_render_ = true;
+        m_needs_render = true;
         return;
     }
 
@@ -405,11 +405,11 @@ void Window::handle_key(const KeyEvent &key) {
                     screen.search.matches.clear();
                     screen.search.current_match = -1;
                 }
-                needs_render_ = true;
+                m_needs_render = true;
                 return;
             case XKB_KEY_V:
             case XKB_KEY_v: {
-                std::string text = platform_->get_clipboard(false);
+                std::string text = m_platform->get_clipboard(false);
                 if (!text.empty()) {
                     if (screen.bracketed_paste()) {
                         pane->write("\033[200~");
@@ -425,75 +425,75 @@ void Window::handle_key(const KeyEvent &key) {
             case XKB_KEY_c: {
                 std::string text = screen.get_selection_text();
                 if (!text.empty()) {
-                    platform_->set_clipboard(text, false);
+                    m_platform->set_clipboard(text, false);
                 }
                 return;
             }
             case XKB_KEY_plus:
             case XKB_KEY_equal:
-                config_.font_size += 1.0f;
+                m_config.font_size += 1.0f;
                 resize_font();
                 return;
             case XKB_KEY_minus:
-                if (config_.font_size > 6.0f) {
-                    config_.font_size -= 1.0f;
+                if (m_config.font_size > 6.0f) {
+                    m_config.font_size -= 1.0f;
                     resize_font();
                 }
                 return;
             case XKB_KEY_0:
-                config_.font_size = 10.0f;
+                m_config.font_size = 10.0f;
                 resize_font();
                 return;
             // Pane splits
             case XKB_KEY_D:
             case XKB_KEY_d:
-                if (tmux_controller_ && tmux_controller_->is_active())
-                    tmux_client_->send_command("split-window -h");
+                if (m_tmux_controller && m_tmux_controller->is_active())
+                    m_tmux_client->send_command("split-window -h");
                 else
-                    tabs_->split_pane(SplitDir::Vertical);
-                needs_render_ = true;
+                    m_tabs->split_pane(SplitDir::Vertical);
+                m_needs_render = true;
                 return;
             case XKB_KEY_E:
             case XKB_KEY_e:
-                if (tmux_controller_ && tmux_controller_->is_active())
-                    tmux_client_->send_command("split-window -v");
+                if (m_tmux_controller && m_tmux_controller->is_active())
+                    m_tmux_client->send_command("split-window -v");
                 else
-                    tabs_->split_pane(SplitDir::Horizontal);
-                needs_render_ = true;
+                    m_tabs->split_pane(SplitDir::Horizontal);
+                m_needs_render = true;
                 return;
             case XKB_KEY_W:
             case XKB_KEY_w:
-                if (tmux_controller_ && tmux_controller_->is_active()) {
-                    tmux_client_->send_command("kill-pane");
+                if (m_tmux_controller && m_tmux_controller->is_active()) {
+                    m_tmux_client->send_command("kill-pane");
                 } else {
-                    if (!tabs_->close_focused_pane()) {
+                    if (!m_tabs->close_focused_pane()) {
                         if (on_close) on_close(this);
                     }
                 }
-                needs_render_ = true;
+                m_needs_render = true;
                 return;
             // Pane navigation
             case XKB_KEY_Left:
-                tabs_->navigate_pane(NavDir::Left);
+                m_tabs->navigate_pane(NavDir::Left);
                 return;
             case XKB_KEY_Right:
-                tabs_->navigate_pane(NavDir::Right);
+                m_tabs->navigate_pane(NavDir::Right);
                 return;
             case XKB_KEY_Up:
-                tabs_->navigate_pane(NavDir::Up);
+                m_tabs->navigate_pane(NavDir::Up);
                 return;
             case XKB_KEY_Down:
-                tabs_->navigate_pane(NavDir::Down);
+                m_tabs->navigate_pane(NavDir::Down);
                 return;
             // New tab
             case XKB_KEY_T:
             case XKB_KEY_t:
-                if (tmux_controller_ && tmux_controller_->is_active())
-                    tmux_client_->send_command("new-window");
+                if (m_tmux_controller && m_tmux_controller->is_active())
+                    m_tmux_client->send_command("new-window");
                 else
-                    tabs_->new_tab();
+                    m_tabs->new_tab();
                 recompute();
-                needs_render_ = true;
+                m_needs_render = true;
                 return;
         }
     }
@@ -503,17 +503,17 @@ void Window::handle_key(const KeyEvent &key) {
         switch (key.keysym) {
             case XKB_KEY_plus:
             case XKB_KEY_equal:
-                config_.font_size += 1.0f;
+                m_config.font_size += 1.0f;
                 resize_font();
                 return;
             case XKB_KEY_minus:
-                if (config_.font_size > 6.0f) {
-                    config_.font_size -= 1.0f;
+                if (m_config.font_size > 6.0f) {
+                    m_config.font_size -= 1.0f;
                     resize_font();
                 }
                 return;
             case XKB_KEY_0:
-                config_.font_size = 10.0f;
+                m_config.font_size = 10.0f;
                 resize_font();
                 return;
         }
@@ -521,15 +521,15 @@ void Window::handle_key(const KeyEvent &key) {
 
     // Tab cycling: Ctrl+Tab / Ctrl+Shift+Tab
     if (ctrl && !shift && key.keysym == XKB_KEY_Tab) {
-        tabs_->next_tab();
+        m_tabs->next_tab();
         recompute();
-        needs_render_ = true;
+        m_needs_render = true;
         return;
     }
     if (ctrl && shift && key.keysym == XKB_KEY_ISO_Left_Tab) {
-        tabs_->prev_tab();
+        m_tabs->prev_tab();
         recompute();
-        needs_render_ = true;
+        m_needs_render = true;
         return;
     }
 
@@ -537,10 +537,10 @@ void Window::handle_key(const KeyEvent &key) {
     bool alt = key.mods & KeyMod::Alt;
     if (alt && key.keysym >= XKB_KEY_1 && key.keysym <= XKB_KEY_9) {
         int idx = key.keysym - XKB_KEY_1;
-        if (idx < tabs_->tab_count()) {
-            tabs_->activate_tab(idx);
+        if (idx < m_tabs->tab_count()) {
+            m_tabs->activate_tab(idx);
             recompute();
-            needs_render_ = true;
+            m_needs_render = true;
         }
         return;
     }
@@ -548,12 +548,12 @@ void Window::handle_key(const KeyEvent &key) {
     // Shift+PageUp/Down for scrolling
     if (shift && key.keysym == XKB_KEY_Page_Up) {
         screen.scroll_viewport(-screen.rows() / 2);
-        needs_render_ = true;
+        m_needs_render = true;
         return;
     }
     if (shift && key.keysym == XKB_KEY_Page_Down) {
         screen.scroll_viewport(screen.rows() / 2);
-        needs_render_ = true;
+        m_needs_render = true;
         return;
     }
 
@@ -562,33 +562,33 @@ void Window::handle_key(const KeyEvent &key) {
     if (!seq.empty()) {
         if (!screen.at_bottom()) {
             screen.scroll_to_bottom();
-            needs_render_ = true;
+            m_needs_render = true;
         }
         pane->write(seq);
     }
 }
 
 void Window::handle_mouse(const MouseEvent &mouse) {
-    Tab *tab = tabs_->active_tab();
+    Tab *tab = m_tabs->active_tab();
     if (!tab) return;
 
-    const auto &met = renderer_.metrics();
+    const auto &met = m_renderer.metrics();
     int bar_h = tab_bar_height();
 
     // Tab bar click handling
     if (bar_h > 0 && mouse.y < bar_h) {
         if (mouse.pressed && !mouse.motion) {
-            int hit = renderer_.tab_hit_test(*tabs_, mouse.x);
+            int hit = m_renderer.tab_hit_test(*m_tabs, mouse.x);
             if (hit >= 0) {
                 if (mouse.button == MouseButton::Left) {
-                    tabs_->activate_tab(hit);
+                    m_tabs->activate_tab(hit);
                 } else if (mouse.button == MouseButton::Middle) {
-                    if (!tabs_->close_tab(hit)) {
+                    if (!m_tabs->close_tab(hit)) {
                         if (on_close) on_close(this);
                     }
                 }
                 recompute();
-                needs_render_ = true;
+                m_needs_render = true;
             }
         }
         return;
@@ -614,7 +614,7 @@ void Window::handle_mouse(const MouseEvent &mouse) {
     if (target_pane != tab->focused_pane) {
         tab->focused_pane = target_pane;
         target_pane->has_activity = false;
-        needs_render_ = true;
+        m_needs_render = true;
     }
 
     ScreenBuffer &screen = target_pane->screen();
@@ -664,7 +664,7 @@ void Window::handle_mouse(const MouseEvent &mouse) {
         } else {
             int delta = mouse.button == MouseButton::ScrollUp ? -3 : 3;
             screen.scroll_viewport(delta);
-            needs_render_ = true;
+            m_needs_render = true;
         }
     }
 
@@ -714,7 +714,7 @@ void Window::handle_mouse(const MouseEvent &mouse) {
                 screen.selection.end_line = abs_line;
                 screen.selection.end_col = wend;
                 std::string text = screen.get_selection_text();
-                if (!text.empty()) platform_->set_clipboard(text, true);
+                if (!text.empty()) m_platform->set_clipboard(text, true);
             } else if (target_pane->click_count == 3) {
                 target_pane->selecting = false;
                 const Line &line = screen.line(cell_row);
@@ -724,13 +724,13 @@ void Window::handle_mouse(const MouseEvent &mouse) {
                 screen.selection.end_line = abs_line;
                 screen.selection.end_col = (int)line.cells.size() - 1;
                 std::string text = screen.get_selection_text();
-                if (!text.empty()) platform_->set_clipboard(text, true);
+                if (!text.empty()) m_platform->set_clipboard(text, true);
             }
-            needs_render_ = true;
+            m_needs_render = true;
         } else if (mouse.motion && target_pane->selecting) {
             screen.selection.end_line = screen.absolute_line(cell_row);
             screen.selection.end_col = cell_col;
-            needs_render_ = true;
+            m_needs_render = true;
         } else if (mouse.button == MouseButton::Left && !mouse.pressed && !mouse.motion) {
             if (target_pane->selecting) {
                 target_pane->selecting = false;
@@ -741,13 +741,13 @@ void Window::handle_mouse(const MouseEvent &mouse) {
                 } else {
                     std::string text = screen.get_selection_text();
                     if (!text.empty()) {
-                        platform_->set_clipboard(text, true);
+                        m_platform->set_clipboard(text, true);
                     }
                 }
-                needs_render_ = true;
+                m_needs_render = true;
             }
         } else if (mouse.button == MouseButton::Middle && mouse.pressed) {
-            std::string text = platform_->get_clipboard(true);
+            std::string text = m_platform->get_clipboard(true);
             if (!text.empty()) {
                 if (screen.bracketed_paste()) {
                     target_pane->write("\033[200~");
@@ -763,30 +763,30 @@ void Window::handle_mouse(const MouseEvent &mouse) {
 
 void Window::render_if_needed() {
     // Clean up deferred tmux objects (safe now — call stack has unwound)
-    tmux_stale_controller_.reset();
-    tmux_stale_client_.reset();
+    m_tmux_stale_controller.reset();
+    m_tmux_stale_client.reset();
 
-    if (!needs_render_) return;
+    if (!m_needs_render) return;
 
-    platform_->make_current();
-    renderer_.begin_frame(config_);
+    m_platform->make_current();
+    m_renderer.begin_frame(m_config);
 
-    Tab *tab = tabs_->active_tab();
+    Tab *tab = m_tabs->active_tab();
     if (tab) {
         int bar_h = tab_bar_height();
 
         // Render tab bar if multiple tabs
         if (bar_h > 0) {
-            renderer_.render_tab_bar(*tabs_, config_, bar_h);
-            renderer_.flush();
+            m_renderer.render_tab_bar(*m_tabs, m_config, bar_h);
+            m_renderer.flush();
         }
 
         // Render dot grid in dead zone for tmux-managed tabs
         if (tab->tmux_managed) {
-            const auto &m = renderer_.metrics();
-            renderer_.render_dot_grid(0, bar_h, win_w_, win_h_ - bar_h,
+            const auto &m = m_renderer.metrics();
+            m_renderer.render_dot_grid(0, bar_h, m_win_w, m_win_h - bar_h,
                                        m.cell_width, m.cell_height);
-            renderer_.flush();
+            m_renderer.flush();
         }
 
         // Render each pane with scissor clipping
@@ -799,7 +799,7 @@ void Window::render_if_needed() {
 
         for (Pane *p : panes) {
             const auto &r = p->rect;
-            renderer_.render_pane(p->screen(), config_, r.x, r.y, r.w, r.h,
+            m_renderer.render_pane(p->screen(), m_config, r.x, r.y, r.w, r.h,
                                  p == tab->focused_pane);
         }
 
@@ -835,7 +835,7 @@ void Window::render_if_needed() {
                         int border_x = right_edge;
                         int border_w = left_edge - right_edge;
                         if (border_w > 0) {
-                            renderer_.render_border((float)border_x, (float)top_edge,
+                            m_renderer.render_border((float)border_x, (float)top_edge,
                                                    (float)border_w, (float)(bottom_edge - top_edge),
                                                    0.3f, 0.3f, 0.3f);
                         }
@@ -867,7 +867,7 @@ void Window::render_if_needed() {
                         int border_y = bottom_edge;
                         int border_h = top_edge_s - bottom_edge;
                         if (border_h > 0) {
-                            renderer_.render_border((float)left_edge, (float)border_y,
+                            m_renderer.render_border((float)left_edge, (float)border_y,
                                                    (float)(right_edge - left_edge), (float)border_h,
                                                    0.3f, 0.3f, 0.3f);
                         }
@@ -879,12 +879,12 @@ void Window::render_if_needed() {
             };
 
             draw_borders(tab->layout.root());
-            renderer_.flush();
+            m_renderer.flush();
         }
     }
 
-    platform_->swap_buffers();
-    needs_render_ = false;
+    m_platform->swap_buffers();
+    m_needs_render = false;
 }
 
 } // namespace rivt

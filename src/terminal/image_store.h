@@ -38,7 +38,7 @@ public:
     // Chunked transfer
     void begin_transfer(const KittyGraphicsCommand &cmd);
     void append_data(const std::string &base64_chunk);
-    bool has_pending_transfer() const { return !pending_payload_.empty() || pending_id_ != 0; }
+    bool has_pending_transfer() const { return !m_pending_payload.empty() || m_pending_id != 0; }
     KittyGraphicsCommand finish_transfer();
 
     // Placement
@@ -56,29 +56,29 @@ public:
     void ensure_texture(StoredImage &img);
 
     // Access
-    const std::unordered_map<uint32_t, StoredImage> &images() const { return images_; }
-    std::unordered_map<uint32_t, StoredImage> &images() { return images_; }
-    const std::vector<ImagePlacement> &placements() const { return placements_; }
+    const std::unordered_map<uint32_t, StoredImage> &images() const { return m_images; }
+    std::unordered_map<uint32_t, StoredImage> &images() { return m_images; }
+    const std::vector<ImagePlacement> &placements() const { return m_placements; }
 
 private:
     bool decode_image(const std::string &base64_payload, int format,
                       int src_width, int src_height, StoredImage &out);
 
-    std::unordered_map<uint32_t, StoredImage> images_;
-    std::vector<ImagePlacement> placements_;
+    std::unordered_map<uint32_t, StoredImage> m_images;
+    std::vector<ImagePlacement> m_placements;
 
     // Chunked transfer state
-    uint32_t pending_id_ = 0;
-    uint32_t pending_placement_id_ = 0;
-    int pending_format_ = 32;
-    int pending_src_width_ = 0;
-    int pending_src_height_ = 0;
-    int pending_columns_ = 0;
-    int pending_rows_ = 0;
-    int pending_z_index_ = 0;
-    std::string pending_payload_;
+    uint32_t m_pending_id = 0;
+    uint32_t m_pending_placement_id = 0;
+    int m_pending_format = 32;
+    int m_pending_src_width = 0;
+    int m_pending_src_height = 0;
+    int m_pending_columns = 0;
+    int m_pending_rows = 0;
+    int m_pending_z_index = 0;
+    std::string m_pending_payload;
 
-    uint32_t next_id_ = 1;
+    uint32_t m_next_id = 1;
 };
 
 } // namespace rivt

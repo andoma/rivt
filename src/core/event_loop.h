@@ -20,8 +20,8 @@ public:
     // Returns false if should quit
     bool poll(int timeout_ms = -1);
 
-    void request_quit() { quit_ = true; }
-    bool should_quit() const { return quit_; }
+    void request_quit() { m_quit = true; }
+    bool should_quit() const { return m_quit; }
 
     // Timer support: returns timer id
     using TimerCallback = std::function<void()>;
@@ -29,14 +29,14 @@ public:
     void remove_timer(int timer_id);
 
 private:
-    int epoll_fd_;
-    bool quit_ = false;
+    int m_epoll_fd;
+    bool m_quit = false;
 
     struct FdEntry {
         int fd;
         Callback cb;
     };
-    std::vector<FdEntry> fds_;
+    std::vector<FdEntry> m_fds;
 
     struct TimerEntry {
         int id;
@@ -44,8 +44,8 @@ private:
         TimerCallback cb;
         bool repeating;
     };
-    std::vector<TimerEntry> timers_;
-    int next_timer_id_ = 1;
+    std::vector<TimerEntry> m_timers;
+    int m_next_timer_id = 1;
 };
 
 } // namespace rivt

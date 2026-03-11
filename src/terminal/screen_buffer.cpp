@@ -7,16 +7,16 @@
 namespace rivt {
 
 ScreenBuffer::ScreenBuffer(int cols, int rows, int scrollback_limit)
-    : cols_(cols), rows_(rows), scrollback_limit_(scrollback_limit),
-      scroll_bottom_(rows - 1) {
-    screen_.resize(rows, Line(cols));
-    alt_screen_.resize(rows, Line(cols));
+    : m_cols(cols), m_rows(rows), m_scrollback_limit(scrollback_limit),
+      m_scroll_bottom(rows - 1) {
+    m_screen.resize(rows, Line(cols));
+    m_alt_screen.resize(rows, Line(cols));
 }
 
 void ScreenBuffer::linearize_screen() {
-    if (screen_top_ == 0) return;
-    std::rotate(screen_.begin(), screen_.begin() + screen_top_, screen_.end());
-    screen_top_ = 0;
+    if (m_screen_top == 0) return;
+    std::rotate(m_screen.begin(), m_screen.begin() + m_screen_top, m_screen.end());
+    m_screen_top = 0;
 }
 
 void ScreenBuffer::resize(int cols, int rows) {
@@ -26,58 +26,58 @@ void ScreenBuffer::resize(int cols, int rows) {
     // TODO: proper reflow of soft-wrapped lines
 
     // Push lines that would be lost above the new viewport into scrollback
-    if (rows < rows_ && cursor_row_ >= rows) {
-        int lines_to_push = cursor_row_ - rows + 1;
-        for (int i = 0; i < lines_to_push && !screen_.empty(); i++) {
-            push_scrollback(std::move(screen_.front()));
-            screen_.erase(screen_.begin());
+    if (rows < m_rows && m_cursor_row >= rows) {
+        int lines_to_push = m_cursor_row - rows + 1;
+        for (int i = 0; i < lines_to_push && !m_screen.empty(); i++) {
+            push_scrollback(std::move(m_screen.front()));
+            m_screen.erase(m_screen.begin());
         }
-        cursor_row_ -= lines_to_push;
+        m_cursor_row -= lines_to_push;
     }
 
     // Resize existing lines
-    for (auto &line : screen_) {
+    for (auto &line : m_screen) {
         line.resize(cols);
     }
 
     // Add or remove rows
-    while ((int)screen_.size() < rows)
-        screen_.emplace_back(cols);
-    while ((int)screen_.size() > rows)
-        screen_.pop_back();
+    while ((int)m_screen.size() < rows)
+        m_screen.emplace_back(cols);
+    while ((int)m_screen.size() > rows)
+        m_screen.pop_back();
 
     // Resize alt screen
-    alt_screen_.resize(rows, Line(cols));
-    for (auto &line : alt_screen_) {
+    m_alt_screen.resize(rows, Line(cols));
+    for (auto &line : m_alt_screen) {
         line.resize(cols);
     }
 
-    cols_ = cols;
-    rows_ = rows;
-    scroll_top_ = 0;
-    scroll_bottom_ = rows_ - 1;
+    m_cols = cols;
+    m_rows = rows;
+    m_scroll_top = 0;
+    m_scroll_bottom = m_rows - 1;
 
     // Clamp cursor
-    cursor_row_ = std::clamp(cursor_row_, 0, rows_ - 1);
-    cursor_col_ = std::clamp(cursor_col_, 0, cols_ - 1);
+    m_cursor_row = std::clamp(m_cursor_row, 0, m_rows - 1);
+    m_cursor_col = std::clamp(m_cursor_col, 0, m_cols - 1);
 
     // Mark all dirty
-    for (auto &line : screen_) line.dirty = true;
+    for (auto &line : m_screen) line.dirty = true;
 }
 
 const Line &ScreenBuffer::line(int row) const {
-    if (viewport_offset_ != 0) {
-        int sb_row = (int)scrollback_.size() + viewport_offset_ + row;
+    if (m_viewport_offset != 0) {
+        int sb_row = (int)m_scrollback.size() + m_viewport_offset + row;
         if (sb_row < 0) {
             static Line empty(0);
             return empty;
         }
-        if (sb_row < (int)scrollback_.size()) {
-            return scrollback_[sb_row];
+        if (sb_row < (int)m_scrollback.size()) {
+            return m_scrollback[sb_row];
         }
-        row = sb_row - (int)scrollback_.size();
+        row = sb_row - (int)m_scrollback.size();
     }
-    if (row >= 0 && row < (int)screen_.size())
+    if (row >= 0 && row < (int)m_screen.size())
         return sline(row);
     static Line empty(0);
     return empty;
@@ -92,91 +92,91 @@ const Cell &ScreenBuffer::cell(int row, int col) const {
 }
 
 const Line &ScreenBuffer::scrollback_line(int idx) const {
-    int actual = (int)scrollback_.size() - 1 - idx;
-    if (actual >= 0 && actual < (int)scrollback_.size())
-        return scrollback_[actual];
+    int actual = (int)m_scrollback.size() - 1 - idx;
+    if (actual >= 0 && actual < (int)m_scrollback.size())
+        return m_scrollback[actual];
     static Line empty(0);
     return empty;
 }
 
 void ScreenBuffer::scroll_viewport(int delta) {
-    int max_offset = -(int)scrollback_.size();
-    viewport_offset_ = std::clamp(viewport_offset_ + delta, max_offset, 0);
+    int max_offset = -(int)m_scrollback.size();
+    m_viewport_offset = std::clamp(m_viewport_offset + delta, max_offset, 0);
 }
 
 void ScreenBuffer::scroll_to_bottom() {
-    viewport_offset_ = 0;
+    m_viewport_offset = 0;
 }
 
 bool ScreenBuffer::any_dirty() const {
-    for (auto &line : screen_)
+    for (auto &line : m_screen)
         if (line.dirty) return true;
     return false;
 }
 
 void ScreenBuffer::clear_dirty() {
-    for (auto &line : screen_)
+    for (auto &line : m_screen)
         line.dirty = false;
 }
 
 void ScreenBuffer::push_scrollback(Line &&line) {
-    if (!using_alt_screen_) {
-        scrollback_.push_back(std::move(line));
-        while ((int)scrollback_.size() > scrollback_limit_) {
-            scrollback_.pop_front();
-            images.gc_placements((int)scrollback_.size());
+    if (!m_using_alt_screen) {
+        m_scrollback.push_back(std::move(line));
+        while ((int)m_scrollback.size() > m_scrollback_limit) {
+            m_scrollback.pop_front();
+            images.gc_placements((int)m_scrollback.size());
         }
     }
 }
 
 void ScreenBuffer::put_char(uint32_t cp) {
-    if (cursor_col_ >= cols_) {
+    if (m_cursor_col >= m_cols) {
         // Auto-wrap
-        Line &wl = sline(cursor_row_);
-        wl.cells[cols_ - 1].attrs |= ATTR_WRAP;
+        Line &wl = sline(m_cursor_row);
+        wl.cells[m_cols - 1].attrs |= ATTR_WRAP;
         wl.wrapped = true;
         new_line();
-        cursor_col_ = 0;
+        m_cursor_col = 0;
     }
 
-    Line &cl = sline(cursor_row_);
-    Cell &c = cl.cells[cursor_col_];
+    Line &cl = sline(m_cursor_row);
+    Cell &c = cl.cells[m_cursor_col];
     c.codepoint = cp;
-    c.fg = cur_fg_;
-    c.bg = bg_;
-    c.attrs = cur_attrs_;
+    c.fg = m_cur_fg;
+    c.bg = m_bg;
+    c.attrs = m_cur_attrs;
     cl.dirty = true;
-    cursor_col_++;
+    m_cursor_col++;
 }
 
 void ScreenBuffer::new_line() {
-    if (cursor_row_ == scroll_bottom_) {
-        scroll_up(scroll_top_, scroll_bottom_);
-    } else if (cursor_row_ < rows_ - 1) {
-        cursor_row_++;
+    if (m_cursor_row == m_scroll_bottom) {
+        scroll_up(m_scroll_top, m_scroll_bottom);
+    } else if (m_cursor_row < m_rows - 1) {
+        m_cursor_row++;
     }
 }
 
 void ScreenBuffer::scroll_up(int top, int bottom, int count) {
     count = std::min(count, bottom - top + 1);
     for (int i = 0; i < count; i++) {
-        if (top == 0 && !using_alt_screen_) {
+        if (top == 0 && !m_using_alt_screen) {
             push_scrollback(std::move(sline(0)));
-            if (viewport_offset_ < 0)
-                viewport_offset_--;
+            if (m_viewport_offset < 0)
+                m_viewport_offset--;
         }
-        if (top == 0 && bottom == rows_ - 1) {
+        if (top == 0 && bottom == m_rows - 1) {
             // Fast path: rotate ring buffer instead of shifting all lines
-            sline(0) = Line(cols_);
-            screen_top_ = (screen_top_ + 1) % (int)screen_.size();
-            sline(rows_ - 1).dirty = true;
+            sline(0) = Line(m_cols);
+            m_screen_top = (m_screen_top + 1) % (int)m_screen.size();
+            sline(m_rows - 1).dirty = true;
         } else {
             // Scroll region: shift lines within region
             for (int r = top; r < bottom; r++) {
                 sline(r) = std::move(sline(r + 1));
                 sline(r).dirty = true;
             }
-            sline(bottom) = Line(cols_);
+            sline(bottom) = Line(m_cols);
             sline(bottom).dirty = true;
         }
     }
@@ -185,102 +185,102 @@ void ScreenBuffer::scroll_up(int top, int bottom, int count) {
 void ScreenBuffer::scroll_down(int top, int bottom, int count) {
     count = std::min(count, bottom - top + 1);
     for (int i = 0; i < count; i++) {
-        if (top == 0 && bottom == rows_ - 1) {
+        if (top == 0 && bottom == m_rows - 1) {
             // Fast path: rotate ring buffer backwards
-            screen_top_ = (screen_top_ + (int)screen_.size() - 1) % (int)screen_.size();
-            sline(0) = Line(cols_);
+            m_screen_top = (m_screen_top + (int)m_screen.size() - 1) % (int)m_screen.size();
+            sline(0) = Line(m_cols);
             sline(0).dirty = true;
         } else {
             for (int r = bottom; r > top; r--) {
                 sline(r) = std::move(sline(r - 1));
                 sline(r).dirty = true;
             }
-            sline(top) = Line(cols_);
+            sline(top) = Line(m_cols);
             sline(top).dirty = true;
         }
     }
 }
 
 void ScreenBuffer::erase_cells(int row, int start_col, int end_col) {
-    if (row < 0 || row >= rows_) return;
+    if (row < 0 || row >= m_rows) return;
     start_col = std::max(start_col, 0);
-    end_col = std::min(end_col, cols_ - 1);
+    end_col = std::min(end_col, m_cols - 1);
     Line &l = sline(row);
     for (int c = start_col; c <= end_col; c++) {
         l.cells[c].reset();
-        l.cells[c].bg = bg_;
+        l.cells[c].bg = m_bg;
     }
     l.dirty = true;
 }
 
 void ScreenBuffer::erase_line(int row) {
-    erase_cells(row, 0, cols_ - 1);
+    erase_cells(row, 0, m_cols - 1);
 }
 
 void ScreenBuffer::erase_display(int mode) {
     switch (mode) {
         case 0: // Below
-            erase_cells(cursor_row_, cursor_col_, cols_ - 1);
-            for (int r = cursor_row_ + 1; r < rows_; r++)
+            erase_cells(m_cursor_row, m_cursor_col, m_cols - 1);
+            for (int r = m_cursor_row + 1; r < m_rows; r++)
                 erase_line(r);
             break;
         case 1: // Above
-            erase_cells(cursor_row_, 0, cursor_col_);
-            for (int r = 0; r < cursor_row_; r++)
+            erase_cells(m_cursor_row, 0, m_cursor_col);
+            for (int r = 0; r < m_cursor_row; r++)
                 erase_line(r);
             break;
         case 2: // All
-            for (int r = 0; r < rows_; r++)
+            for (int r = 0; r < m_rows; r++)
                 erase_line(r);
             break;
         case 3: // All + scrollback
-            scrollback_.clear();
+            m_scrollback.clear();
             images.remove_all();
-            for (int r = 0; r < rows_; r++)
+            for (int r = 0; r < m_rows; r++)
                 erase_line(r);
             break;
     }
 }
 
 void ScreenBuffer::insert_chars(int count) {
-    auto &line = sline(cursor_row_);
-    for (int i = cols_ - 1; i >= cursor_col_ + count; i--) {
+    auto &line = sline(m_cursor_row);
+    for (int i = m_cols - 1; i >= m_cursor_col + count; i--) {
         line.cells[i] = line.cells[i - count];
     }
-    for (int i = cursor_col_; i < std::min(cursor_col_ + count, cols_); i++) {
+    for (int i = m_cursor_col; i < std::min(m_cursor_col + count, m_cols); i++) {
         line.cells[i].reset();
-        line.cells[i].bg = bg_;
+        line.cells[i].bg = m_bg;
     }
     line.dirty = true;
 }
 
 void ScreenBuffer::delete_chars(int count) {
-    auto &line = sline(cursor_row_);
-    for (int i = cursor_col_; i < cols_ - count; i++) {
+    auto &line = sline(m_cursor_row);
+    for (int i = m_cursor_col; i < m_cols - count; i++) {
         line.cells[i] = line.cells[i + count];
     }
-    for (int i = std::max(cols_ - count, cursor_col_); i < cols_; i++) {
+    for (int i = std::max(m_cols - count, m_cursor_col); i < m_cols; i++) {
         line.cells[i].reset();
-        line.cells[i].bg = bg_;
+        line.cells[i].bg = m_bg;
     }
     line.dirty = true;
 }
 
 void ScreenBuffer::insert_lines(int count) {
-    if (cursor_row_ >= scroll_top_ && cursor_row_ <= scroll_bottom_) {
-        scroll_down(cursor_row_, scroll_bottom_, count);
+    if (m_cursor_row >= m_scroll_top && m_cursor_row <= m_scroll_bottom) {
+        scroll_down(m_cursor_row, m_scroll_bottom, count);
     }
 }
 
 void ScreenBuffer::delete_lines(int count) {
-    if (cursor_row_ >= scroll_top_ && cursor_row_ <= scroll_bottom_) {
-        scroll_up(cursor_row_, scroll_bottom_, count);
+    if (m_cursor_row >= m_scroll_top && m_cursor_row <= m_scroll_bottom) {
+        scroll_up(m_cursor_row, m_scroll_bottom, count);
     }
 }
 
 void ScreenBuffer::set_cursor(int row, int col) {
-    cursor_row_ = std::clamp(row, 0, rows_ - 1);
-    cursor_col_ = std::clamp(col, 0, cols_ - 1);
+    m_cursor_row = std::clamp(row, 0, m_rows - 1);
+    m_cursor_col = std::clamp(col, 0, m_cols - 1);
 }
 
 // VtHandler implementation
@@ -295,10 +295,10 @@ void ScreenBuffer::execute(uint8_t code) {
             if (on_bell) on_bell();
             break;
         case 0x08: // BS
-            if (cursor_col_ > 0) cursor_col_--;
+            if (m_cursor_col > 0) m_cursor_col--;
             break;
         case 0x09: // HT (tab)
-            cursor_col_ = std::min(((cursor_col_ / 8) + 1) * 8, cols_ - 1);
+            m_cursor_col = std::min(((m_cursor_col / 8) + 1) * 8, m_cols - 1);
             break;
         case 0x0A: // LF
         case 0x0B: // VT
@@ -306,16 +306,16 @@ void ScreenBuffer::execute(uint8_t code) {
             new_line();
             break;
         case 0x0D: // CR
-            cursor_col_ = 0;
+            m_cursor_col = 0;
             break;
     }
 }
 
 void ScreenBuffer::handle_sgr(const CsiParams &params) {
     if (params.count() == 0) {
-        cur_fg_ = COLOR_FLAG_DEFAULT;
-        bg_ = COLOR_FLAG_DEFAULT;
-        cur_attrs_ = 0;
+        m_cur_fg = COLOR_FLAG_DEFAULT;
+        m_bg = COLOR_FLAG_DEFAULT;
+        m_cur_attrs = 0;
         return;
     }
 
@@ -324,54 +324,54 @@ void ScreenBuffer::handle_sgr(const CsiParams &params) {
 
         switch (p) {
             case 0: // Reset
-                cur_fg_ = COLOR_FLAG_DEFAULT;
-                bg_ = COLOR_FLAG_DEFAULT;
-                cur_attrs_ = 0;
+                m_cur_fg = COLOR_FLAG_DEFAULT;
+                m_bg = COLOR_FLAG_DEFAULT;
+                m_cur_attrs = 0;
                 break;
-            case 1: cur_attrs_ |= ATTR_BOLD; break;
-            case 2: cur_attrs_ |= ATTR_DIM; break;
-            case 3: cur_attrs_ |= ATTR_ITALIC; break;
+            case 1: m_cur_attrs |= ATTR_BOLD; break;
+            case 2: m_cur_attrs |= ATTR_DIM; break;
+            case 3: m_cur_attrs |= ATTR_ITALIC; break;
             case 4: {
                 // Check for sub-parameters (underline style)
-                cur_attrs_ &= ~ATTR_UNDERLINE_MASK;
+                m_cur_attrs &= ~ATTR_UNDERLINE_MASK;
                 if (!params.params[i].sub.empty()) {
                     int style = params.params[i].sub[0];
                     switch (style) {
                         case 0: break; // no underline
-                        case 1: cur_attrs_ |= ATTR_UNDERLINE; break;
-                        case 2: cur_attrs_ |= ATTR_UNDERLINE_DOUBLE; break;
-                        case 3: cur_attrs_ |= ATTR_UNDERLINE_CURLY; break;
-                        default: cur_attrs_ |= ATTR_UNDERLINE; break;
+                        case 1: m_cur_attrs |= ATTR_UNDERLINE; break;
+                        case 2: m_cur_attrs |= ATTR_UNDERLINE_DOUBLE; break;
+                        case 3: m_cur_attrs |= ATTR_UNDERLINE_CURLY; break;
+                        default: m_cur_attrs |= ATTR_UNDERLINE; break;
                     }
                 } else {
-                    cur_attrs_ |= ATTR_UNDERLINE;
+                    m_cur_attrs |= ATTR_UNDERLINE;
                 }
                 break;
             }
-            case 7: cur_attrs_ |= ATTR_INVERSE; break;
-            case 8: cur_attrs_ |= ATTR_HIDDEN; break;
-            case 9: cur_attrs_ |= ATTR_STRIKETHROUGH; break;
-            case 21: cur_attrs_ &= ~ATTR_BOLD; break;
-            case 22: cur_attrs_ &= ~(ATTR_BOLD | ATTR_DIM); break;
-            case 23: cur_attrs_ &= ~ATTR_ITALIC; break;
-            case 24: cur_attrs_ &= ~ATTR_UNDERLINE_MASK; break;
-            case 27: cur_attrs_ &= ~ATTR_INVERSE; break;
-            case 28: cur_attrs_ &= ~ATTR_HIDDEN; break;
-            case 29: cur_attrs_ &= ~ATTR_STRIKETHROUGH; break;
+            case 7: m_cur_attrs |= ATTR_INVERSE; break;
+            case 8: m_cur_attrs |= ATTR_HIDDEN; break;
+            case 9: m_cur_attrs |= ATTR_STRIKETHROUGH; break;
+            case 21: m_cur_attrs &= ~ATTR_BOLD; break;
+            case 22: m_cur_attrs &= ~(ATTR_BOLD | ATTR_DIM); break;
+            case 23: m_cur_attrs &= ~ATTR_ITALIC; break;
+            case 24: m_cur_attrs &= ~ATTR_UNDERLINE_MASK; break;
+            case 27: m_cur_attrs &= ~ATTR_INVERSE; break;
+            case 28: m_cur_attrs &= ~ATTR_HIDDEN; break;
+            case 29: m_cur_attrs &= ~ATTR_STRIKETHROUGH; break;
 
             // Foreground colors
             case 30: case 31: case 32: case 33:
             case 34: case 35: case 36: case 37:
-                cur_fg_ = color_palette(p - 30);
+                m_cur_fg = color_palette(p - 30);
                 break;
             case 38: // Extended foreground
                 if (i + 1 < params.count()) {
                     int mode = params.get(i + 1);
                     if (mode == 5 && i + 2 < params.count()) {
-                        cur_fg_ = color_palette(params.get(i + 2));
+                        m_cur_fg = color_palette(params.get(i + 2));
                         i += 2;
                     } else if (mode == 2 && i + 4 < params.count()) {
-                        cur_fg_ = color_rgb(params.get(i + 2), params.get(i + 3), params.get(i + 4));
+                        m_cur_fg = color_rgb(params.get(i + 2), params.get(i + 3), params.get(i + 4));
                         i += 4;
                     }
                 }
@@ -381,30 +381,30 @@ void ScreenBuffer::handle_sgr(const CsiParams &params) {
                     if (sub.size() >= 1 && sub[0] == 2 && sub.size() >= 4) {
                         // 38:2::R:G:B  (sub[1] may be colorspace, often empty)
                         int r_idx = (sub.size() >= 5) ? 2 : 1;
-                        cur_fg_ = color_rgb(
+                        m_cur_fg = color_rgb(
                             std::max(0, sub[r_idx]),
                             std::max(0, sub[r_idx + 1]),
                             std::max(0, sub[r_idx + 2]));
                     } else if (sub.size() >= 1 && sub[0] == 5 && sub.size() >= 2) {
-                        cur_fg_ = color_palette(std::max(0, sub[1]));
+                        m_cur_fg = color_palette(std::max(0, sub[1]));
                     }
                 }
                 break;
-            case 39: cur_fg_ = COLOR_FLAG_DEFAULT; break;
+            case 39: m_cur_fg = COLOR_FLAG_DEFAULT; break;
 
             // Background colors
             case 40: case 41: case 42: case 43:
             case 44: case 45: case 46: case 47:
-                bg_ = color_palette(p - 40);
+                m_bg = color_palette(p - 40);
                 break;
             case 48: // Extended background
                 if (i + 1 < params.count()) {
                     int mode = params.get(i + 1);
                     if (mode == 5 && i + 2 < params.count()) {
-                        bg_ = color_palette(params.get(i + 2));
+                        m_bg = color_palette(params.get(i + 2));
                         i += 2;
                     } else if (mode == 2 && i + 4 < params.count()) {
-                        bg_ = color_rgb(params.get(i + 2), params.get(i + 3), params.get(i + 4));
+                        m_bg = color_rgb(params.get(i + 2), params.get(i + 3), params.get(i + 4));
                         i += 4;
                     }
                 }
@@ -412,27 +412,27 @@ void ScreenBuffer::handle_sgr(const CsiParams &params) {
                     auto &sub = params.params[i].sub;
                     if (sub.size() >= 1 && sub[0] == 2 && sub.size() >= 4) {
                         int r_idx = (sub.size() >= 5) ? 2 : 1;
-                        bg_ = color_rgb(
+                        m_bg = color_rgb(
                             std::max(0, sub[r_idx]),
                             std::max(0, sub[r_idx + 1]),
                             std::max(0, sub[r_idx + 2]));
                     } else if (sub.size() >= 1 && sub[0] == 5 && sub.size() >= 2) {
-                        bg_ = color_palette(std::max(0, sub[1]));
+                        m_bg = color_palette(std::max(0, sub[1]));
                     }
                 }
                 break;
-            case 49: bg_ = COLOR_FLAG_DEFAULT; break;
+            case 49: m_bg = COLOR_FLAG_DEFAULT; break;
 
             // Bright foreground
             case 90: case 91: case 92: case 93:
             case 94: case 95: case 96: case 97:
-                cur_fg_ = color_palette(p - 90 + 8);
+                m_cur_fg = color_palette(p - 90 + 8);
                 break;
 
             // Bright background
             case 100: case 101: case 102: case 103:
             case 104: case 105: case 106: case 107:
-                bg_ = color_palette(p - 100 + 8);
+                m_bg = color_palette(p - 100 + 8);
                 break;
         }
     }
@@ -442,46 +442,46 @@ void ScreenBuffer::set_mode(int mode, bool enable, bool dec_private) {
     if (!dec_private) return;
 
     switch (mode) {
-        case 1:    mode_app_cursor_ = enable; break;
-        case 12:   mode_cursor_blink_ = enable; break;
-        case 25:   cursor_visible_ = enable; break;
-        case 1000: mouse_mode_ = enable ? 1000 : 0; break;
-        case 1002: mouse_mode_ = enable ? 1002 : 0; break;
-        case 1003: mouse_mode_ = enable ? 1003 : 0; break;
-        case 1004: mode_focus_events_ = enable; break;
-        case 1006: mode_sgr_mouse_ = enable; break;
+        case 1:    m_mode_app_cursor = enable; break;
+        case 12:   m_mode_cursor_blink = enable; break;
+        case 25:   m_cursor_visible = enable; break;
+        case 1000: m_mouse_mode = enable ? 1000 : 0; break;
+        case 1002: m_mouse_mode = enable ? 1002 : 0; break;
+        case 1003: m_mouse_mode = enable ? 1003 : 0; break;
+        case 1004: m_mode_focus_events = enable; break;
+        case 1006: m_mode_sgr_mouse = enable; break;
         case 1049:
             if (enable) {
                 // Save cursor, switch to alt screen, clear
                 linearize_screen();
-                saved_cursor_ = { cursor_row_, cursor_col_, cur_fg_, bg_, cur_attrs_ };
-                if (!using_alt_screen_) {
-                    std::swap(screen_, alt_screen_);
-                    using_alt_screen_ = true;
-                    screen_top_ = 0;
+                m_saved_cursor = { m_cursor_row, m_cursor_col, m_cur_fg, m_bg, m_cur_attrs };
+                if (!m_using_alt_screen) {
+                    std::swap(m_screen, m_alt_screen);
+                    m_using_alt_screen = true;
+                    m_screen_top = 0;
                 }
-                for (auto &line : screen_) {
-                    line = Line(cols_);
+                for (auto &line : m_screen) {
+                    line = Line(m_cols);
                 }
                 set_cursor(0, 0);
             } else {
                 // Restore from alt screen
-                if (using_alt_screen_) {
+                if (m_using_alt_screen) {
                     linearize_screen();
-                    std::swap(screen_, alt_screen_);
-                    using_alt_screen_ = false;
-                    screen_top_ = 0;
+                    std::swap(m_screen, m_alt_screen);
+                    m_using_alt_screen = false;
+                    m_screen_top = 0;
                 }
-                cursor_row_ = saved_cursor_.row;
-                cursor_col_ = saved_cursor_.col;
-                cur_fg_ = saved_cursor_.fg;
-                bg_ = saved_cursor_.bg;
-                cur_attrs_ = saved_cursor_.attrs;
-                for (auto &line : screen_) line.dirty = true;
+                m_cursor_row = m_saved_cursor.row;
+                m_cursor_col = m_saved_cursor.col;
+                m_cur_fg = m_saved_cursor.fg;
+                m_bg = m_saved_cursor.bg;
+                m_cur_attrs = m_saved_cursor.attrs;
+                for (auto &line : m_screen) line.dirty = true;
             }
             break;
-        case 2004: mode_bracketed_paste_ = enable; break;
-        case 2027: mode_grapheme_cluster_ = enable; break;
+        case 2004: m_mode_bracketed_paste = enable; break;
+        case 2027: m_mode_grapheme_cluster = enable; break;
     }
 }
 
@@ -490,25 +490,25 @@ void ScreenBuffer::csi_dispatch(const CsiParams &params, char intermediate, char
 
     switch (final_byte) {
         case 'A': // CUU - cursor up
-            set_cursor(cursor_row_ - std::max(1, params.get(0, 1)), cursor_col_);
+            set_cursor(m_cursor_row - std::max(1, params.get(0, 1)), m_cursor_col);
             break;
         case 'B': // CUD - cursor down
-            set_cursor(cursor_row_ + std::max(1, params.get(0, 1)), cursor_col_);
+            set_cursor(m_cursor_row + std::max(1, params.get(0, 1)), m_cursor_col);
             break;
         case 'C': // CUF - cursor forward
-            set_cursor(cursor_row_, cursor_col_ + std::max(1, params.get(0, 1)));
+            set_cursor(m_cursor_row, m_cursor_col + std::max(1, params.get(0, 1)));
             break;
         case 'D': // CUB - cursor back
-            set_cursor(cursor_row_, cursor_col_ - std::max(1, params.get(0, 1)));
+            set_cursor(m_cursor_row, m_cursor_col - std::max(1, params.get(0, 1)));
             break;
         case 'E': // CNL - cursor next line
-            set_cursor(cursor_row_ + std::max(1, params.get(0, 1)), 0);
+            set_cursor(m_cursor_row + std::max(1, params.get(0, 1)), 0);
             break;
         case 'F': // CPL - cursor preceding line
-            set_cursor(cursor_row_ - std::max(1, params.get(0, 1)), 0);
+            set_cursor(m_cursor_row - std::max(1, params.get(0, 1)), 0);
             break;
         case 'G': // CHA - cursor horizontal absolute
-            set_cursor(cursor_row_, params.get(0, 1) - 1);
+            set_cursor(m_cursor_row, params.get(0, 1) - 1);
             break;
         case 'H': // CUP - cursor position
         case 'f': // HVP
@@ -519,9 +519,9 @@ void ScreenBuffer::csi_dispatch(const CsiParams &params, char intermediate, char
             break;
         case 'K': // EL - erase in line
             switch (params.get(0, 0)) {
-                case 0: erase_cells(cursor_row_, cursor_col_, cols_ - 1); break;
-                case 1: erase_cells(cursor_row_, 0, cursor_col_); break;
-                case 2: erase_line(cursor_row_); break;
+                case 0: erase_cells(m_cursor_row, m_cursor_col, m_cols - 1); break;
+                case 1: erase_cells(m_cursor_row, 0, m_cursor_col); break;
+                case 2: erase_line(m_cursor_row); break;
             }
             break;
         case 'L': // IL - insert lines
@@ -534,20 +534,20 @@ void ScreenBuffer::csi_dispatch(const CsiParams &params, char intermediate, char
             delete_chars(std::max(1, params.get(0, 1)));
             break;
         case 'S': // SU - scroll up
-            scroll_up(scroll_top_, scroll_bottom_, std::max(1, params.get(0, 1)));
+            scroll_up(m_scroll_top, m_scroll_bottom, std::max(1, params.get(0, 1)));
             break;
         case 'T': // SD - scroll down
-            scroll_down(scroll_top_, scroll_bottom_, std::max(1, params.get(0, 1)));
+            scroll_down(m_scroll_top, m_scroll_bottom, std::max(1, params.get(0, 1)));
             break;
         case 'X': // ECH - erase characters
-            erase_cells(cursor_row_, cursor_col_,
-                        std::min(cursor_col_ + std::max(1, params.get(0, 1)) - 1, cols_ - 1));
+            erase_cells(m_cursor_row, m_cursor_col,
+                        std::min(m_cursor_col + std::max(1, params.get(0, 1)) - 1, m_cols - 1));
             break;
         case '@': // ICH - insert characters
             insert_chars(std::max(1, params.get(0, 1)));
             break;
         case 'd': // VPA - line position absolute
-            set_cursor(params.get(0, 1) - 1, cursor_col_);
+            set_cursor(params.get(0, 1) - 1, m_cursor_col);
             break;
         case 'h': // SM - set mode
             for (int i = 0; i < params.count(); i++)
@@ -561,8 +561,8 @@ void ScreenBuffer::csi_dispatch(const CsiParams &params, char intermediate, char
             handle_sgr(params);
             break;
         case 'r': // DECSTBM - set scrolling region
-            scroll_top_ = std::max(0, params.get(0, 1) - 1);
-            scroll_bottom_ = std::min(rows_ - 1, params.get(1, rows_) - 1);
+            m_scroll_top = std::max(0, params.get(0, 1) - 1);
+            m_scroll_bottom = std::min(m_rows - 1, params.get(1, m_rows) - 1);
             set_cursor(0, 0);
             break;
         case 't': // Window manipulation (ignored mostly)
@@ -572,7 +572,7 @@ void ScreenBuffer::csi_dispatch(const CsiParams &params, char intermediate, char
                 // CPR: report cursor position
                 if (on_write_back) {
                     char buf[32];
-                    snprintf(buf, sizeof(buf), "\033[%d;%dR", cursor_row_ + 1, cursor_col_ + 1);
+                    snprintf(buf, sizeof(buf), "\033[%d;%dR", m_cursor_row + 1, m_cursor_col + 1);
                     on_write_back(buf);
                 }
             }
@@ -597,12 +597,12 @@ void ScreenBuffer::csi_dispatch(const CsiParams &params, char intermediate, char
             } else if (intermediate == '>') {
                 // Push flags onto stack
                 int flags = params.get(0, 0);
-                kitty_kbd_stack_.push_back(flags);
+                m_kitty_kbd_stack.push_back(flags);
             } else if (intermediate == '<') {
                 // Pop N entries from stack
                 int n = std::max(1, params.get(0, 1));
-                for (int i = 0; i < n && !kitty_kbd_stack_.empty(); i++)
-                    kitty_kbd_stack_.pop_back();
+                for (int i = 0; i < n && !m_kitty_kbd_stack.empty(); i++)
+                    m_kitty_kbd_stack.pop_back();
             }
             break;
     }
@@ -689,18 +689,18 @@ void ScreenBuffer::apc_dispatch(const std::string &payload) {
                     auto finished_cmd = images.finish_transfer();
                     finished_cmd.action = cmd.action;
                     if (finished_cmd.action == 'T') {
-                        int abs = absolute_line(cursor_row_);
+                        int abs = absolute_line(m_cursor_row);
                         images.place_image(finished_cmd.image_id, finished_cmd.placement_id,
-                                          abs, cursor_col_, finished_cmd.columns, finished_cmd.rows,
+                                          abs, m_cursor_col, finished_cmd.columns, finished_cmd.rows,
                                           finished_cmd.z_index);
                     }
                     send_response("OK", true);
                 } else {
                     images.store_image(cmd);
                     if (cmd.action == 'T') {
-                        int abs = absolute_line(cursor_row_);
+                        int abs = absolute_line(m_cursor_row);
                         images.place_image(cmd.image_id, cmd.placement_id,
-                                          abs, cursor_col_, cmd.columns, cmd.rows, cmd.z_index);
+                                          abs, m_cursor_col, cmd.columns, cmd.rows, cmd.z_index);
                     }
                     send_response("OK", true);
                 }
@@ -708,9 +708,9 @@ void ScreenBuffer::apc_dispatch(const std::string &payload) {
             break;
         }
         case 'p': { // place
-            int abs = absolute_line(cursor_row_);
+            int abs = absolute_line(m_cursor_row);
             images.place_image(cmd.image_id, cmd.placement_id,
-                              abs, cursor_col_, cmd.columns, cmd.rows, cmd.z_index);
+                              abs, m_cursor_col, cmd.columns, cmd.rows, cmd.z_index);
             send_response("OK", true);
             break;
         }
@@ -733,36 +733,36 @@ void ScreenBuffer::esc_dispatch(char intermediate, char final_byte) {
     if (intermediate == 0) {
         switch (final_byte) {
             case '7': // DECSC - save cursor
-                saved_cursor_ = { cursor_row_, cursor_col_, cur_fg_, bg_, cur_attrs_ };
+                m_saved_cursor = { m_cursor_row, m_cursor_col, m_cur_fg, m_bg, m_cur_attrs };
                 break;
             case '8': // DECRC - restore cursor
-                cursor_row_ = saved_cursor_.row;
-                cursor_col_ = saved_cursor_.col;
-                cur_fg_ = saved_cursor_.fg;
-                bg_ = saved_cursor_.bg;
-                cur_attrs_ = saved_cursor_.attrs;
+                m_cursor_row = m_saved_cursor.row;
+                m_cursor_col = m_saved_cursor.col;
+                m_cur_fg = m_saved_cursor.fg;
+                m_bg = m_saved_cursor.bg;
+                m_cur_attrs = m_saved_cursor.attrs;
                 break;
             case 'D': // IND - index (move down, scroll if at bottom)
-                if (cursor_row_ == scroll_bottom_)
-                    scroll_up(scroll_top_, scroll_bottom_);
-                else if (cursor_row_ < rows_ - 1)
-                    cursor_row_++;
+                if (m_cursor_row == m_scroll_bottom)
+                    scroll_up(m_scroll_top, m_scroll_bottom);
+                else if (m_cursor_row < m_rows - 1)
+                    m_cursor_row++;
                 break;
             case 'E': // NEL - next line
-                cursor_col_ = 0;
-                if (cursor_row_ == scroll_bottom_)
-                    scroll_up(scroll_top_, scroll_bottom_);
-                else if (cursor_row_ < rows_ - 1)
-                    cursor_row_++;
+                m_cursor_col = 0;
+                if (m_cursor_row == m_scroll_bottom)
+                    scroll_up(m_scroll_top, m_scroll_bottom);
+                else if (m_cursor_row < m_rows - 1)
+                    m_cursor_row++;
                 break;
             case 'M': // RI - reverse index (move up, scroll if at top)
-                if (cursor_row_ == scroll_top_)
-                    scroll_down(scroll_top_, scroll_bottom_);
-                else if (cursor_row_ > 0)
-                    cursor_row_--;
+                if (m_cursor_row == m_scroll_top)
+                    scroll_down(m_scroll_top, m_scroll_bottom);
+                else if (m_cursor_row > 0)
+                    m_cursor_row--;
                 break;
             case 'c': // RIS - full reset
-                *this = ScreenBuffer(cols_, rows_, scrollback_limit_);
+                *this = ScreenBuffer(m_cols, m_rows, m_scrollback_limit);
                 break;
         }
     }
@@ -817,12 +817,12 @@ void ScreenBuffer::find_matches(const std::string &query, bool case_sensitive) {
 
     auto qcps = build_query_cps(query, case_sensitive);
     int total = total_lines();
-    search_lines(scrollback_, screen_, screen_top_, qcps, case_sensitive, 0, total, search.matches);
+    search_lines(m_scrollback, m_screen, m_screen_top, qcps, case_sensitive, 0, total, search.matches);
     search.searched_up_to = total;
 
     // Set current match to the one nearest the viewport bottom
     if (!search.matches.empty()) {
-        int bottom_line = (int)scrollback_.size() + viewport_offset_ + rows_ - 1;
+        int bottom_line = (int)m_scrollback.size() + m_viewport_offset + m_rows - 1;
         search.current_match = 0;
         for (int i = 0; i < (int)search.matches.size(); i++) {
             if (search.matches[i].abs_line <= bottom_line)
@@ -837,16 +837,16 @@ void ScreenBuffer::find_matches_incremental() {
     if (total <= search.searched_up_to) return;
 
     auto qcps = build_query_cps(search.query, search.case_sensitive);
-    // Re-search the active screen area (last rows_ lines) since those
+    // Re-search the active screen area (last m_rows lines) since those
     // lines mutate in place, plus any new scrollback lines.
-    int screen_start = (int)scrollback_.size();
+    int screen_start = (int)m_scrollback.size();
     int rescan_from = std::min(search.searched_up_to, screen_start);
 
     // Remove stale matches from the screen area being rescanned
     while (!search.matches.empty() && search.matches.back().abs_line >= rescan_from)
         search.matches.pop_back();
 
-    search_lines(scrollback_, screen_, screen_top_, qcps, search.case_sensitive,
+    search_lines(m_scrollback, m_screen, m_screen_top, qcps, search.case_sensitive,
                  rescan_from, total, search.matches);
     search.searched_up_to = total;
 }
@@ -858,10 +858,10 @@ std::string ScreenBuffer::get_selection_text() const {
     selection.normalized(sl, sc, el, ec);
 
     auto get_line = [&](int abs) -> const Line & {
-        int sb_size = (int)scrollback_.size();
-        if (abs < sb_size) return scrollback_[abs];
+        int sb_size = (int)m_scrollback.size();
+        if (abs < sb_size) return m_scrollback[abs];
         int row = abs - sb_size;
-        if (row >= 0 && row < (int)screen_.size()) return sline(row);
+        if (row >= 0 && row < (int)m_screen.size()) return sline(row);
         static Line empty(0);
         return empty;
     };

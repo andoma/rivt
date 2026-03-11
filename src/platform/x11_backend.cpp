@@ -11,21 +11,21 @@
 namespace rivt {
 
 X11Backend::X11Backend() {
-    xkb_ctx_ = xkb_context_new(XKB_CONTEXT_NO_FLAGS);
-    if (!xkb_ctx_)
+    m_xkb_ctx = xkb_context_new(XKB_CONTEXT_NO_FLAGS);
+    if (!m_xkb_ctx)
         throw std::runtime_error("Failed to create xkb context");
 }
 
 X11Backend::~X11Backend() {
     destroy_window();
-    if (xkb_state_) xkb_state_unref(xkb_state_);
-    if (xkb_keymap_) xkb_keymap_unref(xkb_keymap_);
-    if (xkb_ctx_) xkb_context_unref(xkb_ctx_);
+    if (m_xkb_state) xkb_state_unref(m_xkb_state);
+    if (m_xkb_keymap) xkb_keymap_unref(m_xkb_keymap);
+    if (m_xkb_ctx) xkb_context_unref(m_xkb_ctx);
 }
 
 xcb_atom_t X11Backend::intern_atom(const char *name) {
-    xcb_intern_atom_cookie_t cookie = xcb_intern_atom(conn_, 0, strlen(name), name);
-    xcb_intern_atom_reply_t *reply = xcb_intern_atom_reply(conn_, cookie, nullptr);
+    xcb_intern_atom_cookie_t cookie = xcb_intern_atom(m_conn, 0, strlen(name), name);
+    xcb_intern_atom_reply_t *reply = xcb_intern_atom_reply(m_conn, cookie, nullptr);
     xcb_atom_t atom = reply ? reply->atom : (xcb_atom_t)XCB_ATOM_NONE;
     free(reply);
     return atom;
@@ -33,21 +33,21 @@ xcb_atom_t X11Backend::intern_atom(const char *name) {
 
 bool X11Backend::create_window(int width, int height, const std::string &title) {
     // Use Xlib to get both Display* (for EGL) and xcb connection
-    xlib_display_ = XOpenDisplay(nullptr);
-    if (!xlib_display_) return false;
+    m_xlib_display = XOpenDisplay(nullptr);
+    if (!m_xlib_display) return false;
 
-    conn_ = XGetXCBConnection(xlib_display_);
-    if (!conn_ || xcb_connection_has_error(conn_)) return false;
+    m_conn = XGetXCBConnection(m_xlib_display);
+    if (!m_conn || xcb_connection_has_error(m_conn)) return false;
 
     // Let XCB own the event queue
-    XSetEventQueueOwner(xlib_display_, XCBOwnsEventQueue);
+    XSetEventQueueOwner(m_xlib_display, XCBOwnsEventQueue);
 
-    screen_ = xcb_setup_roots_iterator(xcb_get_setup(conn_)).data;
+    m_screen = xcb_setup_roots_iterator(xcb_get_setup(m_conn)).data;
 
-    window_ = xcb_generate_id(conn_);
+    m_window = xcb_generate_id(m_conn);
     uint32_t mask = XCB_CW_BACK_PIXEL | XCB_CW_EVENT_MASK;
     uint32_t values[2] = {
-        screen_->black_pixel,
+        m_screen->black_pixel,
         XCB_EVENT_MASK_EXPOSURE |
         XCB_EVENT_MASK_KEY_PRESS | XCB_EVENT_MASK_KEY_RELEASE |
         XCB_EVENT_MASK_BUTTON_PRESS | XCB_EVENT_MASK_BUTTON_RELEASE |
@@ -57,48 +57,48 @@ bool X11Backend::create_window(int width, int height, const std::string &title) 
         XCB_EVENT_MASK_PROPERTY_CHANGE
     };
 
-    xcb_create_window(conn_, XCB_COPY_FROM_PARENT, window_, screen_->root,
+    xcb_create_window(m_conn, XCB_COPY_FROM_PARENT, m_window, m_screen->root,
                       0, 0, width, height, 0,
                       XCB_WINDOW_CLASS_INPUT_OUTPUT,
-                      screen_->root_visual, mask, values);
+                      m_screen->root_visual, mask, values);
 
-    width_ = width;
-    height_ = height;
+    m_width = width;
+    m_height = height;
 
     // Intern atoms
-    atom_clipboard_ = intern_atom("CLIPBOARD");
-    atom_utf8_string_ = intern_atom("UTF8_STRING");
-    atom_targets_ = intern_atom("TARGETS");
-    atom_rivt_sel_ = intern_atom("RIVT_SELECTION");
-    atom_wm_protocols_ = intern_atom("WM_PROTOCOLS");
-    atom_wm_delete_ = intern_atom("WM_DELETE_WINDOW");
-    atom_image_png_ = intern_atom("image/png");
+    m_atom_clipboard = intern_atom("CLIPBOARD");
+    m_atom_utf8_string = intern_atom("UTF8_STRING");
+    m_atom_targets = intern_atom("TARGETS");
+    m_atom_rivt_sel = intern_atom("RIVT_SELECTION");
+    m_atom_wm_protocols = intern_atom("WM_PROTOCOLS");
+    m_atom_wm_delete = intern_atom("WM_DELETE_WINDOW");
+    m_atom_image_png = intern_atom("image/png");
 
     // Register for WM_DELETE_WINDOW
-    xcb_change_property(conn_, XCB_PROP_MODE_REPLACE, window_,
-                        atom_wm_protocols_, XCB_ATOM_ATOM, 32, 1, &atom_wm_delete_);
+    xcb_change_property(m_conn, XCB_PROP_MODE_REPLACE, m_window,
+                        m_atom_wm_protocols, XCB_ATOM_ATOM, 32, 1, &m_atom_wm_delete);
 
     set_title(title);
-    xcb_flush(conn_);
+    xcb_flush(m_conn);
 
     // Setup xkbcommon-x11
-    xkb_x11_setup_xkb_extension(conn_,
+    xkb_x11_setup_xkb_extension(m_conn,
         XKB_X11_MIN_MAJOR_XKB_VERSION, XKB_X11_MIN_MINOR_XKB_VERSION,
         XKB_X11_SETUP_XKB_EXTENSION_NO_FLAGS, nullptr, nullptr, nullptr, nullptr);
 
-    xkb_device_id_ = xkb_x11_get_core_keyboard_device_id(conn_);
-    xkb_keymap_ = xkb_x11_keymap_new_from_device(xkb_ctx_, conn_, xkb_device_id_,
+    m_xkb_device_id = xkb_x11_get_core_keyboard_device_id(m_conn);
+    m_xkb_keymap = xkb_x11_keymap_new_from_device(m_xkb_ctx, m_conn, m_xkb_device_id,
                                                    XKB_KEYMAP_COMPILE_NO_FLAGS);
-    xkb_state_ = xkb_x11_state_new_from_device(xkb_keymap_, conn_, xkb_device_id_);
+    m_xkb_state = xkb_x11_state_new_from_device(m_xkb_keymap, m_conn, m_xkb_device_id);
 
-    key_symbols_ = xcb_key_symbols_alloc(conn_);
+    m_key_symbols = xcb_key_symbols_alloc(m_conn);
 
     // EGL setup
-    egl_display_ = eglGetDisplay((EGLNativeDisplayType)xlib_display_);
-    if (egl_display_ == EGL_NO_DISPLAY) return false;
+    m_egl_display = eglGetDisplay((EGLNativeDisplayType)m_xlib_display);
+    if (m_egl_display == EGL_NO_DISPLAY) return false;
 
     EGLint major, minor;
-    if (!eglInitialize(egl_display_, &major, &minor)) return false;
+    if (!eglInitialize(m_egl_display, &major, &minor)) return false;
 
     return true;
 }
@@ -118,7 +118,7 @@ bool X11Backend::create_gl_context() {
 
     EGLConfig config;
     EGLint num_configs;
-    if (!eglChooseConfig(egl_display_, config_attribs, &config, 1, &num_configs) || num_configs == 0)
+    if (!eglChooseConfig(m_egl_display, config_attribs, &config, 1, &num_configs) || num_configs == 0)
         return false;
 
     EGLint context_attribs[] = {
@@ -128,99 +128,99 @@ bool X11Backend::create_gl_context() {
         EGL_NONE
     };
 
-    egl_context_ = eglCreateContext(egl_display_, config, EGL_NO_CONTEXT, context_attribs);
-    if (egl_context_ == EGL_NO_CONTEXT) return false;
+    m_egl_context = eglCreateContext(m_egl_display, config, EGL_NO_CONTEXT, context_attribs);
+    if (m_egl_context == EGL_NO_CONTEXT) return false;
 
-    egl_surface_ = eglCreateWindowSurface(egl_display_, config,
-                                           (EGLNativeWindowType)window_, nullptr);
-    if (egl_surface_ == EGL_NO_SURFACE) return false;
+    m_egl_surface = eglCreateWindowSurface(m_egl_display, config,
+                                           (EGLNativeWindowType)m_window, nullptr);
+    if (m_egl_surface == EGL_NO_SURFACE) return false;
 
-    eglMakeCurrent(egl_display_, egl_surface_, egl_surface_, egl_context_);
-    eglSwapInterval(egl_display_, 1);
+    eglMakeCurrent(m_egl_display, m_egl_surface, m_egl_surface, m_egl_context);
+    eglSwapInterval(m_egl_display, 1);
     return true;
 }
 
 void X11Backend::make_current() {
-    eglMakeCurrent(egl_display_, egl_surface_, egl_surface_, egl_context_);
+    eglMakeCurrent(m_egl_display, m_egl_surface, m_egl_surface, m_egl_context);
 }
 
 void X11Backend::swap_buffers() {
-    eglSwapBuffers(egl_display_, egl_surface_);
+    eglSwapBuffers(m_egl_display, m_egl_surface);
 }
 
 void X11Backend::destroy_window() {
-    if (egl_display_ != EGL_NO_DISPLAY) {
-        eglMakeCurrent(egl_display_, EGL_NO_SURFACE, EGL_NO_SURFACE, EGL_NO_CONTEXT);
+    if (m_egl_display != EGL_NO_DISPLAY) {
+        eglMakeCurrent(m_egl_display, EGL_NO_SURFACE, EGL_NO_SURFACE, EGL_NO_CONTEXT);
     }
-    if (egl_surface_ != EGL_NO_SURFACE) {
-        eglDestroySurface(egl_display_, egl_surface_);
-        egl_surface_ = EGL_NO_SURFACE;
+    if (m_egl_surface != EGL_NO_SURFACE) {
+        eglDestroySurface(m_egl_display, m_egl_surface);
+        m_egl_surface = EGL_NO_SURFACE;
     }
-    if (egl_context_ != EGL_NO_CONTEXT) {
-        eglDestroyContext(egl_display_, egl_context_);
-        egl_context_ = EGL_NO_CONTEXT;
+    if (m_egl_context != EGL_NO_CONTEXT) {
+        eglDestroyContext(m_egl_display, m_egl_context);
+        m_egl_context = EGL_NO_CONTEXT;
     }
-    if (egl_display_ != EGL_NO_DISPLAY) {
-        eglTerminate(egl_display_);
-        egl_display_ = EGL_NO_DISPLAY;
+    if (m_egl_display != EGL_NO_DISPLAY) {
+        eglTerminate(m_egl_display);
+        m_egl_display = EGL_NO_DISPLAY;
     }
     eglReleaseThread();
-    if (key_symbols_) {
-        xcb_key_symbols_free(key_symbols_);
-        key_symbols_ = nullptr;
+    if (m_key_symbols) {
+        xcb_key_symbols_free(m_key_symbols);
+        m_key_symbols = nullptr;
     }
-    if (window_ && conn_) {
-        xcb_destroy_window(conn_, window_);
-        window_ = 0;
+    if (m_window && m_conn) {
+        xcb_destroy_window(m_conn, m_window);
+        m_window = 0;
     }
     // XCloseDisplay closes the underlying xcb connection too
-    if (xlib_display_) {
-        XCloseDisplay(xlib_display_);
-        xlib_display_ = nullptr;
-        conn_ = nullptr;
+    if (m_xlib_display) {
+        XCloseDisplay(m_xlib_display);
+        m_xlib_display = nullptr;
+        m_conn = nullptr;
     }
 }
 
 void X11Backend::set_title(const std::string &title) {
-    xcb_change_property(conn_, XCB_PROP_MODE_REPLACE, window_,
-                        XCB_ATOM_WM_NAME, atom_utf8_string_, 8,
+    xcb_change_property(m_conn, XCB_PROP_MODE_REPLACE, m_window,
+                        XCB_ATOM_WM_NAME, m_atom_utf8_string, 8,
                         title.size(), title.c_str());
-    xcb_change_property(conn_, XCB_PROP_MODE_REPLACE, window_,
-                        intern_atom("_NET_WM_NAME"), atom_utf8_string_, 8,
+    xcb_change_property(m_conn, XCB_PROP_MODE_REPLACE, m_window,
+                        intern_atom("_NET_WM_NAME"), m_atom_utf8_string, 8,
                         title.size(), title.c_str());
-    xcb_flush(conn_);
+    xcb_flush(m_conn);
 }
 
 void X11Backend::get_size(int &width, int &height) {
-    width = width_;
-    height = height_;
+    width = m_width;
+    height = m_height;
 }
 
 void X11Backend::resize_window(int width, int height) {
     uint32_t values[] = { (uint32_t)width, (uint32_t)height };
-    xcb_configure_window(conn_, window_,
+    xcb_configure_window(m_conn, m_window,
                          XCB_CONFIG_WINDOW_WIDTH | XCB_CONFIG_WINDOW_HEIGHT,
                          values);
-    xcb_flush(conn_);
-    width_ = width;
-    height_ = height;
+    xcb_flush(m_conn);
+    m_width = width;
+    m_height = height;
 }
 
 void X11Backend::show_window() {
-    xcb_map_window(conn_, window_);
-    xcb_flush(conn_);
+    xcb_map_window(m_conn, m_window);
+    xcb_flush(m_conn);
 }
 
 void X11Backend::set_size_hints(int cell_w, int cell_h, int base_w, int base_h) {
     xcb_size_hints_t hints{};
     xcb_icccm_size_hints_set_resize_inc(&hints, cell_w, cell_h);
     xcb_icccm_size_hints_set_base_size(&hints, base_w, base_h);
-    xcb_icccm_set_wm_normal_hints(conn_, window_, &hints);
-    xcb_flush(conn_);
+    xcb_icccm_set_wm_normal_hints(m_conn, m_window, &hints);
+    xcb_flush(m_conn);
 }
 
 int X11Backend::get_event_fd() {
-    return xcb_get_file_descriptor(conn_);
+    return xcb_get_file_descriptor(m_conn);
 }
 
 KeyMod X11Backend::translate_mods(uint16_t state) {
@@ -233,7 +233,7 @@ KeyMod X11Backend::translate_mods(uint16_t state) {
 }
 
 void X11Backend::handle_key_event(xcb_key_press_event_t *ev, bool pressed) {
-    xkb_state_update_key(xkb_state_, ev->detail, pressed ? XKB_KEY_DOWN : XKB_KEY_UP);
+    xkb_state_update_key(m_xkb_state, ev->detail, pressed ? XKB_KEY_DOWN : XKB_KEY_UP);
 
     KeyEvent key{};
     key.pressed = pressed;
@@ -243,16 +243,16 @@ void X11Backend::handle_key_event(xcb_key_press_event_t *ev, bool pressed) {
     // control character. This lets Ctrl+C map to ETX and Ctrl+Shift+C match XKB_KEY_C.
     {
         const xkb_keysym_t *syms;
-        xkb_layout_index_t layout = xkb_state_key_get_layout(xkb_state_, ev->detail);
+        xkb_layout_index_t layout = xkb_state_key_get_layout(m_xkb_state, ev->detail);
         // level 0 = unshifted, level 1 = shifted
         int level = (ev->state & XCB_MOD_MASK_SHIFT) ? 1 : 0;
-        int n = xkb_keymap_key_get_syms_by_level(xkb_keymap_, ev->detail, layout, level, &syms);
-        key.keysym = (n > 0) ? syms[0] : xkb_state_key_get_one_sym(xkb_state_, ev->detail);
+        int n = xkb_keymap_key_get_syms_by_level(m_xkb_keymap, ev->detail, layout, level, &syms);
+        key.keysym = (n > 0) ? syms[0] : xkb_state_key_get_one_sym(m_xkb_state, ev->detail);
     }
 
     if (pressed) {
         char buf[64];
-        int len = xkb_state_key_get_utf8(xkb_state_, ev->detail, buf, sizeof(buf));
+        int len = xkb_state_key_get_utf8(m_xkb_state, ev->detail, buf, sizeof(buf));
         if (len > 0 && buf[0] >= 0x20) {
             key.text = std::string(buf, len);
         }
@@ -309,16 +309,16 @@ void X11Backend::handle_motion_event(xcb_motion_notify_event_t *ev) {
 }
 
 void X11Backend::handle_configure_event(xcb_configure_notify_event_t *ev) {
-    if (ev->width != width_ || ev->height != height_) {
-        width_ = ev->width;
-        height_ = ev->height;
-        if (on_resize) on_resize(width_, height_);
+    if (ev->width != m_width || ev->height != m_height) {
+        m_width = ev->width;
+        m_height = ev->height;
+        if (on_resize) on_resize(m_width, m_height);
     }
 }
 
 void X11Backend::process_events() {
     xcb_generic_event_t *ev;
-    while ((ev = xcb_poll_for_event(conn_)) != nullptr) {
+    while ((ev = xcb_poll_for_event(m_conn)) != nullptr) {
         uint8_t type = ev->response_type & ~0x80;
         switch (type) {
             case XCB_KEY_PRESS:
@@ -342,8 +342,8 @@ void X11Backend::process_events() {
             case XCB_FOCUS_IN:
                 // Re-sync xkb state from X server to fix modifier
                 // desync (e.g. Ctrl/Shift released while unfocused)
-                if (xkb_state_) xkb_state_unref(xkb_state_);
-                xkb_state_ = xkb_x11_state_new_from_device(xkb_keymap_, conn_, xkb_device_id_);
+                if (m_xkb_state) xkb_state_unref(m_xkb_state);
+                m_xkb_state = xkb_x11_state_new_from_device(m_xkb_keymap, m_conn, m_xkb_device_id);
                 if (on_focus) on_focus(true);
                 break;
             case XCB_FOCUS_OUT:
@@ -351,7 +351,7 @@ void X11Backend::process_events() {
                 break;
             case XCB_CLIENT_MESSAGE: {
                 auto *cm = (xcb_client_message_event_t *)ev;
-                if (cm->data.data32[0] == atom_wm_delete_) {
+                if (cm->data.data32[0] == m_atom_wm_delete) {
                     if (on_close) on_close();
                 }
                 break;
@@ -359,8 +359,8 @@ void X11Backend::process_events() {
             case XCB_SELECTION_REQUEST: {
                 // Respond to selection requests from other apps
                 auto *sr = (xcb_selection_request_event_t *)ev;
-                const std::string &text = (sr->selection == XCB_ATOM_PRIMARY) ? primary_text_ : clipboard_text_;
-                const ClipboardEntry &typed = (sr->selection == XCB_ATOM_PRIMARY) ? primary_typed_ : clipboard_typed_;
+                const std::string &text = (sr->selection == XCB_ATOM_PRIMARY) ? m_primary_text : m_clipboard_text;
+                const ClipboardEntry &typed = (sr->selection == XCB_ATOM_PRIMARY) ? m_primary_typed : m_clipboard_typed;
 
                 xcb_selection_notify_event_t notify{};
                 notify.response_type = XCB_SELECTION_NOTIFY;
@@ -369,11 +369,11 @@ void X11Backend::process_events() {
                 notify.target = sr->target;
                 notify.time = sr->time;
 
-                if (sr->target == atom_image_png_ && typed.mime_type == "image/png") {
+                if (sr->target == m_atom_image_png && typed.mime_type == "image/png") {
                     if (typed.data.size() <= 256 * 1024) {
-                        xcb_change_property(conn_, XCB_PROP_MODE_REPLACE,
+                        xcb_change_property(m_conn, XCB_PROP_MODE_REPLACE,
                                             sr->requestor, sr->property,
-                                            atom_image_png_, 8,
+                                            m_atom_image_png, 8,
                                             typed.data.size(), typed.data.data());
                         notify.property = sr->property;
                     } else {
@@ -381,17 +381,17 @@ void X11Backend::process_events() {
                         fprintf(stderr, "rivt: clipboard image too large for non-INCR transfer (%zu bytes)\n", typed.data.size());
                         notify.property = XCB_ATOM_NONE;
                     }
-                } else if (sr->target == atom_utf8_string_ || sr->target == XCB_ATOM_STRING) {
-                    xcb_change_property(conn_, XCB_PROP_MODE_REPLACE,
+                } else if (sr->target == m_atom_utf8_string || sr->target == XCB_ATOM_STRING) {
+                    xcb_change_property(m_conn, XCB_PROP_MODE_REPLACE,
                                         sr->requestor, sr->property,
-                                        atom_utf8_string_, 8,
+                                        m_atom_utf8_string, 8,
                                         text.size(), text.c_str());
                     notify.property = sr->property;
-                } else if (sr->target == atom_targets_) {
-                    std::vector<xcb_atom_t> targets = { atom_targets_, atom_utf8_string_, XCB_ATOM_STRING };
+                } else if (sr->target == m_atom_targets) {
+                    std::vector<xcb_atom_t> targets = { m_atom_targets, m_atom_utf8_string, XCB_ATOM_STRING };
                     if (!typed.data.empty() && typed.mime_type == "image/png")
-                        targets.push_back(atom_image_png_);
-                    xcb_change_property(conn_, XCB_PROP_MODE_REPLACE,
+                        targets.push_back(m_atom_image_png);
+                    xcb_change_property(m_conn, XCB_PROP_MODE_REPLACE,
                                         sr->requestor, sr->property,
                                         XCB_ATOM_ATOM, 32, targets.size(), targets.data());
                     notify.property = sr->property;
@@ -399,8 +399,8 @@ void X11Backend::process_events() {
                     notify.property = XCB_ATOM_NONE;
                 }
 
-                xcb_send_event(conn_, false, sr->requestor, 0, (const char *)&notify);
-                xcb_flush(conn_);
+                xcb_send_event(m_conn, false, sr->requestor, 0, (const char *)&notify);
+                xcb_flush(m_conn);
                 break;
             }
             default:
@@ -412,43 +412,43 @@ void X11Backend::process_events() {
 
 void X11Backend::set_clipboard(const std::string &text, bool primary) {
     if (primary) {
-        primary_text_ = text;
-        xcb_set_selection_owner(conn_, window_, XCB_ATOM_PRIMARY, XCB_CURRENT_TIME);
+        m_primary_text = text;
+        xcb_set_selection_owner(m_conn, m_window, XCB_ATOM_PRIMARY, XCB_CURRENT_TIME);
     } else {
-        clipboard_text_ = text;
-        xcb_set_selection_owner(conn_, window_, atom_clipboard_, XCB_CURRENT_TIME);
+        m_clipboard_text = text;
+        xcb_set_selection_owner(m_conn, m_window, m_atom_clipboard, XCB_CURRENT_TIME);
     }
-    xcb_flush(conn_);
+    xcb_flush(m_conn);
 }
 
 std::string X11Backend::get_clipboard(bool primary) {
-    xcb_atom_t selection = primary ? (xcb_atom_t)XCB_ATOM_PRIMARY : atom_clipboard_;
+    xcb_atom_t selection = primary ? (xcb_atom_t)XCB_ATOM_PRIMARY : m_atom_clipboard;
 
     // Check if we own it
-    xcb_get_selection_owner_cookie_t owner_cookie = xcb_get_selection_owner(conn_, selection);
-    xcb_get_selection_owner_reply_t *owner = xcb_get_selection_owner_reply(conn_, owner_cookie, nullptr);
-    if (owner && owner->owner == window_) {
+    xcb_get_selection_owner_cookie_t owner_cookie = xcb_get_selection_owner(m_conn, selection);
+    xcb_get_selection_owner_reply_t *owner = xcb_get_selection_owner_reply(m_conn, owner_cookie, nullptr);
+    if (owner && owner->owner == m_window) {
         free(owner);
-        return primary ? primary_text_ : clipboard_text_;
+        return primary ? m_primary_text : m_clipboard_text;
     }
     free(owner);
 
     // Request from owner
-    xcb_convert_selection(conn_, window_, selection, atom_utf8_string_,
-                          atom_rivt_sel_, XCB_CURRENT_TIME);
-    xcb_flush(conn_);
+    xcb_convert_selection(m_conn, m_window, selection, m_atom_utf8_string,
+                          m_atom_rivt_sel, XCB_CURRENT_TIME);
+    xcb_flush(m_conn);
 
     // Wait for SelectionNotify (with timeout)
     for (int i = 0; i < 50; i++) {
-        xcb_generic_event_t *ev = xcb_wait_for_event(conn_);
+        xcb_generic_event_t *ev = xcb_wait_for_event(m_conn);
         if (!ev) break;
         uint8_t type = ev->response_type & ~0x80;
         if (type == XCB_SELECTION_NOTIFY) {
             auto *sn = (xcb_selection_notify_event_t *)ev;
             if (sn->property != XCB_ATOM_NONE) {
                 xcb_get_property_cookie_t prop_cookie = xcb_get_property(
-                    conn_, 1, window_, atom_rivt_sel_, XCB_ATOM_ANY, 0, 1 << 20);
-                xcb_get_property_reply_t *prop = xcb_get_property_reply(conn_, prop_cookie, nullptr);
+                    m_conn, 1, m_window, m_atom_rivt_sel, XCB_ATOM_ANY, 0, 1 << 20);
+                xcb_get_property_reply_t *prop = xcb_get_property_reply(m_conn, prop_cookie, nullptr);
                 std::string result;
                 if (prop) {
                     result = std::string((char *)xcb_get_property_value(prop),
@@ -467,48 +467,48 @@ std::string X11Backend::get_clipboard(bool primary) {
 }
 
 void X11Backend::set_clipboard_data(const std::string &data, const std::string &mime_type, bool primary) {
-    ClipboardEntry &entry = primary ? primary_typed_ : clipboard_typed_;
+    ClipboardEntry &entry = primary ? m_primary_typed : m_clipboard_typed;
     entry.data = data;
     entry.mime_type = mime_type;
 
-    xcb_atom_t selection = primary ? (xcb_atom_t)XCB_ATOM_PRIMARY : atom_clipboard_;
-    xcb_set_selection_owner(conn_, window_, selection, XCB_CURRENT_TIME);
-    xcb_flush(conn_);
+    xcb_atom_t selection = primary ? (xcb_atom_t)XCB_ATOM_PRIMARY : m_atom_clipboard;
+    xcb_set_selection_owner(m_conn, m_window, selection, XCB_CURRENT_TIME);
+    xcb_flush(m_conn);
 }
 
 std::string X11Backend::get_clipboard_data(const std::string &mime_type, bool primary) {
     if (mime_type.empty() || mime_type == "text/plain")
         return get_clipboard(primary);
 
-    xcb_atom_t selection = primary ? (xcb_atom_t)XCB_ATOM_PRIMARY : atom_clipboard_;
+    xcb_atom_t selection = primary ? (xcb_atom_t)XCB_ATOM_PRIMARY : m_atom_clipboard;
 
     // Check if we own it
-    xcb_get_selection_owner_cookie_t owner_cookie = xcb_get_selection_owner(conn_, selection);
-    xcb_get_selection_owner_reply_t *owner = xcb_get_selection_owner_reply(conn_, owner_cookie, nullptr);
-    if (owner && owner->owner == window_) {
+    xcb_get_selection_owner_cookie_t owner_cookie = xcb_get_selection_owner(m_conn, selection);
+    xcb_get_selection_owner_reply_t *owner = xcb_get_selection_owner_reply(m_conn, owner_cookie, nullptr);
+    if (owner && owner->owner == m_window) {
         free(owner);
-        const ClipboardEntry &entry = primary ? primary_typed_ : clipboard_typed_;
+        const ClipboardEntry &entry = primary ? m_primary_typed : m_clipboard_typed;
         return (entry.mime_type == mime_type) ? entry.data : std::string{};
     }
     free(owner);
 
     // Request from owner using the appropriate atom
-    xcb_atom_t target = atom_image_png_;  // only image/png supported for now
+    xcb_atom_t target = m_atom_image_png;  // only image/png supported for now
     if (mime_type != "image/png") return {};
 
-    xcb_convert_selection(conn_, window_, selection, target, atom_rivt_sel_, XCB_CURRENT_TIME);
-    xcb_flush(conn_);
+    xcb_convert_selection(m_conn, m_window, selection, target, m_atom_rivt_sel, XCB_CURRENT_TIME);
+    xcb_flush(m_conn);
 
     for (int i = 0; i < 50; i++) {
-        xcb_generic_event_t *ev = xcb_wait_for_event(conn_);
+        xcb_generic_event_t *ev = xcb_wait_for_event(m_conn);
         if (!ev) break;
         uint8_t type = ev->response_type & ~0x80;
         if (type == XCB_SELECTION_NOTIFY) {
             auto *sn = (xcb_selection_notify_event_t *)ev;
             if (sn->property != XCB_ATOM_NONE) {
                 xcb_get_property_cookie_t prop_cookie = xcb_get_property(
-                    conn_, 1, window_, atom_rivt_sel_, XCB_ATOM_ANY, 0, 1 << 20);
-                xcb_get_property_reply_t *prop = xcb_get_property_reply(conn_, prop_cookie, nullptr);
+                    m_conn, 1, m_window, m_atom_rivt_sel, XCB_ATOM_ANY, 0, 1 << 20);
+                xcb_get_property_reply_t *prop = xcb_get_property_reply(m_conn, prop_cookie, nullptr);
                 std::string result;
                 if (prop) {
                     result = std::string((char *)xcb_get_property_value(prop),

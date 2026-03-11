@@ -8,37 +8,37 @@
 namespace rivt {
 
 EventLoop::EventLoop() {
-    epoll_fd_ = epoll_create1(EPOLL_CLOEXEC);
-    if (epoll_fd_ < 0)
+    m_epoll_fd = epoll_create1(EPOLL_CLOEXEC);
+    if (m_epoll_fd < 0)
         throw std::runtime_error("epoll_create1 failed");
 }
 
 EventLoop::~EventLoop() {
-    for (auto &t : timers_)
+    for (auto &t : m_timers)
         close(t.fd);
-    close(epoll_fd_);
+    close(m_epoll_fd);
 }
 
 void EventLoop::add_fd(int fd, Callback cb, uint32_t events) {
     struct epoll_event ev {};
     ev.events = events;
     ev.data.fd = fd;
-    if (epoll_ctl(epoll_fd_, EPOLL_CTL_ADD, fd, &ev) < 0)
+    if (epoll_ctl(m_epoll_fd, EPOLL_CTL_ADD, fd, &ev) < 0)
         throw std::runtime_error("epoll_ctl ADD failed");
-    fds_.push_back({fd, std::move(cb)});
+    m_fds.push_back({fd, std::move(cb)});
 }
 
 void EventLoop::remove_fd(int fd) {
-    epoll_ctl(epoll_fd_, EPOLL_CTL_DEL, fd, nullptr);
-    fds_.erase(std::remove_if(fds_.begin(), fds_.end(),
-        [fd](const FdEntry &e) { return e.fd == fd; }), fds_.end());
+    epoll_ctl(m_epoll_fd, EPOLL_CTL_DEL, fd, nullptr);
+    m_fds.erase(std::remove_if(m_fds.begin(), m_fds.end(),
+        [fd](const FdEntry &e) { return e.fd == fd; }), m_fds.end());
 }
 
 bool EventLoop::poll(int timeout_ms) {
     struct epoll_event events[16];
-    int n = epoll_wait(epoll_fd_, events, 16, timeout_ms);
+    int n = epoll_wait(m_epoll_fd, events, 16, timeout_ms);
     if (n < 0) {
-        if (errno == EINTR) return !quit_;
+        if (errno == EINTR) return !m_quit;
         throw std::runtime_error("epoll_wait failed");
     }
 
@@ -47,7 +47,7 @@ bool EventLoop::poll(int timeout_ms) {
 
         // Check timers first
         bool is_timer = false;
-        for (auto &t : timers_) {
+        for (auto &t : m_timers) {
             if (t.fd == fd) {
                 uint64_t expirations;
                 if (read(t.fd, &expirations, sizeof(expirations)) == sizeof(expirations)) {
@@ -63,7 +63,7 @@ bool EventLoop::poll(int timeout_ms) {
         if (is_timer) continue;
 
         // Regular fd callbacks
-        for (auto &entry : fds_) {
+        for (auto &entry : m_fds) {
             if (entry.fd == fd) {
                 entry.cb(events[i].events);
                 break;
@@ -71,7 +71,7 @@ bool EventLoop::poll(int timeout_ms) {
         }
     }
 
-    return !quit_;
+    return !m_quit;
 }
 
 int EventLoop::add_timer(int interval_ms, TimerCallback cb, bool repeating) {
@@ -87,19 +87,19 @@ int EventLoop::add_timer(int interval_ms, TimerCallback cb, bool repeating) {
     }
     timerfd_settime(tfd, 0, &ts, nullptr);
 
-    int id = next_timer_id_++;
-    timers_.push_back({id, tfd, std::move(cb), repeating});
+    int id = m_next_timer_id++;
+    m_timers.push_back({id, tfd, std::move(cb), repeating});
     add_fd(tfd, [](uint32_t) {}, EPOLLIN);
     return id;
 }
 
 void EventLoop::remove_timer(int timer_id) {
-    auto it = std::find_if(timers_.begin(), timers_.end(),
+    auto it = std::find_if(m_timers.begin(), m_timers.end(),
         [timer_id](const TimerEntry &e) { return e.id == timer_id; });
-    if (it != timers_.end()) {
+    if (it != m_timers.end()) {
         remove_fd(it->fd);
         close(it->fd);
-        timers_.erase(it);
+        m_timers.erase(it);
     }
 }
 

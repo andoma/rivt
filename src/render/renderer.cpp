@@ -109,24 +109,24 @@ static unsigned int link_program(unsigned int vert, unsigned int frag) {
 Renderer::Renderer() = default;
 
 Renderer::~Renderer() {
-    if (vao_) glDeleteVertexArrays(1, &vao_);
-    if (vbo_) glDeleteBuffers(1, &vbo_);
-    if (bg_shader_) glDeleteProgram(bg_shader_);
-    if (glyph_shader_) glDeleteProgram(glyph_shader_);
-    if (image_shader_) glDeleteProgram(image_shader_);
+    if (m_vao) glDeleteVertexArrays(1, &m_vao);
+    if (m_vbo) glDeleteBuffers(1, &m_vbo);
+    if (m_bg_shader) glDeleteProgram(m_bg_shader);
+    if (m_glyph_shader) glDeleteProgram(m_glyph_shader);
+    if (m_image_shader) glDeleteProgram(m_image_shader);
 }
 
 bool Renderer::init(const Config &config) {
-    if (!font_.init(config.font_family, config.font_size))
+    if (!m_font.init(config.font_family, config.font_size))
         return false;
 
-    if (!atlas_.init(1024))
+    if (!m_atlas.init(1024))
         return false;
 
     build_shaders();
 
-    glGenVertexArrays(1, &vao_);
-    glGenBuffers(1, &vbo_);
+    glGenVertexArrays(1, &m_vao);
+    glGenBuffers(1, &m_vbo);
 
     glEnable(GL_BLEND);
     glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
@@ -138,26 +138,26 @@ void Renderer::build_shaders() {
     // We use a unified shader for simplicity
     auto vert = compile_shader(GL_VERTEX_SHADER, glyph_vertex_src);
     auto frag = compile_shader(GL_FRAGMENT_SHADER, glyph_fragment_src);
-    glyph_shader_ = link_program(vert, frag);
+    m_glyph_shader = link_program(vert, frag);
 
     auto img_vert = compile_shader(GL_VERTEX_SHADER, image_vertex_src);
     auto img_frag = compile_shader(GL_FRAGMENT_SHADER, image_fragment_src);
-    image_shader_ = link_program(img_vert, img_frag);
+    m_image_shader = link_program(img_vert, img_frag);
 }
 
 void Renderer::set_font_size(float size_pt, float dpi) {
-    font_.set_size(size_pt, dpi);
-    atlas_.clear();
+    m_font.set_size(size_pt, dpi);
+    m_atlas.clear();
 }
 
 void Renderer::set_viewport(int width, int height) {
-    viewport_w_ = width;
-    viewport_h_ = height;
+    m_viewport_w = width;
+    m_viewport_h = height;
     glViewport(0, 0, width, height);
 }
 
 void Renderer::compute_grid(int pixel_w, int pixel_h, int &cols, int &rows) const {
-    const auto &m = font_.metrics();
+    const auto &m = m_font.metrics();
     cols = pixel_w / m.cell_width;
     rows = pixel_h / m.cell_height;
     if (cols < 1) cols = 1;
@@ -192,15 +192,15 @@ void Renderer::begin_frame(const Config &config) {
     // handle_resize() which may fire while a *different* window's GL context
     // is current, sending the glViewport to the wrong context.  Doing it
     // here, after make_current(), guarantees the correct context.
-    glViewport(0, 0, viewport_w_, viewport_h_);
+    glViewport(0, 0, m_viewport_w, m_viewport_h);
     clear(config);
-    vertices_.clear();
+    m_vertices.clear();
 }
 
 void Renderer::build_pane_vertices(const ScreenBuffer &buffer, const Config &config,
                                     int offset_x, int offset_y, int clip_w, int clip_h,
                                     bool pane_focused) {
-    const auto &m = font_.metrics();
+    const auto &m = m_font.metrics();
     float def_fg_r = ((config.fg_color >> 16) & 0xFF) / 255.0f;
     float def_fg_g = ((config.fg_color >> 8) & 0xFF) / 255.0f;
     float def_fg_b = (config.fg_color & 0xFF) / 255.0f;
@@ -208,7 +208,7 @@ void Renderer::build_pane_vertices(const ScreenBuffer &buffer, const Config &con
     float def_bg_g = ((config.bg_color >> 8) & 0xFF) / 255.0f;
     float def_bg_b = (config.bg_color & 0xFF) / 255.0f;
 
-    float atlas_size = (float)atlas_.texture_size();
+    float atlas_size = (float)m_atlas.texture_size();
     float ox = (float)offset_x;
     float oy = (float)offset_y;
 
@@ -222,7 +222,7 @@ void Renderer::build_pane_vertices(const ScreenBuffer &buffer, const Config &con
     }
 
     // Pre-reserve to avoid reallocation (estimate ~12 vertices per cell)
-    vertices_.reserve(vertices_.size() + buffer.rows() * buffer.cols() * 12);
+    m_vertices.reserve(m_vertices.size() + buffer.rows() * buffer.cols() * 12);
 
     for (int row = 0; row < buffer.rows(); row++) {
         const Line &line = buffer.line(row);
@@ -282,12 +282,12 @@ void Renderer::build_pane_vertices(const ScreenBuffer &buffer, const Config &con
             }
 
             if (!(cell.bg & COLOR_FLAG_DEFAULT) || (cell.attrs & ATTR_INVERSE) || selected || mt) {
-                vertices_.push_back({x_left,  y_top,    0, 0, cell_bg_r, cell_bg_g, cell_bg_b, 1.0f, 0});
-                vertices_.push_back({x_right, y_top,    0, 0, cell_bg_r, cell_bg_g, cell_bg_b, 1.0f, 0});
-                vertices_.push_back({x_right, y_bottom, 0, 0, cell_bg_r, cell_bg_g, cell_bg_b, 1.0f, 0});
-                vertices_.push_back({x_left,  y_top,    0, 0, cell_bg_r, cell_bg_g, cell_bg_b, 1.0f, 0});
-                vertices_.push_back({x_right, y_bottom, 0, 0, cell_bg_r, cell_bg_g, cell_bg_b, 1.0f, 0});
-                vertices_.push_back({x_left,  y_bottom, 0, 0, cell_bg_r, cell_bg_g, cell_bg_b, 1.0f, 0});
+                m_vertices.push_back({x_left,  y_top,    0, 0, cell_bg_r, cell_bg_g, cell_bg_b, 1.0f, 0});
+                m_vertices.push_back({x_right, y_top,    0, 0, cell_bg_r, cell_bg_g, cell_bg_b, 1.0f, 0});
+                m_vertices.push_back({x_right, y_bottom, 0, 0, cell_bg_r, cell_bg_g, cell_bg_b, 1.0f, 0});
+                m_vertices.push_back({x_left,  y_top,    0, 0, cell_bg_r, cell_bg_g, cell_bg_b, 1.0f, 0});
+                m_vertices.push_back({x_right, y_bottom, 0, 0, cell_bg_r, cell_bg_g, cell_bg_b, 1.0f, 0});
+                m_vertices.push_back({x_left,  y_bottom, 0, 0, cell_bg_r, cell_bg_g, cell_bg_b, 1.0f, 0});
             }
 
             if ((cell.attrs & ATTR_WIDE_CONT) || (cell.codepoint == ' ' && !(cell.attrs & ATTR_UNDERLINE_MASK)))
@@ -296,8 +296,8 @@ void Renderer::build_pane_vertices(const ScreenBuffer &buffer, const Config &con
             uint32_t cp = cell.codepoint;
             if (cp >= GRAPHEME_SENTINEL_BASE) continue;
 
-            auto [font_idx, glyph_id] = font_.find_glyph(cp);
-            const GlyphEntry *ge = atlas_.get(font_, font_idx, glyph_id);
+            auto [font_idx, glyph_id] = m_font.find_glyph(cp);
+            const GlyphEntry *ge = m_atlas.get(m_font, font_idx, glyph_id);
             if (!ge || ge->w == 0) continue;
 
             float gx = x_left + ge->bearing_x;
@@ -312,33 +312,33 @@ void Renderer::build_pane_vertices(const ScreenBuffer &buffer, const Config &con
 
             float glyph_type = (ge->type == GlyphType::Color) ? 2.0f : 1.0f;
 
-            vertices_.push_back({gx,  gy,  tu,  tv,  fg_r, fg_g, fg_b, 1.0f, glyph_type});
-            vertices_.push_back({gx2, gy,  tu2, tv,  fg_r, fg_g, fg_b, 1.0f, glyph_type});
-            vertices_.push_back({gx2, gy2, tu2, tv2, fg_r, fg_g, fg_b, 1.0f, glyph_type});
-            vertices_.push_back({gx,  gy,  tu,  tv,  fg_r, fg_g, fg_b, 1.0f, glyph_type});
-            vertices_.push_back({gx2, gy2, tu2, tv2, fg_r, fg_g, fg_b, 1.0f, glyph_type});
-            vertices_.push_back({gx,  gy2, tu,  tv2, fg_r, fg_g, fg_b, 1.0f, glyph_type});
+            m_vertices.push_back({gx,  gy,  tu,  tv,  fg_r, fg_g, fg_b, 1.0f, glyph_type});
+            m_vertices.push_back({gx2, gy,  tu2, tv,  fg_r, fg_g, fg_b, 1.0f, glyph_type});
+            m_vertices.push_back({gx2, gy2, tu2, tv2, fg_r, fg_g, fg_b, 1.0f, glyph_type});
+            m_vertices.push_back({gx,  gy,  tu,  tv,  fg_r, fg_g, fg_b, 1.0f, glyph_type});
+            m_vertices.push_back({gx2, gy2, tu2, tv2, fg_r, fg_g, fg_b, 1.0f, glyph_type});
+            m_vertices.push_back({gx,  gy2, tu,  tv2, fg_r, fg_g, fg_b, 1.0f, glyph_type});
 
             if (cell.attrs & ATTR_UNDERLINE_MASK) {
                 float uy = y_top + m.ascender + 2;
                 float uy2 = uy + std::max(1, m.underline_thickness);
-                vertices_.push_back({x_left,  uy,  0, 0, fg_r, fg_g, fg_b, 1.0f, 0});
-                vertices_.push_back({x_right, uy,  0, 0, fg_r, fg_g, fg_b, 1.0f, 0});
-                vertices_.push_back({x_right, uy2, 0, 0, fg_r, fg_g, fg_b, 1.0f, 0});
-                vertices_.push_back({x_left,  uy,  0, 0, fg_r, fg_g, fg_b, 1.0f, 0});
-                vertices_.push_back({x_right, uy2, 0, 0, fg_r, fg_g, fg_b, 1.0f, 0});
-                vertices_.push_back({x_left,  uy2, 0, 0, fg_r, fg_g, fg_b, 1.0f, 0});
+                m_vertices.push_back({x_left,  uy,  0, 0, fg_r, fg_g, fg_b, 1.0f, 0});
+                m_vertices.push_back({x_right, uy,  0, 0, fg_r, fg_g, fg_b, 1.0f, 0});
+                m_vertices.push_back({x_right, uy2, 0, 0, fg_r, fg_g, fg_b, 1.0f, 0});
+                m_vertices.push_back({x_left,  uy,  0, 0, fg_r, fg_g, fg_b, 1.0f, 0});
+                m_vertices.push_back({x_right, uy2, 0, 0, fg_r, fg_g, fg_b, 1.0f, 0});
+                m_vertices.push_back({x_left,  uy2, 0, 0, fg_r, fg_g, fg_b, 1.0f, 0});
             }
 
             if (cell.attrs & ATTR_STRIKETHROUGH) {
                 float sy = y_top + m.cell_height / 2.0f;
                 float sy2 = sy + 1;
-                vertices_.push_back({x_left,  sy,  0, 0, fg_r, fg_g, fg_b, 1.0f, 0});
-                vertices_.push_back({x_right, sy,  0, 0, fg_r, fg_g, fg_b, 1.0f, 0});
-                vertices_.push_back({x_right, sy2, 0, 0, fg_r, fg_g, fg_b, 1.0f, 0});
-                vertices_.push_back({x_left,  sy,  0, 0, fg_r, fg_g, fg_b, 1.0f, 0});
-                vertices_.push_back({x_right, sy2, 0, 0, fg_r, fg_g, fg_b, 1.0f, 0});
-                vertices_.push_back({x_left,  sy2, 0, 0, fg_r, fg_g, fg_b, 1.0f, 0});
+                m_vertices.push_back({x_left,  sy,  0, 0, fg_r, fg_g, fg_b, 1.0f, 0});
+                m_vertices.push_back({x_right, sy,  0, 0, fg_r, fg_g, fg_b, 1.0f, 0});
+                m_vertices.push_back({x_right, sy2, 0, 0, fg_r, fg_g, fg_b, 1.0f, 0});
+                m_vertices.push_back({x_left,  sy,  0, 0, fg_r, fg_g, fg_b, 1.0f, 0});
+                m_vertices.push_back({x_right, sy2, 0, 0, fg_r, fg_g, fg_b, 1.0f, 0});
+                m_vertices.push_back({x_left,  sy2, 0, 0, fg_r, fg_g, fg_b, 1.0f, 0});
             }
         }
     }
@@ -356,43 +356,43 @@ void Renderer::build_pane_vertices(const ScreenBuffer &buffer, const Config &con
         float cw = (float)m.cell_width;
         float ch = (float)m.cell_height;
 
-        if (focused_ && pane_focused) {
-            vertices_.push_back({cx,    cy,    0,0, cur_r,cur_g,cur_b,0.7f, 0});
-            vertices_.push_back({cx+cw, cy,    0,0, cur_r,cur_g,cur_b,0.7f, 0});
-            vertices_.push_back({cx+cw, cy+ch, 0,0, cur_r,cur_g,cur_b,0.7f, 0});
-            vertices_.push_back({cx,    cy,    0,0, cur_r,cur_g,cur_b,0.7f, 0});
-            vertices_.push_back({cx+cw, cy+ch, 0,0, cur_r,cur_g,cur_b,0.7f, 0});
-            vertices_.push_back({cx,    cy+ch, 0,0, cur_r,cur_g,cur_b,0.7f, 0});
+        if (m_focused && pane_focused) {
+            m_vertices.push_back({cx,    cy,    0,0, cur_r,cur_g,cur_b,0.7f, 0});
+            m_vertices.push_back({cx+cw, cy,    0,0, cur_r,cur_g,cur_b,0.7f, 0});
+            m_vertices.push_back({cx+cw, cy+ch, 0,0, cur_r,cur_g,cur_b,0.7f, 0});
+            m_vertices.push_back({cx,    cy,    0,0, cur_r,cur_g,cur_b,0.7f, 0});
+            m_vertices.push_back({cx+cw, cy+ch, 0,0, cur_r,cur_g,cur_b,0.7f, 0});
+            m_vertices.push_back({cx,    cy+ch, 0,0, cur_r,cur_g,cur_b,0.7f, 0});
         } else {
             float thick = 2.0f;
             // Top
-            vertices_.push_back({cx, cy, 0,0, cur_r,cur_g,cur_b,1, 0});
-            vertices_.push_back({cx+cw, cy, 0,0, cur_r,cur_g,cur_b,1, 0});
-            vertices_.push_back({cx+cw, cy+thick, 0,0, cur_r,cur_g,cur_b,1, 0});
-            vertices_.push_back({cx, cy, 0,0, cur_r,cur_g,cur_b,1, 0});
-            vertices_.push_back({cx+cw, cy+thick, 0,0, cur_r,cur_g,cur_b,1, 0});
-            vertices_.push_back({cx, cy+thick, 0,0, cur_r,cur_g,cur_b,1, 0});
+            m_vertices.push_back({cx, cy, 0,0, cur_r,cur_g,cur_b,1, 0});
+            m_vertices.push_back({cx+cw, cy, 0,0, cur_r,cur_g,cur_b,1, 0});
+            m_vertices.push_back({cx+cw, cy+thick, 0,0, cur_r,cur_g,cur_b,1, 0});
+            m_vertices.push_back({cx, cy, 0,0, cur_r,cur_g,cur_b,1, 0});
+            m_vertices.push_back({cx+cw, cy+thick, 0,0, cur_r,cur_g,cur_b,1, 0});
+            m_vertices.push_back({cx, cy+thick, 0,0, cur_r,cur_g,cur_b,1, 0});
             // Bottom
-            vertices_.push_back({cx, cy+ch-thick, 0,0, cur_r,cur_g,cur_b,1, 0});
-            vertices_.push_back({cx+cw, cy+ch-thick, 0,0, cur_r,cur_g,cur_b,1, 0});
-            vertices_.push_back({cx+cw, cy+ch, 0,0, cur_r,cur_g,cur_b,1, 0});
-            vertices_.push_back({cx, cy+ch-thick, 0,0, cur_r,cur_g,cur_b,1, 0});
-            vertices_.push_back({cx+cw, cy+ch, 0,0, cur_r,cur_g,cur_b,1, 0});
-            vertices_.push_back({cx, cy+ch, 0,0, cur_r,cur_g,cur_b,1, 0});
+            m_vertices.push_back({cx, cy+ch-thick, 0,0, cur_r,cur_g,cur_b,1, 0});
+            m_vertices.push_back({cx+cw, cy+ch-thick, 0,0, cur_r,cur_g,cur_b,1, 0});
+            m_vertices.push_back({cx+cw, cy+ch, 0,0, cur_r,cur_g,cur_b,1, 0});
+            m_vertices.push_back({cx, cy+ch-thick, 0,0, cur_r,cur_g,cur_b,1, 0});
+            m_vertices.push_back({cx+cw, cy+ch, 0,0, cur_r,cur_g,cur_b,1, 0});
+            m_vertices.push_back({cx, cy+ch, 0,0, cur_r,cur_g,cur_b,1, 0});
             // Left
-            vertices_.push_back({cx, cy, 0,0, cur_r,cur_g,cur_b,1, 0});
-            vertices_.push_back({cx+thick, cy, 0,0, cur_r,cur_g,cur_b,1, 0});
-            vertices_.push_back({cx+thick, cy+ch, 0,0, cur_r,cur_g,cur_b,1, 0});
-            vertices_.push_back({cx, cy, 0,0, cur_r,cur_g,cur_b,1, 0});
-            vertices_.push_back({cx+thick, cy+ch, 0,0, cur_r,cur_g,cur_b,1, 0});
-            vertices_.push_back({cx, cy+ch, 0,0, cur_r,cur_g,cur_b,1, 0});
+            m_vertices.push_back({cx, cy, 0,0, cur_r,cur_g,cur_b,1, 0});
+            m_vertices.push_back({cx+thick, cy, 0,0, cur_r,cur_g,cur_b,1, 0});
+            m_vertices.push_back({cx+thick, cy+ch, 0,0, cur_r,cur_g,cur_b,1, 0});
+            m_vertices.push_back({cx, cy, 0,0, cur_r,cur_g,cur_b,1, 0});
+            m_vertices.push_back({cx+thick, cy+ch, 0,0, cur_r,cur_g,cur_b,1, 0});
+            m_vertices.push_back({cx, cy+ch, 0,0, cur_r,cur_g,cur_b,1, 0});
             // Right
-            vertices_.push_back({cx+cw-thick, cy, 0,0, cur_r,cur_g,cur_b,1, 0});
-            vertices_.push_back({cx+cw, cy, 0,0, cur_r,cur_g,cur_b,1, 0});
-            vertices_.push_back({cx+cw, cy+ch, 0,0, cur_r,cur_g,cur_b,1, 0});
-            vertices_.push_back({cx+cw-thick, cy, 0,0, cur_r,cur_g,cur_b,1, 0});
-            vertices_.push_back({cx+cw, cy+ch, 0,0, cur_r,cur_g,cur_b,1, 0});
-            vertices_.push_back({cx+cw-thick, cy+ch, 0,0, cur_r,cur_g,cur_b,1, 0});
+            m_vertices.push_back({cx+cw-thick, cy, 0,0, cur_r,cur_g,cur_b,1, 0});
+            m_vertices.push_back({cx+cw, cy, 0,0, cur_r,cur_g,cur_b,1, 0});
+            m_vertices.push_back({cx+cw, cy+ch, 0,0, cur_r,cur_g,cur_b,1, 0});
+            m_vertices.push_back({cx+cw-thick, cy, 0,0, cur_r,cur_g,cur_b,1, 0});
+            m_vertices.push_back({cx+cw, cy+ch, 0,0, cur_r,cur_g,cur_b,1, 0});
+            m_vertices.push_back({cx+cw-thick, cy+ch, 0,0, cur_r,cur_g,cur_b,1, 0});
         }
     }
 
@@ -403,20 +403,20 @@ void Renderer::build_pane_vertices(const ScreenBuffer &buffer, const Config &con
         float bar_w = (float)clip_w;
 
         float bar_r = 0.15f, bar_g = 0.15f, bar_b = 0.15f;
-        vertices_.push_back({ox,        bar_y,         0,0, bar_r,bar_g,bar_b,0.95f, 0});
-        vertices_.push_back({ox+bar_w,  bar_y,         0,0, bar_r,bar_g,bar_b,0.95f, 0});
-        vertices_.push_back({ox+bar_w,  bar_y + bar_h, 0,0, bar_r,bar_g,bar_b,0.95f, 0});
-        vertices_.push_back({ox,        bar_y,         0,0, bar_r,bar_g,bar_b,0.95f, 0});
-        vertices_.push_back({ox+bar_w,  bar_y + bar_h, 0,0, bar_r,bar_g,bar_b,0.95f, 0});
-        vertices_.push_back({ox,        bar_y + bar_h, 0,0, bar_r,bar_g,bar_b,0.95f, 0});
+        m_vertices.push_back({ox,        bar_y,         0,0, bar_r,bar_g,bar_b,0.95f, 0});
+        m_vertices.push_back({ox+bar_w,  bar_y,         0,0, bar_r,bar_g,bar_b,0.95f, 0});
+        m_vertices.push_back({ox+bar_w,  bar_y + bar_h, 0,0, bar_r,bar_g,bar_b,0.95f, 0});
+        m_vertices.push_back({ox,        bar_y,         0,0, bar_r,bar_g,bar_b,0.95f, 0});
+        m_vertices.push_back({ox+bar_w,  bar_y + bar_h, 0,0, bar_r,bar_g,bar_b,0.95f, 0});
+        m_vertices.push_back({ox,        bar_y + bar_h, 0,0, bar_r,bar_g,bar_b,0.95f, 0});
 
         float bdr_y = bar_y + bar_h - 1;
-        vertices_.push_back({ox,        bdr_y,     0,0, 0.3f,0.3f,0.3f,1, 0});
-        vertices_.push_back({ox+bar_w,  bdr_y,     0,0, 0.3f,0.3f,0.3f,1, 0});
-        vertices_.push_back({ox+bar_w,  bdr_y + 1, 0,0, 0.3f,0.3f,0.3f,1, 0});
-        vertices_.push_back({ox,        bdr_y,     0,0, 0.3f,0.3f,0.3f,1, 0});
-        vertices_.push_back({ox+bar_w,  bdr_y + 1, 0,0, 0.3f,0.3f,0.3f,1, 0});
-        vertices_.push_back({ox,        bdr_y + 1, 0,0, 0.3f,0.3f,0.3f,1, 0});
+        m_vertices.push_back({ox,        bdr_y,     0,0, 0.3f,0.3f,0.3f,1, 0});
+        m_vertices.push_back({ox+bar_w,  bdr_y,     0,0, 0.3f,0.3f,0.3f,1, 0});
+        m_vertices.push_back({ox+bar_w,  bdr_y + 1, 0,0, 0.3f,0.3f,0.3f,1, 0});
+        m_vertices.push_back({ox,        bdr_y,     0,0, 0.3f,0.3f,0.3f,1, 0});
+        m_vertices.push_back({ox+bar_w,  bdr_y + 1, 0,0, 0.3f,0.3f,0.3f,1, 0});
+        m_vertices.push_back({ox,        bdr_y + 1, 0,0, 0.3f,0.3f,0.3f,1, 0});
 
         float text_y = bar_y + 4;
         float text_x = ox + 4;
@@ -428,12 +428,12 @@ void Renderer::build_pane_vertices(const ScreenBuffer &buffer, const Config &con
         text_x += buffer.search.query.size() * m.cell_width;
 
         float cur_x = text_x;
-        vertices_.push_back({cur_x,   text_y,                     0,0, 0.8f,0.8f,0.8f,0.8f, 0});
-        vertices_.push_back({cur_x+2, text_y,                     0,0, 0.8f,0.8f,0.8f,0.8f, 0});
-        vertices_.push_back({cur_x+2, text_y + (float)m.cell_height, 0,0, 0.8f,0.8f,0.8f,0.8f, 0});
-        vertices_.push_back({cur_x,   text_y,                     0,0, 0.8f,0.8f,0.8f,0.8f, 0});
-        vertices_.push_back({cur_x+2, text_y + (float)m.cell_height, 0,0, 0.8f,0.8f,0.8f,0.8f, 0});
-        vertices_.push_back({cur_x,   text_y + (float)m.cell_height, 0,0, 0.8f,0.8f,0.8f,0.8f, 0});
+        m_vertices.push_back({cur_x,   text_y,                     0,0, 0.8f,0.8f,0.8f,0.8f, 0});
+        m_vertices.push_back({cur_x+2, text_y,                     0,0, 0.8f,0.8f,0.8f,0.8f, 0});
+        m_vertices.push_back({cur_x+2, text_y + (float)m.cell_height, 0,0, 0.8f,0.8f,0.8f,0.8f, 0});
+        m_vertices.push_back({cur_x,   text_y,                     0,0, 0.8f,0.8f,0.8f,0.8f, 0});
+        m_vertices.push_back({cur_x+2, text_y + (float)m.cell_height, 0,0, 0.8f,0.8f,0.8f,0.8f, 0});
+        m_vertices.push_back({cur_x,   text_y + (float)m.cell_height, 0,0, 0.8f,0.8f,0.8f,0.8f, 0});
 
         if (!buffer.search.query.empty()) {
             std::string info;
@@ -463,12 +463,12 @@ void Renderer::render_dot_grid(int offset_x, int offset_y, int w, int h,
         for (int x = offset_x; x < offset_x + w; x += cell_w) {
             float cx = x + cell_w * 0.5f - ds * 0.5f;
             float cy = y + cell_h * 0.5f - ds * 0.5f;
-            vertices_.push_back({cx,    cy,    0,0, dot_r,dot_g,dot_b,1, 0});
-            vertices_.push_back({cx+ds, cy,    0,0, dot_r,dot_g,dot_b,1, 0});
-            vertices_.push_back({cx+ds, cy+ds, 0,0, dot_r,dot_g,dot_b,1, 0});
-            vertices_.push_back({cx,    cy,    0,0, dot_r,dot_g,dot_b,1, 0});
-            vertices_.push_back({cx+ds, cy+ds, 0,0, dot_r,dot_g,dot_b,1, 0});
-            vertices_.push_back({cx,    cy+ds, 0,0, dot_r,dot_g,dot_b,1, 0});
+            m_vertices.push_back({cx,    cy,    0,0, dot_r,dot_g,dot_b,1, 0});
+            m_vertices.push_back({cx+ds, cy,    0,0, dot_r,dot_g,dot_b,1, 0});
+            m_vertices.push_back({cx+ds, cy+ds, 0,0, dot_r,dot_g,dot_b,1, 0});
+            m_vertices.push_back({cx,    cy,    0,0, dot_r,dot_g,dot_b,1, 0});
+            m_vertices.push_back({cx+ds, cy+ds, 0,0, dot_r,dot_g,dot_b,1, 0});
+            m_vertices.push_back({cx,    cy+ds, 0,0, dot_r,dot_g,dot_b,1, 0});
         }
     }
 }
@@ -478,23 +478,23 @@ void Renderer::render_images(ScreenBuffer &buffer, int offset_x, int offset_y,
     auto &store = buffer.images;
     if (store.placements().empty()) return;
 
-    const auto &m = font_.metrics();
+    const auto &m = m_font.metrics();
     int sb_count = buffer.scrollback_count();
     int vp_offset = buffer.viewport_offset();
 
     // Set up projection
     float proj[16] = {};
-    proj[0] = 2.0f / viewport_w_;
-    proj[5] = -2.0f / viewport_h_;
+    proj[0] = 2.0f / m_viewport_w;
+    proj[5] = -2.0f / m_viewport_h;
     proj[10] = -1.0f;
     proj[12] = -1.0f;
     proj[13] = 1.0f;
     proj[15] = 1.0f;
 
-    glUseProgram(image_shader_);
-    int proj_loc = glGetUniformLocation(image_shader_, "uProjection");
+    glUseProgram(m_image_shader);
+    int proj_loc = glGetUniformLocation(m_image_shader, "uProjection");
     glUniformMatrix4fv(proj_loc, 1, GL_FALSE, proj);
-    int tex_loc = glGetUniformLocation(image_shader_, "uImage");
+    int tex_loc = glGetUniformLocation(m_image_shader, "uImage");
     glUniform1i(tex_loc, 0);
 
     for (const auto &placement : store.placements()) {
@@ -540,8 +540,8 @@ void Renderer::render_images(ScreenBuffer &buffer, int offset_x, int offset_y,
         glActiveTexture(GL_TEXTURE0);
         glBindTexture(GL_TEXTURE_2D, img.gl_texture);
 
-        glBindVertexArray(vao_);
-        glBindBuffer(GL_ARRAY_BUFFER, vbo_);
+        glBindVertexArray(m_vao);
+        glBindBuffer(GL_ARRAY_BUFFER, m_vbo);
         glBufferData(GL_ARRAY_BUFFER, sizeof(verts), verts, GL_DYNAMIC_DRAW);
 
         glVertexAttribPointer(0, 2, GL_FLOAT, GL_FALSE, 4 * sizeof(float), (void *)0);
@@ -564,7 +564,7 @@ void Renderer::render_pane(const ScreenBuffer &buffer, const Config &config,
                             bool pane_focused) {
     // Set scissor to clip rendering to pane rect
     // OpenGL scissor uses bottom-left origin, so convert
-    int scissor_y = viewport_h_ - (offset_y + h);
+    int scissor_y = m_viewport_h - (offset_y + h);
     glEnable(GL_SCISSOR_TEST);
     glScissor(offset_x, scissor_y, w, h);
 
@@ -575,12 +575,12 @@ void Renderer::render_pane(const ScreenBuffer &buffer, const Config &config,
     float bg_b = (config.bg_color & 0xFF) / 255.0f;
     float fx = (float)offset_x, fy = (float)offset_y;
     float fw = (float)w, fh = (float)h;
-    vertices_.push_back({fx,    fy,    0,0, bg_r,bg_g,bg_b,1, 0});
-    vertices_.push_back({fx+fw, fy,    0,0, bg_r,bg_g,bg_b,1, 0});
-    vertices_.push_back({fx+fw, fy+fh, 0,0, bg_r,bg_g,bg_b,1, 0});
-    vertices_.push_back({fx,    fy,    0,0, bg_r,bg_g,bg_b,1, 0});
-    vertices_.push_back({fx+fw, fy+fh, 0,0, bg_r,bg_g,bg_b,1, 0});
-    vertices_.push_back({fx,    fy+fh, 0,0, bg_r,bg_g,bg_b,1, 0});
+    m_vertices.push_back({fx,    fy,    0,0, bg_r,bg_g,bg_b,1, 0});
+    m_vertices.push_back({fx+fw, fy,    0,0, bg_r,bg_g,bg_b,1, 0});
+    m_vertices.push_back({fx+fw, fy+fh, 0,0, bg_r,bg_g,bg_b,1, 0});
+    m_vertices.push_back({fx,    fy,    0,0, bg_r,bg_g,bg_b,1, 0});
+    m_vertices.push_back({fx+fw, fy+fh, 0,0, bg_r,bg_g,bg_b,1, 0});
+    m_vertices.push_back({fx,    fy+fh, 0,0, bg_r,bg_g,bg_b,1, 0});
 
     build_pane_vertices(buffer, config, offset_x, offset_y, w, h, pane_focused);
 
@@ -595,12 +595,12 @@ void Renderer::render_pane(const ScreenBuffer &buffer, const Config &config,
 
 void Renderer::render_border(float x, float y, float w, float h,
                               float r, float g, float b) {
-    vertices_.push_back({x,   y,   0,0, r,g,b,1, 0});
-    vertices_.push_back({x+w, y,   0,0, r,g,b,1, 0});
-    vertices_.push_back({x+w, y+h, 0,0, r,g,b,1, 0});
-    vertices_.push_back({x,   y,   0,0, r,g,b,1, 0});
-    vertices_.push_back({x+w, y+h, 0,0, r,g,b,1, 0});
-    vertices_.push_back({x,   y+h, 0,0, r,g,b,1, 0});
+    m_vertices.push_back({x,   y,   0,0, r,g,b,1, 0});
+    m_vertices.push_back({x+w, y,   0,0, r,g,b,1, 0});
+    m_vertices.push_back({x+w, y+h, 0,0, r,g,b,1, 0});
+    m_vertices.push_back({x,   y,   0,0, r,g,b,1, 0});
+    m_vertices.push_back({x+w, y+h, 0,0, r,g,b,1, 0});
+    m_vertices.push_back({x,   y+h, 0,0, r,g,b,1, 0});
 }
 
 // Format a terminal title for display in a tab.
@@ -669,7 +669,7 @@ static std::string utf8_truncate(const std::string &s, int max_chars) {
 }
 
 int Renderer::tab_hit_test(const TabManager &tabs, int x) {
-    const auto &m = font_.metrics();
+    const auto &m = m_font.metrics();
     float tab_x = 4;
     for (int i = 0; i < tabs.tab_count(); i++) {
         const Tab &tab = *tabs.tabs()[i];
@@ -684,26 +684,26 @@ int Renderer::tab_hit_test(const TabManager &tabs, int x) {
 }
 
 void Renderer::render_tab_bar(const TabManager &tabs, const Config &/*config*/, int bar_height) {
-    const auto &m = font_.metrics();
-    float atlas_size = (float)atlas_.texture_size();
-    float bar_w = (float)viewport_w_;
+    const auto &m = m_font.metrics();
+    float atlas_size = (float)m_atlas.texture_size();
+    float bar_w = (float)m_viewport_w;
 
     // Tab bar background
-    vertices_.push_back({0,     0,              0,0, 0.12f,0.12f,0.12f,1, 0});
-    vertices_.push_back({bar_w, 0,              0,0, 0.12f,0.12f,0.12f,1, 0});
-    vertices_.push_back({bar_w, (float)bar_height, 0,0, 0.12f,0.12f,0.12f,1, 0});
-    vertices_.push_back({0,     0,              0,0, 0.12f,0.12f,0.12f,1, 0});
-    vertices_.push_back({bar_w, (float)bar_height, 0,0, 0.12f,0.12f,0.12f,1, 0});
-    vertices_.push_back({0,     (float)bar_height, 0,0, 0.12f,0.12f,0.12f,1, 0});
+    m_vertices.push_back({0,     0,              0,0, 0.12f,0.12f,0.12f,1, 0});
+    m_vertices.push_back({bar_w, 0,              0,0, 0.12f,0.12f,0.12f,1, 0});
+    m_vertices.push_back({bar_w, (float)bar_height, 0,0, 0.12f,0.12f,0.12f,1, 0});
+    m_vertices.push_back({0,     0,              0,0, 0.12f,0.12f,0.12f,1, 0});
+    m_vertices.push_back({bar_w, (float)bar_height, 0,0, 0.12f,0.12f,0.12f,1, 0});
+    m_vertices.push_back({0,     (float)bar_height, 0,0, 0.12f,0.12f,0.12f,1, 0});
 
     // Bottom border
     float bdr_y = (float)bar_height - 1;
-    vertices_.push_back({0,     bdr_y,     0,0, 0.25f,0.25f,0.25f,1, 0});
-    vertices_.push_back({bar_w, bdr_y,     0,0, 0.25f,0.25f,0.25f,1, 0});
-    vertices_.push_back({bar_w, bdr_y + 1, 0,0, 0.25f,0.25f,0.25f,1, 0});
-    vertices_.push_back({0,     bdr_y,     0,0, 0.25f,0.25f,0.25f,1, 0});
-    vertices_.push_back({bar_w, bdr_y + 1, 0,0, 0.25f,0.25f,0.25f,1, 0});
-    vertices_.push_back({0,     bdr_y + 1, 0,0, 0.25f,0.25f,0.25f,1, 0});
+    m_vertices.push_back({0,     bdr_y,     0,0, 0.25f,0.25f,0.25f,1, 0});
+    m_vertices.push_back({bar_w, bdr_y,     0,0, 0.25f,0.25f,0.25f,1, 0});
+    m_vertices.push_back({bar_w, bdr_y + 1, 0,0, 0.25f,0.25f,0.25f,1, 0});
+    m_vertices.push_back({0,     bdr_y,     0,0, 0.25f,0.25f,0.25f,1, 0});
+    m_vertices.push_back({bar_w, bdr_y + 1, 0,0, 0.25f,0.25f,0.25f,1, 0});
+    m_vertices.push_back({0,     bdr_y + 1, 0,0, 0.25f,0.25f,0.25f,1, 0});
 
     // Render each tab
     float tab_x = 4;
@@ -719,21 +719,21 @@ void Renderer::render_tab_bar(const TabManager &tabs, const Config &/*config*/, 
 
         if (i == active_idx) {
             // Active tab background
-            vertices_.push_back({tab_x,        0,                  0,0, 0.2f,0.2f,0.2f,1, 0});
-            vertices_.push_back({tab_x+tab_w,  0,                  0,0, 0.2f,0.2f,0.2f,1, 0});
-            vertices_.push_back({tab_x+tab_w,  (float)bar_height-1, 0,0, 0.2f,0.2f,0.2f,1, 0});
-            vertices_.push_back({tab_x,        0,                  0,0, 0.2f,0.2f,0.2f,1, 0});
-            vertices_.push_back({tab_x+tab_w,  (float)bar_height-1, 0,0, 0.2f,0.2f,0.2f,1, 0});
-            vertices_.push_back({tab_x,        (float)bar_height-1, 0,0, 0.2f,0.2f,0.2f,1, 0});
+            m_vertices.push_back({tab_x,        0,                  0,0, 0.2f,0.2f,0.2f,1, 0});
+            m_vertices.push_back({tab_x+tab_w,  0,                  0,0, 0.2f,0.2f,0.2f,1, 0});
+            m_vertices.push_back({tab_x+tab_w,  (float)bar_height-1, 0,0, 0.2f,0.2f,0.2f,1, 0});
+            m_vertices.push_back({tab_x,        0,                  0,0, 0.2f,0.2f,0.2f,1, 0});
+            m_vertices.push_back({tab_x+tab_w,  (float)bar_height-1, 0,0, 0.2f,0.2f,0.2f,1, 0});
+            m_vertices.push_back({tab_x,        (float)bar_height-1, 0,0, 0.2f,0.2f,0.2f,1, 0});
 
             // Active tab indicator (colored bottom border)
             float ind_y = (float)bar_height - 2;
-            vertices_.push_back({tab_x,       ind_y,            0,0, 0.3f,0.6f,1.0f,1, 0});
-            vertices_.push_back({tab_x+tab_w, ind_y,            0,0, 0.3f,0.6f,1.0f,1, 0});
-            vertices_.push_back({tab_x+tab_w, (float)bar_height, 0,0, 0.3f,0.6f,1.0f,1, 0});
-            vertices_.push_back({tab_x,       ind_y,            0,0, 0.3f,0.6f,1.0f,1, 0});
-            vertices_.push_back({tab_x+tab_w, (float)bar_height, 0,0, 0.3f,0.6f,1.0f,1, 0});
-            vertices_.push_back({tab_x,       (float)bar_height, 0,0, 0.3f,0.6f,1.0f,1, 0});
+            m_vertices.push_back({tab_x,       ind_y,            0,0, 0.3f,0.6f,1.0f,1, 0});
+            m_vertices.push_back({tab_x+tab_w, ind_y,            0,0, 0.3f,0.6f,1.0f,1, 0});
+            m_vertices.push_back({tab_x+tab_w, (float)bar_height, 0,0, 0.3f,0.6f,1.0f,1, 0});
+            m_vertices.push_back({tab_x,       ind_y,            0,0, 0.3f,0.6f,1.0f,1, 0});
+            m_vertices.push_back({tab_x+tab_w, (float)bar_height, 0,0, 0.3f,0.6f,1.0f,1, 0});
+            m_vertices.push_back({tab_x,       (float)bar_height, 0,0, 0.3f,0.6f,1.0f,1, 0});
 
             draw_text(tab_x + m.cell_width, text_y, title, 0.9f, 0.9f, 0.9f, atlas_size);
         } else {
@@ -742,12 +742,12 @@ void Renderer::render_tab_bar(const TabManager &tabs, const Config &/*config*/, 
                 // Small dot
                 float dot_x = tab_x + 4;
                 float dot_y = text_y + m.cell_height / 2.0f - 2;
-                vertices_.push_back({dot_x,   dot_y,   0,0, 0.3f,0.7f,1.0f,1, 0});
-                vertices_.push_back({dot_x+4, dot_y,   0,0, 0.3f,0.7f,1.0f,1, 0});
-                vertices_.push_back({dot_x+4, dot_y+4, 0,0, 0.3f,0.7f,1.0f,1, 0});
-                vertices_.push_back({dot_x,   dot_y,   0,0, 0.3f,0.7f,1.0f,1, 0});
-                vertices_.push_back({dot_x+4, dot_y+4, 0,0, 0.3f,0.7f,1.0f,1, 0});
-                vertices_.push_back({dot_x,   dot_y+4, 0,0, 0.3f,0.7f,1.0f,1, 0});
+                m_vertices.push_back({dot_x,   dot_y,   0,0, 0.3f,0.7f,1.0f,1, 0});
+                m_vertices.push_back({dot_x+4, dot_y,   0,0, 0.3f,0.7f,1.0f,1, 0});
+                m_vertices.push_back({dot_x+4, dot_y+4, 0,0, 0.3f,0.7f,1.0f,1, 0});
+                m_vertices.push_back({dot_x,   dot_y,   0,0, 0.3f,0.7f,1.0f,1, 0});
+                m_vertices.push_back({dot_x+4, dot_y+4, 0,0, 0.3f,0.7f,1.0f,1, 0});
+                m_vertices.push_back({dot_x,   dot_y+4, 0,0, 0.3f,0.7f,1.0f,1, 0});
             }
 
             draw_text(tab_x + m.cell_width, text_y, title, 0.5f, 0.5f, 0.5f, atlas_size);
@@ -758,31 +758,31 @@ void Renderer::render_tab_bar(const TabManager &tabs, const Config &/*config*/, 
 }
 
 void Renderer::flush() {
-    if (vertices_.empty()) return;
+    if (m_vertices.empty()) return;
 
     float proj[16] = {};
-    proj[0] = 2.0f / viewport_w_;
-    proj[5] = -2.0f / viewport_h_;
+    proj[0] = 2.0f / m_viewport_w;
+    proj[5] = -2.0f / m_viewport_h;
     proj[10] = -1.0f;
     proj[12] = -1.0f;
     proj[13] = 1.0f;
     proj[15] = 1.0f;
 
-    glUseProgram(glyph_shader_);
+    glUseProgram(m_glyph_shader);
 
-    int loc = glGetUniformLocation(glyph_shader_, "uProjection");
+    int loc = glGetUniformLocation(m_glyph_shader, "uProjection");
     glUniformMatrix4fv(loc, 1, GL_FALSE, proj);
 
-    loc = glGetUniformLocation(glyph_shader_, "uAtlas");
+    loc = glGetUniformLocation(m_glyph_shader, "uAtlas");
     glUniform1i(loc, 0);
 
     glActiveTexture(GL_TEXTURE0);
-    glBindTexture(GL_TEXTURE_2D, atlas_.texture_id());
+    glBindTexture(GL_TEXTURE_2D, m_atlas.texture_id());
 
-    glBindVertexArray(vao_);
-    glBindBuffer(GL_ARRAY_BUFFER, vbo_);
-    glBufferData(GL_ARRAY_BUFFER, vertices_.size() * sizeof(QuadVertex),
-                 vertices_.data(), GL_DYNAMIC_DRAW);
+    glBindVertexArray(m_vao);
+    glBindBuffer(GL_ARRAY_BUFFER, m_vbo);
+    glBufferData(GL_ARRAY_BUFFER, m_vertices.size() * sizeof(QuadVertex),
+                 m_vertices.data(), GL_DYNAMIC_DRAW);
 
     glVertexAttribPointer(0, 2, GL_FLOAT, GL_FALSE, sizeof(QuadVertex),
                           (void *)offsetof(QuadVertex, x));
@@ -797,22 +797,22 @@ void Renderer::flush() {
                           (void *)offsetof(QuadVertex, type));
     glEnableVertexAttribArray(3);
 
-    glDrawArrays(GL_TRIANGLES, 0, (int)vertices_.size());
+    glDrawArrays(GL_TRIANGLES, 0, (int)m_vertices.size());
 
     glBindVertexArray(0);
-    vertices_.clear();
+    m_vertices.clear();
 }
 
 // Original render method — delegates to build_pane_vertices + flush for backwards compat
 void Renderer::render(const ScreenBuffer &buffer, const Config &config) {
     begin_frame(config);
-    build_pane_vertices(buffer, config, 0, 0, viewport_w_, viewport_h_, true);
+    build_pane_vertices(buffer, config, 0, 0, m_viewport_w, m_viewport_h, true);
     flush();
 }
 
 void Renderer::draw_text(float x, float y, const std::string &text,
                          float r, float g, float b, float atlas_size) {
-    const auto &m = font_.metrics();
+    const auto &m = m_font.metrics();
     size_t i = 0;
     while (i < text.size()) {
         uint32_t cp;
@@ -840,8 +840,8 @@ void Renderer::draw_text(float x, float y, const std::string &text,
             i += 1;
         }
 
-        auto [font_idx, glyph_id] = font_.find_glyph(cp);
-        const GlyphEntry *ge = atlas_.get(font_, font_idx, glyph_id);
+        auto [font_idx, glyph_id] = m_font.find_glyph(cp);
+        const GlyphEntry *ge = m_atlas.get(m_font, font_idx, glyph_id);
         if (ge && ge->w > 0) {
             float gx = x + ge->bearing_x;
             float gy = y + m.ascender - ge->bearing_y;
@@ -854,12 +854,12 @@ void Renderer::draw_text(float x, float y, const std::string &text,
             float tv2 = (ge->v + ge->h) / atlas_size;
 
             float type = (ge->type == GlyphType::Color) ? 2.0f : 1.0f;
-            vertices_.push_back({gx,  gy,  tu,  tv,  r,g,b,1, type});
-            vertices_.push_back({gx2, gy,  tu2, tv,  r,g,b,1, type});
-            vertices_.push_back({gx2, gy2, tu2, tv2, r,g,b,1, type});
-            vertices_.push_back({gx,  gy,  tu,  tv,  r,g,b,1, type});
-            vertices_.push_back({gx2, gy2, tu2, tv2, r,g,b,1, type});
-            vertices_.push_back({gx,  gy2, tu,  tv2, r,g,b,1, type});
+            m_vertices.push_back({gx,  gy,  tu,  tv,  r,g,b,1, type});
+            m_vertices.push_back({gx2, gy,  tu2, tv,  r,g,b,1, type});
+            m_vertices.push_back({gx2, gy2, tu2, tv2, r,g,b,1, type});
+            m_vertices.push_back({gx,  gy,  tu,  tv,  r,g,b,1, type});
+            m_vertices.push_back({gx2, gy2, tu2, tv2, r,g,b,1, type});
+            m_vertices.push_back({gx,  gy2, tu,  tv2, r,g,b,1, type});
         }
         x += m.cell_width;
     }

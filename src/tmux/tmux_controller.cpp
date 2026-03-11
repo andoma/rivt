@@ -14,33 +14,33 @@ namespace rivt {
 
 TmuxController::TmuxController(TmuxClient &client, Window &window,
                                  TabManager &tabs, EventLoop &loop)
-    : client_(client), window_(window), tabs_(tabs), loop_(loop)
+    : m_client(client), m_window(window), m_tabs(tabs), m_loop(loop)
 {
-    client_.on_output = [this](int id, const std::string &d) { on_output(id, d); };
-    client_.on_window_add = [this](int id) { on_window_add(id); };
-    client_.on_window_close = [this](int id) { on_window_close(id); };
-    client_.on_window_renamed = [this](int id, const std::string &n) { on_window_renamed(id, n); };
-    client_.on_layout_change = [this](int id, const std::string &l, bool active) { on_layout_change(id, l, active); };
-    client_.on_session_changed = [this]() { on_session_changed(); };
-    client_.on_session_window_changed = [this](int id) { on_session_window_changed(id); };
-    client_.on_exit = [this]() { on_exit(); };
+    m_client.on_output = [this](int id, const std::string &d) { on_output(id, d); };
+    m_client.on_window_add = [this](int id) { on_window_add(id); };
+    m_client.on_window_close = [this](int id) { on_window_close(id); };
+    m_client.on_window_renamed = [this](int id, const std::string &n) { on_window_renamed(id, n); };
+    m_client.on_layout_change = [this](int id, const std::string &l, bool active) { on_layout_change(id, l, active); };
+    m_client.on_session_changed = [this]() { on_session_changed(); };
+    m_client.on_session_window_changed = [this](int id) { on_session_window_changed(id); };
+    m_client.on_exit = [this]() { on_exit(); };
 }
 
 void TmuxController::initialize(int cols, int rows, int cell_w, int cell_h,
                                   int content_x, int content_y) {
-    active_ = true;
-    cell_w_ = cell_w;
-    cell_h_ = cell_h;
-    content_x_ = content_x;
-    content_y_ = content_y;
+    m_active = true;
+    m_cell_w = cell_w;
+    m_cell_h = cell_h;
+    m_content_x = content_x;
+    m_content_y = content_y;
     dbg("tmux: initialize cell=%dx%d content_origin=%d,%d cols=%d rows=%d",
         cell_w, cell_h, content_x, content_y, cols, rows);
 
     // In PTY mode, the tmux window (B) should keep its own size and tell
     // tmux to adapt — never resize to match the session layout.  Mark the
     // initial resize as done so on_layout_change won't call resize_to_cells.
-    if (client_.is_pty_mode()) {
-        initial_resize_done_ = true;
+    if (m_client.is_pty_mode()) {
+        m_initial_resize_done = true;
     }
 
     // Send initial client size so tmux knows our dimensions and sends
@@ -48,48 +48,48 @@ void TmuxController::initialize(int cols, int rows, int cell_w, int cell_h,
     // In PTY mode, defer this — %session-changed will trigger list-windows.
     // Sending commands before tmux is ready risks them reaching the shell
     // if tmux exits immediately (e.g., no session to attach to).
-    if (cols > 0 && rows > 0 && !client_.is_pty_mode()) {
-        client_.refresh_client_size(cols, rows);
+    if (cols > 0 && rows > 0 && !m_client.is_pty_mode()) {
+        m_client.refresh_client_size(cols, rows);
     }
 }
 
 void TmuxController::handle_resize(int cols, int rows, int cell_w, int cell_h,
                                      int content_x, int content_y) {
-    if (!active_) return;
+    if (!m_active) return;
     dbg("tmux: handle_resize cols=%d rows=%d cell=%dx%d content_origin=%d,%d",
         cols, rows, cell_w, cell_h, content_x, content_y);
-    cell_w_ = cell_w;
-    cell_h_ = cell_h;
-    content_x_ = content_x;
-    content_y_ = content_y;
-    client_.refresh_client_size(cols, rows);
+    m_cell_w = cell_w;
+    m_cell_h = cell_h;
+    m_content_x = content_x;
+    m_content_y = content_y;
+    m_client.refresh_client_size(cols, rows);
 }
 
 void TmuxController::detach() {
-    if (!active_) return;
-    client_.detach();
-    active_ = false;
+    if (!m_active) return;
+    m_client.detach();
+    m_active = false;
 }
 
 void TmuxController::on_output(int pane_id, const std::string &data) {
-    auto it = pane_map_.find(pane_id);
-    if (it != pane_map_.end()) {
+    auto it = m_pane_map.find(pane_id);
+    if (it != m_pane_map.end()) {
         dbg("tmux: output pane=%%%d len=%zu -> feed_data", pane_id, data.size());
         it->second->feed_data(data.data(), data.size());
     } else {
         dbg("tmux: output pane=%%%d len=%zu -> buffered (pane not yet created)", pane_id, data.size());
-        output_buffer_[pane_id] += data;
+        m_output_buffer[pane_id] += data;
     }
 }
 
 void TmuxController::on_window_add(int window_id) {
-    dbg("tmux: window-add @%d (already_known=%d)", window_id, (int)window_map_.count(window_id));
-    if (window_map_.count(window_id)) return;
+    dbg("tmux: window-add @%d (already_known=%d)", window_id, (int)m_window_map.count(window_id));
+    if (m_window_map.count(window_id)) return;
 
     // Don't create the tab yet — wait for %layout-change which has the
     // actual pane geometries.  Request the layout explicitly in case
     // %layout-change doesn't arrive on its own.
-    client_.send_command(
+    m_client.send_command(
         "list-windows -F '#{window_id} #{window_layout}'",
         [this, window_id](const std::string &output) {
             dbg("tmux: window-add list-windows response (%zu bytes)", output.size());
@@ -119,26 +119,26 @@ void TmuxController::on_window_add(int window_id) {
 
 void TmuxController::on_window_close(int window_id) {
     dbg("tmux: window-close @%d", window_id);
-    auto it = window_map_.find(window_id);
-    if (it == window_map_.end()) return;
+    auto it = m_window_map.find(window_id);
+    if (it == m_window_map.end()) return;
 
     Tab *tab = it->second;
 
-    // Remove all panes belonging to this window from pane_map_
-    for (auto pit = pane_map_.begin(); pit != pane_map_.end(); ) {
+    // Remove all panes belonging to this window from m_pane_map
+    for (auto pit = m_pane_map.begin(); pit != m_pane_map.end(); ) {
         bool found = false;
         for (auto &p : tab->panes) {
             if (p.get() == pit->second) { found = true; break; }
         }
-        if (found) pit = pane_map_.erase(pit);
+        if (found) pit = m_pane_map.erase(pit);
         else ++pit;
     }
 
-    if (!tabs_.close_tab_ptr(tab)) {
+    if (!m_tabs.close_tab_ptr(tab)) {
         // Last tab closed — window should close
-        window_.mark_closing();
+        m_window.mark_closing();
     }
-    window_map_.erase(it);
+    m_window_map.erase(it);
 
     // Tab bar may have appeared/disappeared — reposition all panes
     reposition_all_panes();
@@ -146,22 +146,22 @@ void TmuxController::on_window_close(int window_id) {
 
 void TmuxController::on_window_renamed(int window_id, const std::string &name) {
     dbg("tmux: window-renamed @%d -> '%s'", window_id, name.c_str());
-    auto it = window_map_.find(window_id);
-    if (it != window_map_.end()) {
+    auto it = m_window_map.find(window_id);
+    if (it != m_window_map.end()) {
         it->second->title = name;
-        if (tabs_.on_needs_render) tabs_.on_needs_render();
+        if (m_tabs.on_needs_render) m_tabs.on_needs_render();
     }
 }
 
 void TmuxController::on_layout_change(int window_id, const std::string &layout_str, bool is_active) {
     dbg("tmux: layout-change @%d layout='%s' active=%d", window_id, layout_str.c_str(), is_active);
-    auto wit = window_map_.find(window_id);
+    auto wit = m_window_map.find(window_id);
     Tab *tab;
-    if (wit == window_map_.end()) {
+    if (wit == m_window_map.end()) {
         dbg("tmux: layout-change: creating new tab for @%d", window_id);
-        tab = tabs_.new_empty_tab("tmux");
+        tab = m_tabs.new_empty_tab("tmux");
         tab->tmux_managed = true;
-        window_map_[window_id] = tab;
+        m_window_map[window_id] = tab;
     } else {
         tab = wit->second;
     }
@@ -171,8 +171,8 @@ void TmuxController::on_layout_change(int window_id, const std::string &layout_s
     if (geoms.empty()) return;
 
     // On first layout, resize the window to fit the tmux session
-    if (!initial_resize_done_ && cell_w_ > 0 && cell_h_ > 0) {
-        initial_resize_done_ = true;
+    if (!m_initial_resize_done && m_cell_w > 0 && m_cell_h > 0) {
+        m_initial_resize_done = true;
         int max_col = 0, max_row = 0;
         for (auto &g : geoms) {
             max_col = std::max(max_col, g.x + g.w);
@@ -180,17 +180,17 @@ void TmuxController::on_layout_change(int window_id, const std::string &layout_s
         }
         dbg("tmux: initial resize to %dx%d cells", max_col, max_row);
         if (max_col > 0 && max_row > 0) {
-            window_.resize_to_cells(max_col, max_row);
+            m_window.resize_to_cells(max_col, max_row);
         }
     }
 
     // Tab bar may have appeared/disappeared — reposition all existing panes
     reposition_all_panes();
-    dbg("tmux: content_y_=%d (tab_bar_height)", content_y_);
+    dbg("tmux: m_content_y=%d (tab_bar_height)", m_content_y);
 
     // Determine which panes are new, existing, or gone
     std::unordered_map<int, Pane *> current_panes;
-    for (auto &[pid, pane] : pane_map_) {
+    for (auto &[pid, pane] : m_pane_map) {
         // Check if this pane belongs to this tab
         for (auto &p : tab->panes) {
             if (p.get() == pane) {
@@ -207,10 +207,10 @@ void TmuxController::on_layout_change(int window_id, const std::string &layout_s
         if (it != current_panes.end()) {
             // Existing pane — update geometry
             Pane *pane = it->second;
-            pane->rect.x = content_x_ + g.x * cell_w_;
-            pane->rect.y = content_y_ + g.y * cell_h_;
-            pane->rect.w = g.w * cell_w_;
-            pane->rect.h = g.h * cell_h_;
+            pane->rect.x = m_content_x + g.x * m_cell_w;
+            pane->rect.y = m_content_y + g.y * m_cell_h;
+            pane->rect.w = g.w * m_cell_w;
+            pane->rect.h = g.h * m_cell_h;
             pane->resize(g.w, g.h);
             dbg("tmux: pane %%%d update rect=(%d,%d %dx%d) cells=%dx%d",
                 g.pane_id, pane->rect.x, pane->rect.y, pane->rect.w, pane->rect.h, g.w, g.h);
@@ -220,19 +220,19 @@ void TmuxController::on_layout_change(int window_id, const std::string &layout_s
             // New pane
             Pane *pane = create_tmux_pane(tab, g.pane_id, g.w, g.h);
             if (pane) {
-                pane->rect.x = content_x_ + g.x * cell_w_;
-                pane->rect.y = content_y_ + g.y * cell_h_;
-                pane->rect.w = g.w * cell_w_;
-                pane->rect.h = g.h * cell_h_;
+                pane->rect.x = m_content_x + g.x * m_cell_w;
+                pane->rect.y = m_content_y + g.y * m_cell_h;
+                pane->rect.w = g.w * m_cell_w;
+                pane->rect.h = g.h * m_cell_h;
                 dbg("tmux: pane %%%d NEW rect=(%d,%d %dx%d) cells=%dx%d",
                     g.pane_id, pane->rect.x, pane->rect.y, pane->rect.w, pane->rect.h, g.w, g.h);
                 new_pane_set[g.pane_id] = pane;
 
                 // Replay buffered output
-                auto buf_it = output_buffer_.find(g.pane_id);
-                if (buf_it != output_buffer_.end()) {
+                auto buf_it = m_output_buffer.find(g.pane_id);
+                if (buf_it != m_output_buffer.end()) {
                     pane->feed_data(buf_it->second.data(), buf_it->second.size());
-                    output_buffer_.erase(buf_it);
+                    m_output_buffer.erase(buf_it);
                 }
             }
         }
@@ -240,36 +240,36 @@ void TmuxController::on_layout_change(int window_id, const std::string &layout_s
 
     // Remove panes that are gone
     for (auto &[pid, pane] : current_panes) {
-        pane_map_.erase(pid);
-        tabs_.remove_pane(tab, pane);
+        m_pane_map.erase(pid);
+        m_tabs.remove_pane(tab, pane);
     }
 
     // Activate this tab if tmux says it's the active window
     if (is_active) {
-        for (int i = 0; i < tabs_.tab_count(); i++) {
-            if (tabs_.tabs()[i].get() == tab) {
-                tabs_.activate_tab(i);
+        for (int i = 0; i < m_tabs.tab_count(); i++) {
+            if (m_tabs.tabs()[i].get() == tab) {
+                m_tabs.activate_tab(i);
                 break;
             }
         }
     }
 
-    if (tabs_.on_needs_render) tabs_.on_needs_render();
+    if (m_tabs.on_needs_render) m_tabs.on_needs_render();
 }
 
 Pane *TmuxController::create_tmux_pane(Tab *tab, int tmux_pane_id, int cols, int rows) {
     dbg("tmux: create_tmux_pane %%%d %dx%d", tmux_pane_id, cols, rows);
-    Pane *pane = tabs_.add_pane_to_tab(tab, cols, rows);
+    Pane *pane = m_tabs.add_pane_to_tab(tab, cols, rows);
     if (!pane) { dbg("tmux: add_pane_to_tab returned null!"); return nullptr; }
 
-    pane->write_callback_ = [this, tmux_pane_id](const std::string &data) {
-        client_.send_keys(tmux_pane_id, data);
+    pane->m_write_callback = [this, tmux_pane_id](const std::string &data) {
+        m_client.send_keys(tmux_pane_id, data);
     };
 
-    pane_map_[tmux_pane_id] = pane;
+    m_pane_map[tmux_pane_id] = pane;
 
     // Request current pane content so the display isn't blank
-    client_.send_command(
+    m_client.send_command(
         "capture-pane -e -p -t %" + std::to_string(tmux_pane_id),
         [pane](const std::string &output) {
             if (output.empty()) return;
@@ -299,16 +299,16 @@ void TmuxController::on_session_changed() {
     // This is critical in PTY mode where we skip the initial refresh-client
     // in initialize() to avoid commands leaking to the shell.
     int w, h;
-    window_.platform()->get_size(w, h);
-    int bar_h = window_.tab_bar_height();
-    if (cell_w_ > 0 && cell_h_ > 0) {
-        int cols = w / cell_w_;
-        int rows = (h - bar_h) / cell_h_;
+    m_window.platform()->get_size(w, h);
+    int bar_h = m_window.tab_bar_height();
+    if (m_cell_w > 0 && m_cell_h > 0) {
+        int cols = w / m_cell_w;
+        int rows = (h - bar_h) / m_cell_h;
         dbg("tmux: session-changed sending refresh-client %dx%d", cols, rows);
-        client_.refresh_client_size(cols, rows);
+        m_client.refresh_client_size(cols, rows);
     }
 
-    client_.send_command(
+    m_client.send_command(
         "list-windows -F '#{window_id} #{window_layout}'",
         [this](const std::string &output) {
             dbg("tmux: list-windows response (%zu bytes)", output.size());
@@ -336,7 +336,7 @@ void TmuxController::on_session_changed() {
 }
 
 void TmuxController::request_window_names() {
-    client_.send_command(
+    m_client.send_command(
         "list-windows -F '#{window_id} #{window_active} #{window_name} #{pane_title}'",
         [this](const std::string &output) {
             size_t pos = 0;
@@ -377,58 +377,58 @@ void TmuxController::request_window_names() {
 
                 // X11 window title: full pane title for active window
                 if (active && !pane_title.empty()) {
-                    window_.platform()->set_title("rivt [tmux] " + pane_title);
+                    m_window.platform()->set_title("rivt [tmux] " + pane_title);
                 }
             }
         });
 }
 
 void TmuxController::reposition_all_panes() {
-    int new_y = window_.tab_bar_height();
-    if (new_y == content_y_) return;
-    dbg("tmux: reposition_all_panes content_y %d -> %d", content_y_, new_y);
-    int delta = new_y - content_y_;
-    content_y_ = new_y;
-    for (auto &[wid, tab] : window_map_) {
+    int new_y = m_window.tab_bar_height();
+    if (new_y == m_content_y) return;
+    dbg("tmux: reposition_all_panes content_y %d -> %d", m_content_y, new_y);
+    int delta = new_y - m_content_y;
+    m_content_y = new_y;
+    for (auto &[wid, tab] : m_window_map) {
         for (auto &p : tab->panes) {
             p->rect.y += delta;
         }
     }
-    if (tabs_.on_needs_render) tabs_.on_needs_render();
+    if (m_tabs.on_needs_render) m_tabs.on_needs_render();
 }
 
 void TmuxController::on_session_window_changed(int window_id) {
     dbg("tmux: session-window-changed @%d", window_id);
-    auto it = window_map_.find(window_id);
-    if (it == window_map_.end()) return;
+    auto it = m_window_map.find(window_id);
+    if (it == m_window_map.end()) return;
     Tab *tab = it->second;
-    for (int i = 0; i < tabs_.tab_count(); i++) {
-        if (tabs_.tabs()[i].get() == tab) {
-            tabs_.activate_tab(i);
+    for (int i = 0; i < m_tabs.tab_count(); i++) {
+        if (m_tabs.tabs()[i].get() == tab) {
+            m_tabs.activate_tab(i);
             break;
         }
     }
 }
 
 void TmuxController::on_exit() {
-    dbg("tmux: on_exit (gateway_pane_=%p)", (void*)gateway_pane_);
-    active_ = false;
+    dbg("tmux: on_exit (m_gateway_pane=%p)", (void*)m_gateway_pane);
+    m_active = false;
 
-    if (gateway_pane_) {
+    if (m_gateway_pane) {
         // PTY mode: clean up tmux tabs/panes, restore gateway pane
         // Close all tmux-managed tabs
-        for (auto &[wid, tab] : window_map_) {
-            tabs_.close_tab_ptr(tab);
+        for (auto &[wid, tab] : m_window_map) {
+            m_tabs.close_tab_ptr(tab);
         }
-        window_map_.clear();
-        pane_map_.clear();
-        output_buffer_.clear();
+        m_window_map.clear();
+        m_pane_map.clear();
+        m_output_buffer.clear();
 
         // Notify Window to restore normal operation
         if (on_tmux_exit) on_tmux_exit();
     } else {
         // Subprocess mode: close the window
-        window_.mark_closing();
+        m_window.mark_closing();
     }
 }
 

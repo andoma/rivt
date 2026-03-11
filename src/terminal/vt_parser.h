@@ -75,28 +75,28 @@ private:
 
     void parse_csi_params();
 
-    VtHandler &handler_;
-    State state_ = State::Ground;
+    VtHandler &m_handler;
+    State m_state = State::Ground;
 
     // UTF-8 decoding state
-    uint32_t utf8_codepoint_ = 0;
-    int utf8_remaining_ = 0;
+    uint32_t m_utf8_codepoint = 0;
+    int m_utf8_remaining = 0;
 
     // CSI accumulation
-    std::string csi_param_str_;
-    char csi_intermediate_ = 0;
+    std::string m_csi_param_str;
+    char m_csi_intermediate = 0;
 
     // ESC intermediate
-    char esc_intermediate_ = 0;
+    char m_esc_intermediate = 0;
 
     // OSC accumulation
-    std::string osc_string_;
+    std::string m_osc_string;
 
     // APC accumulation
-    std::string apc_string_;
+    std::string m_apc_string;
 
     // DCS
-    std::string dcs_param_str_;
+    std::string m_dcs_param_str;
 };
 
 } // namespace rivt

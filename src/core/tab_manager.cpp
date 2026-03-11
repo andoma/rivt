@@ -5,7 +5,7 @@
 namespace rivt {
 
 TabManager::TabManager(Config &config, EventLoop &loop, Platform *platform)
-    : config_(config), loop_(loop), platform_(platform)
+    : m_config(config), m_loop(loop), m_platform(platform)
 {
 }
 
@@ -13,18 +13,18 @@ Pane *TabManager::create_pane() {
     // Compute initial grid size from content area
     // We'll use 80x24 as default if no content area set yet
     int cols = 80, rows = 24;
-    if (content_w_ > 0 && content_h_ > 0) {
+    if (m_content_w > 0 && m_content_h > 0) {
         // These will be corrected by compute_layout later
         cols = 80;
         rows = 24;
     }
-    auto pane = std::make_unique<Pane>(cols, rows, config_);
+    auto pane = std::make_unique<Pane>(cols, rows, m_config);
     Pane *raw = pane.get();
 
     setup_pane(raw);
-    pane->setup_callbacks(platform_, config_);
+    pane->setup_callbacks(m_platform, m_config);
 
-    if (!pane->spawn_shell(loop_)) {
+    if (!pane->spawn_shell(m_loop)) {
         return nullptr;
     }
 
@@ -41,11 +41,11 @@ void TabManager::setup_pane(Pane *pane) {
             pane->has_activity = true;
         }
         // Check if pane is in a non-active tab
-        for (int i = 0; i < (int)tabs_.size(); i++) {
-            if (i != active_index_) {
-                for (auto &p : tabs_[i]->panes) {
+        for (int i = 0; i < (int)m_tabs.size(); i++) {
+            if (i != m_active_index) {
+                for (auto &p : m_tabs[i]->panes) {
                     if (p.get() == pane) {
-                        tabs_[i]->has_activity = true;
+                        m_tabs[i]->has_activity = true;
                         break;
                     }
                 }
@@ -61,7 +61,7 @@ void TabManager::setup_pane(Pane *pane) {
 
     pane->on_title_change = [this](Pane *p, const std::string &title) {
         // Update the tab title for whichever tab owns this pane
-        for (auto &tab : tabs_) {
+        for (auto &tab : m_tabs) {
             if (tab->focused_pane == p) {
                 tab->title = title;
                 if (on_needs_render) on_needs_render();
@@ -77,24 +77,24 @@ void TabManager::setup_pane(Pane *pane) {
 
 Tab *TabManager::new_tab() {
     auto tab = std::make_unique<Tab>();
-    tab->id = next_tab_id_++;
+    tab->id = m_next_tab_id++;
     tab->title = "Terminal";
 
     Tab *raw = tab.get();
-    tabs_.push_back(std::move(tab));
-    active_index_ = (int)tabs_.size() - 1;
+    m_tabs.push_back(std::move(tab));
+    m_active_index = (int)m_tabs.size() - 1;
 
     // Create initial pane
     // We need a temporary grid size; compute_layout will fix it
-    auto pane = std::make_unique<Pane>(80, 24, config_);
+    auto pane = std::make_unique<Pane>(80, 24, m_config);
     Pane *pane_raw = pane.get();
 
     setup_pane(pane_raw);
-    pane_raw->setup_callbacks(platform_, config_);
+    pane_raw->setup_callbacks(m_platform, m_config);
 
-    if (!pane_raw->spawn_shell(loop_)) {
-        tabs_.pop_back();
-        active_index_ = tabs_.empty() ? -1 : (int)tabs_.size() - 1;
+    if (!pane_raw->spawn_shell(m_loop)) {
+        m_tabs.pop_back();
+        m_active_index = m_tabs.empty() ? -1 : (int)m_tabs.size() - 1;
         return nullptr;
     }
 
@@ -103,37 +103,37 @@ Tab *TabManager::new_tab() {
     raw->layout.init(pane_raw);
 
     // Recompute layout if we have dimensions
-    if (content_w_ > 0 && content_h_ > 0) {
-        recompute_layout(content_x_, content_y_, content_w_, content_h_);
+    if (m_content_w > 0 && m_content_h > 0) {
+        recompute_layout(m_content_x, m_content_y, m_content_w, m_content_h);
     }
 
     return raw;
 }
 
 bool TabManager::close_tab(int index) {
-    if (index < 0 || index >= (int)tabs_.size()) return true;
+    if (index < 0 || index >= (int)m_tabs.size()) return true;
 
     // Detach all panes from event loop
-    for (auto &pane : tabs_[index]->panes) {
-        pane->detach(loop_);
+    for (auto &pane : m_tabs[index]->panes) {
+        pane->detach(m_loop);
     }
 
-    tabs_.erase(tabs_.begin() + index);
+    m_tabs.erase(m_tabs.begin() + index);
 
-    if (tabs_.empty()) {
-        active_index_ = -1;
+    if (m_tabs.empty()) {
+        m_active_index = -1;
         return false;
     }
 
-    if (active_index_ >= (int)tabs_.size())
-        active_index_ = (int)tabs_.size() - 1;
+    if (m_active_index >= (int)m_tabs.size())
+        m_active_index = (int)m_tabs.size() - 1;
 
     return true;
 }
 
 bool TabManager::close_tab_ptr(Tab *tab) {
-    for (int i = 0; i < (int)tabs_.size(); i++) {
-        if (tabs_[i].get() == tab) {
+    for (int i = 0; i < (int)m_tabs.size(); i++) {
+        if (m_tabs[i].get() == tab) {
             return close_tab(i);
         }
     }
@@ -142,22 +142,22 @@ bool TabManager::close_tab_ptr(Tab *tab) {
 
 Tab *TabManager::new_empty_tab(const std::string &title) {
     auto tab = std::make_unique<Tab>();
-    tab->id = next_tab_id_++;
+    tab->id = m_next_tab_id++;
     tab->title = title;
 
     Tab *raw = tab.get();
-    tabs_.push_back(std::move(tab));
-    active_index_ = (int)tabs_.size() - 1;
+    m_tabs.push_back(std::move(tab));
+    m_active_index = (int)m_tabs.size() - 1;
 
     return raw;
 }
 
 Pane *TabManager::add_pane_to_tab(Tab *tab, int cols, int rows) {
-    auto pane = std::make_unique<Pane>(cols, rows, config_);
+    auto pane = std::make_unique<Pane>(cols, rows, m_config);
     Pane *raw = pane.get();
 
     setup_pane(raw);
-    pane->setup_callbacks(platform_, config_);
+    pane->setup_callbacks(m_platform, m_config);
 
     tab->panes.push_back(std::move(pane));
     if (!tab->focused_pane) tab->focused_pane = raw;
@@ -166,7 +166,7 @@ Pane *TabManager::add_pane_to_tab(Tab *tab, int cols, int rows) {
 }
 
 bool TabManager::remove_pane(Tab *tab, Pane *pane) {
-    pane->detach(loop_);
+    pane->detach(m_loop);
 
     // Update focus if needed
     if (tab->focused_pane == pane) {
@@ -189,21 +189,21 @@ bool TabManager::remove_pane(Tab *tab, Pane *pane) {
 }
 
 void TabManager::activate_tab(int index) {
-    if (index < 0 || index >= (int)tabs_.size()) return;
-    active_index_ = index;
-    tabs_[index]->has_activity = false;
+    if (index < 0 || index >= (int)m_tabs.size()) return;
+    m_active_index = index;
+    m_tabs[index]->has_activity = false;
     // Update title from focused pane
     if (on_needs_render) on_needs_render();
 }
 
 void TabManager::next_tab() {
-    if (tabs_.size() <= 1) return;
-    activate_tab((active_index_ + 1) % (int)tabs_.size());
+    if (m_tabs.size() <= 1) return;
+    activate_tab((m_active_index + 1) % (int)m_tabs.size());
 }
 
 void TabManager::prev_tab() {
-    if (tabs_.size() <= 1) return;
-    activate_tab((active_index_ + (int)tabs_.size() - 1) % (int)tabs_.size());
+    if (m_tabs.size() <= 1) return;
+    activate_tab((m_active_index + (int)m_tabs.size() - 1) % (int)m_tabs.size());
 }
 
 Pane *TabManager::focused_pane() {
@@ -220,7 +220,7 @@ Pane *TabManager::split_pane(SplitDir dir) {
 
     if (!tab->layout.split(tab->focused_pane, new_pane, dir)) {
         // Split failed; remove the pane we just created
-        new_pane->detach(loop_);
+        new_pane->detach(m_loop);
         tab->panes.pop_back();
         return nullptr;
     }
@@ -228,8 +228,8 @@ Pane *TabManager::split_pane(SplitDir dir) {
     tab->focused_pane = new_pane;
 
     // Recompute layout
-    if (content_w_ > 0 && content_h_ > 0) {
-        recompute_layout(content_x_, content_y_, content_w_, content_h_);
+    if (m_content_w > 0 && m_content_h > 0) {
+        recompute_layout(m_content_x, m_content_y, m_content_w, m_content_h);
     }
 
     return new_pane;
@@ -242,13 +242,13 @@ bool TabManager::close_focused_pane() {
     Pane *target = tab->focused_pane;
 
     // If this is the only pane in the only tab, we should quit
-    if (tab->panes.size() == 1 && tabs_.size() == 1) {
+    if (tab->panes.size() == 1 && m_tabs.size() == 1) {
         return false;
     }
 
     // If this is the only pane in this tab, close the tab
     if (tab->panes.size() == 1) {
-        return close_tab(active_index_);
+        return close_tab(m_active_index);
     }
 
     // Remove from layout
@@ -260,7 +260,7 @@ bool TabManager::close_focused_pane() {
     tab->focused_pane = remaining.empty() ? nullptr : remaining[0];
 
     // Detach and remove
-    target->detach(loop_);
+    target->detach(m_loop);
     auto it = std::find_if(tab->panes.begin(), tab->panes.end(),
         [target](const std::unique_ptr<Pane> &p) { return p.get() == target; });
     if (it != tab->panes.end()) {
@@ -268,8 +268,8 @@ bool TabManager::close_focused_pane() {
     }
 
     // Recompute layout
-    if (content_w_ > 0 && content_h_ > 0) {
-        recompute_layout(content_x_, content_y_, content_w_, content_h_);
+    if (m_content_w > 0 && m_content_h > 0) {
+        recompute_layout(m_content_x, m_content_y, m_content_w, m_content_h);
     }
 
     return true;
@@ -288,10 +288,10 @@ void TabManager::navigate_pane(NavDir dir) {
 }
 
 void TabManager::recompute_layout(int content_x, int content_y, int content_w, int content_h) {
-    content_x_ = content_x;
-    content_y_ = content_y;
-    content_w_ = content_w;
-    content_h_ = content_h;
+    m_content_x = content_x;
+    m_content_y = content_y;
+    m_content_w = content_w;
+    m_content_h = content_h;
 
     Tab *tab = active_tab();
     if (!tab) return;
@@ -300,24 +300,24 @@ void TabManager::recompute_layout(int content_x, int content_y, int content_w, i
     if (tab->tmux_managed) return;
 
     tab->layout.compute_layout(content_x, content_y, content_w, content_h,
-                                2, cell_w_, cell_h_);
+                                2, m_cell_w, m_cell_h);
 }
 
 bool TabManager::reap_dead_panes() {
     bool any_removed = false;
 
-    for (int t = (int)tabs_.size() - 1; t >= 0; t--) {
-        Tab &tab = *tabs_[t];
+    for (int t = (int)m_tabs.size() - 1; t >= 0; t--) {
+        Tab &tab = *m_tabs[t];
         for (int p = (int)tab.panes.size() - 1; p >= 0; p--) {
             if (!tab.panes[p]->alive()) {
                 Pane *dead = tab.panes[p].get();
 
                 if (tab.panes.size() == 1) {
                     // Last pane in tab — close the tab
-                    dead->detach(loop_);
-                    tabs_.erase(tabs_.begin() + t);
-                    if (active_index_ >= (int)tabs_.size())
-                        active_index_ = (int)tabs_.size() - 1;
+                    dead->detach(m_loop);
+                    m_tabs.erase(m_tabs.begin() + t);
+                    if (m_active_index >= (int)m_tabs.size())
+                        m_active_index = (int)m_tabs.size() - 1;
                     any_removed = true;
                     break;
                 }
@@ -332,22 +332,22 @@ bool TabManager::reap_dead_panes() {
                     tab.focused_pane = remaining.empty() ? nullptr : remaining[0];
                 }
 
-                dead->detach(loop_);
+                dead->detach(m_loop);
                 tab.panes.erase(tab.panes.begin() + p);
                 any_removed = true;
             }
         }
     }
 
-    if (any_removed && content_w_ > 0 && content_h_ > 0) {
+    if (any_removed && m_content_w > 0 && m_content_h > 0) {
         Tab *tab = active_tab();
         if (tab) {
-            tab->layout.compute_layout(content_x_, content_y_, content_w_, content_h_,
-                                        2, cell_w_, cell_h_);
+            tab->layout.compute_layout(m_content_x, m_content_y, m_content_w, m_content_h,
+                                        2, m_cell_w, m_cell_h);
         }
     }
 
-    return !tabs_.empty();
+    return !m_tabs.empty();
 }
 
 } // namespace rivt

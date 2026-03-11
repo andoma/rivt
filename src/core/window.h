@@ -27,12 +27,12 @@ public:
     bool reap_dead_panes();
     void toggle_cursor_blink();
 
-    Platform *platform() { return platform_.get(); }
-    int event_fd() const { return platform_->get_event_fd(); }
-    bool is_closing() const { return closing_; }
-    void mark_closing() { closing_ = true; }
-    bool needs_render() const { return needs_render_; }
-    TabManager *tab_manager() { return tabs_.get(); }
+    Platform *platform() { return m_platform.get(); }
+    int event_fd() const { return m_platform->get_event_fd(); }
+    bool is_closing() const { return m_closing; }
+    void mark_closing() { m_closing = true; }
+    bool needs_render() const { return m_needs_render; }
+    TabManager *tab_manager() { return m_tabs.get(); }
 
     // Resize window to fit a given cell grid (used by tmux controller)
     void resize_to_cells(int cols, int rows);
@@ -54,24 +54,24 @@ private:
     void start_tmux_from_pane(Pane *gateway);
     void stop_tmux_pty_mode();
 
-    Config config_;
-    EventLoop &loop_;
-    std::unique_ptr<Platform> platform_;
-    Renderer renderer_;
-    std::unique_ptr<TabManager> tabs_;
-    int win_w_ = 800, win_h_ = 600;
-    bool needs_render_ = true;
-    bool focused_ = true;
-    bool cursor_blink_on_ = true;
-    bool closing_ = false;
+    Config m_config;
+    EventLoop &m_loop;
+    std::unique_ptr<Platform> m_platform;
+    Renderer m_renderer;
+    std::unique_ptr<TabManager> m_tabs;
+    int m_win_w = 800, m_win_h = 600;
+    bool m_needs_render = true;
+    bool m_focused = true;
+    bool m_cursor_blink_on = true;
+    bool m_closing = false;
 
-    std::unique_ptr<TmuxClient> tmux_client_;
-    std::unique_ptr<TmuxController> tmux_controller_;
-    Pane *tmux_gateway_pane_ = nullptr;  // pane whose PTY carries tmux traffic
+    std::unique_ptr<TmuxClient> m_tmux_client;
+    std::unique_ptr<TmuxController> m_tmux_controller;
+    Pane *m_tmux_gateway_pane = nullptr;  // pane whose PTY carries tmux traffic
 
     // Deferred destruction — can't destroy while inside feed_data() call stack
-    std::unique_ptr<TmuxClient> tmux_stale_client_;
-    std::unique_ptr<TmuxController> tmux_stale_controller_;
+    std::unique_ptr<TmuxClient> m_tmux_stale_client;
+    std::unique_ptr<TmuxController> m_tmux_stale_controller;
 };
 
 } // namespace rivt

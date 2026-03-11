@@ -9,58 +9,58 @@ namespace rivt {
 GlyphAtlas::GlyphAtlas() = default;
 
 GlyphAtlas::~GlyphAtlas() {
-    if (texture_id_)
-        glDeleteTextures(1, &texture_id_);
+    if (m_texture_id)
+        glDeleteTextures(1, &m_texture_id);
 }
 
 bool GlyphAtlas::init(int initial_size) {
-    tex_size_ = initial_size;
+    m_tex_size = initial_size;
 
-    glGenTextures(1, &texture_id_);
-    glBindTexture(GL_TEXTURE_2D, texture_id_);
-    glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA8, tex_size_, tex_size_, 0,
+    glGenTextures(1, &m_texture_id);
+    glBindTexture(GL_TEXTURE_2D, m_texture_id);
+    glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA8, m_tex_size, m_tex_size, 0,
                  GL_RGBA, GL_UNSIGNED_BYTE, nullptr);
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
 
-    shelf_x_ = 0;
-    shelf_y_ = 0;
-    shelf_height_ = 0;
+    m_shelf_x = 0;
+    m_shelf_y = 0;
+    m_shelf_height = 0;
 
     return true;
 }
 
 void GlyphAtlas::clear() {
-    cache_.clear();
-    shelf_x_ = 0;
-    shelf_y_ = 0;
-    shelf_height_ = 0;
+    m_cache.clear();
+    m_shelf_x = 0;
+    m_shelf_y = 0;
+    m_shelf_height = 0;
 
     // Clear texture
-    glBindTexture(GL_TEXTURE_2D, texture_id_);
-    std::vector<uint8_t> zeros(tex_size_ * tex_size_ * 4, 0);
-    glTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, tex_size_, tex_size_,
+    glBindTexture(GL_TEXTURE_2D, m_texture_id);
+    std::vector<uint8_t> zeros(m_tex_size * m_tex_size * 4, 0);
+    glTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, m_tex_size, m_tex_size,
                     GL_RGBA, GL_UNSIGNED_BYTE, zeros.data());
 }
 
 const GlyphEntry *GlyphAtlas::get(Font &font, int font_index, uint32_t glyph_id) {
     GlyphKey key{font_index, glyph_id};
-    auto it = cache_.find(key);
-    if (it != cache_.end())
+    auto it = m_cache.find(key);
+    if (it != m_cache.end())
         return &it->second;
 
     GlyphEntry entry{};
     if (!insert_glyph(font, font_index, glyph_id, entry))
         return nullptr;
 
-    auto [ins, _] = cache_.emplace(key, entry);
+    auto [ins, _] = m_cache.emplace(key, entry);
     return &ins->second;
 }
 
 void GlyphAtlas::upload_region(int x, int y, int w, int h, const uint8_t *data, GlyphType type) {
-    glBindTexture(GL_TEXTURE_2D, texture_id_);
+    glBindTexture(GL_TEXTURE_2D, m_texture_id);
 
     if (type == GlyphType::Color) {
         // BGRA data → convert to RGBA
@@ -150,14 +150,14 @@ bool GlyphAtlas::insert_glyph(Font &font, int font_index, uint32_t glyph_id, Gly
         atlas_w = bw / 3;
 
     // Shelf packing
-    if (shelf_x_ + atlas_w + 1 > tex_size_) {
+    if (m_shelf_x + atlas_w + 1 > m_tex_size) {
         // Move to next shelf
-        shelf_x_ = 0;
-        shelf_y_ += shelf_height_ + 1;
-        shelf_height_ = 0;
+        m_shelf_x = 0;
+        m_shelf_y += m_shelf_height + 1;
+        m_shelf_height = 0;
     }
 
-    if (shelf_y_ + bh > tex_size_) {
+    if (m_shelf_y + bh > m_tex_size) {
         grow_texture();
     }
 
@@ -172,18 +172,18 @@ bool GlyphAtlas::insert_glyph(Font &font, int font_index, uint32_t glyph_id, Gly
                row_bytes);
     }
 
-    upload_region(shelf_x_, shelf_y_, bw, bh, buffer.data(), type);
+    upload_region(m_shelf_x, m_shelf_y, bw, bh, buffer.data(), type);
 
-    entry.u = shelf_x_;
-    entry.v = shelf_y_;
+    entry.u = m_shelf_x;
+    entry.v = m_shelf_y;
     entry.w = atlas_w;
     entry.h = bh;
     entry.bearing_x = face->glyph->bitmap_left;
     entry.bearing_y = face->glyph->bitmap_top;
     entry.type = type;
 
-    shelf_x_ += atlas_w + 1;
-    shelf_height_ = std::max(shelf_height_, bh);
+    m_shelf_x += atlas_w + 1;
+    m_shelf_height = std::max(m_shelf_height, bh);
 
     return true;
 }
@@ -191,17 +191,17 @@ bool GlyphAtlas::insert_glyph(Font &font, int font_index, uint32_t glyph_id, Gly
 void GlyphAtlas::grow_texture() {
     // Double the texture size and re-upload
     // For simplicity, just clear and let everything re-rasterize
-    int new_size = tex_size_ * 2;
+    int new_size = m_tex_size * 2;
 
-    glBindTexture(GL_TEXTURE_2D, texture_id_);
+    glBindTexture(GL_TEXTURE_2D, m_texture_id);
     glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA8, new_size, new_size, 0,
                  GL_RGBA, GL_UNSIGNED_BYTE, nullptr);
 
-    tex_size_ = new_size;
-    cache_.clear();
-    shelf_x_ = 0;
-    shelf_y_ = 0;
-    shelf_height_ = 0;
+    m_tex_size = new_size;
+    m_cache.clear();
+    m_shelf_x = 0;
+    m_shelf_y = 0;
+    m_shelf_height = 0;
 }
 
 } // namespace rivt

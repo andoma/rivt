@@ -39,16 +39,16 @@ public:
     void resize(int cols, int rows);
 
     // Check if child shell is alive
-    bool alive() const { if (write_callback_) return true; return pty_.alive(); }
+    bool alive() const { if (m_write_callback) return true; return m_pty.alive(); }
 
     // When set, write() routes here instead of to PTY
-    std::function<void(const std::string &)> write_callback_;
+    std::function<void(const std::string &)> m_write_callback;
 
     // Accessors
-    ScreenBuffer &screen() { return screen_; }
-    const ScreenBuffer &screen() const { return screen_; }
-    VtParser &parser() { return parser_; }
-    Pty &pty() { return pty_; }
+    ScreenBuffer &screen() { return m_screen; }
+    const ScreenBuffer &screen() const { return m_screen; }
+    VtParser &parser() { return m_parser; }
+    Pty &pty() { return m_pty; }
 
     // Selection state (owned by pane, not screen buffer)
     bool selecting = false;
@@ -78,13 +78,13 @@ public:
     std::function<void(Pane *)> on_tmux_control_mode;
 
     // When set, raw PTY reads go here instead of VtParser (used for tmux PTY mode)
-    std::function<void(const char *, int)> pty_data_override_;
+    std::function<void(const char *, int)> m_pty_data_override;
 
 private:
-    ScreenBuffer screen_;
-    VtParser parser_;
-    Pty pty_;
-    int pty_fd_registered_ = -1;
+    ScreenBuffer m_screen;
+    VtParser m_parser;
+    Pty m_pty;
+    int m_pty_fd_registered = -1;
 };
 
 } // namespace rivt

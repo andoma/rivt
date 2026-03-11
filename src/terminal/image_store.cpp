@@ -15,7 +15,7 @@
 namespace rivt {
 
 ImageStore::~ImageStore() {
-    for (auto &[id, img] : images_) {
+    for (auto &[id, img] : m_images) {
         if (img.gl_texture)
             glDeleteTextures(1, &img.gl_texture);
     }
@@ -66,70 +66,70 @@ bool ImageStore::decode_image(const std::string &base64_payload, int format,
 
 void ImageStore::store_image(const KittyGraphicsCommand &cmd) {
     StoredImage img;
-    img.id = cmd.image_id ? cmd.image_id : next_id_++;
+    img.id = cmd.image_id ? cmd.image_id : m_next_id++;
 
     if (!decode_image(cmd.payload, cmd.format, cmd.src_width, cmd.src_height, img))
         return;
 
     // Remove old image with same ID if exists
-    auto it = images_.find(img.id);
-    if (it != images_.end()) {
+    auto it = m_images.find(img.id);
+    if (it != m_images.end()) {
         if (it->second.gl_texture)
             glDeleteTextures(1, &it->second.gl_texture);
-        images_.erase(it);
+        m_images.erase(it);
     }
 
-    images_.emplace(img.id, std::move(img));
+    m_images.emplace(img.id, std::move(img));
 }
 
 void ImageStore::begin_transfer(const KittyGraphicsCommand &cmd) {
-    pending_id_ = cmd.image_id ? cmd.image_id : next_id_++;
-    pending_placement_id_ = cmd.placement_id;
-    pending_format_ = cmd.format;
-    pending_src_width_ = cmd.src_width;
-    pending_src_height_ = cmd.src_height;
-    pending_columns_ = cmd.columns;
-    pending_rows_ = cmd.rows;
-    pending_z_index_ = cmd.z_index;
-    pending_payload_ = cmd.payload;
+    m_pending_id = cmd.image_id ? cmd.image_id : m_next_id++;
+    m_pending_placement_id = cmd.placement_id;
+    m_pending_format = cmd.format;
+    m_pending_src_width = cmd.src_width;
+    m_pending_src_height = cmd.src_height;
+    m_pending_columns = cmd.columns;
+    m_pending_rows = cmd.rows;
+    m_pending_z_index = cmd.z_index;
+    m_pending_payload = cmd.payload;
 }
 
 void ImageStore::append_data(const std::string &base64_chunk) {
-    pending_payload_ += base64_chunk;
+    m_pending_payload += base64_chunk;
 }
 
 KittyGraphicsCommand ImageStore::finish_transfer() {
     KittyGraphicsCommand cmd;
-    cmd.image_id = pending_id_;
-    cmd.placement_id = pending_placement_id_;
-    cmd.format = pending_format_;
-    cmd.src_width = pending_src_width_;
-    cmd.src_height = pending_src_height_;
-    cmd.columns = pending_columns_;
-    cmd.rows = pending_rows_;
-    cmd.z_index = pending_z_index_;
-    cmd.payload = std::move(pending_payload_);
+    cmd.image_id = m_pending_id;
+    cmd.placement_id = m_pending_placement_id;
+    cmd.format = m_pending_format;
+    cmd.src_width = m_pending_src_width;
+    cmd.src_height = m_pending_src_height;
+    cmd.columns = m_pending_columns;
+    cmd.rows = m_pending_rows;
+    cmd.z_index = m_pending_z_index;
+    cmd.payload = std::move(m_pending_payload);
 
     StoredImage img;
     img.id = cmd.image_id;
     if (decode_image(cmd.payload, cmd.format, cmd.src_width, cmd.src_height, img)) {
-        auto it = images_.find(img.id);
-        if (it != images_.end()) {
+        auto it = m_images.find(img.id);
+        if (it != m_images.end()) {
             if (it->second.gl_texture)
                 glDeleteTextures(1, &it->second.gl_texture);
-            images_.erase(it);
+            m_images.erase(it);
         }
-        images_.emplace(img.id, std::move(img));
+        m_images.emplace(img.id, std::move(img));
     }
 
-    pending_id_ = 0;
-    pending_payload_.clear();
+    m_pending_id = 0;
+    m_pending_payload.clear();
     return cmd;
 }
 
 void ImageStore::place_image(uint32_t image_id, uint32_t placement_id,
                               int abs_line, int col, int columns, int rows, int z_index) {
-    if (images_.find(image_id) == images_.end()) return;
+    if (m_images.find(image_id) == m_images.end()) return;
 
     ImagePlacement p;
     p.image_id = image_id;
@@ -139,7 +139,7 @@ void ImageStore::place_image(uint32_t image_id, uint32_t placement_id,
     p.columns = columns;
     p.rows = rows;
     p.z_index = z_index;
-    placements_.push_back(p);
+    m_placements.push_back(p);
 }
 
 void ImageStore::delete_images(const KittyGraphicsCommand &cmd) {
@@ -149,28 +149,28 @@ void ImageStore::delete_images(const KittyGraphicsCommand &cmd) {
             break;
         case 'i':
             // Delete all placements for this image ID
-            placements_.erase(
-                std::remove_if(placements_.begin(), placements_.end(),
+            m_placements.erase(
+                std::remove_if(m_placements.begin(), m_placements.end(),
                     [&](const ImagePlacement &p) { return p.image_id == cmd.image_id; }),
-                placements_.end());
+                m_placements.end());
             // Also remove the image data
             {
-                auto it = images_.find(cmd.image_id);
-                if (it != images_.end()) {
+                auto it = m_images.find(cmd.image_id);
+                if (it != m_images.end()) {
                     if (it->second.gl_texture)
                         glDeleteTextures(1, &it->second.gl_texture);
-                    images_.erase(it);
+                    m_images.erase(it);
                 }
             }
             break;
         case 'p':
             // Delete specific placement
-            placements_.erase(
-                std::remove_if(placements_.begin(), placements_.end(),
+            m_placements.erase(
+                std::remove_if(m_placements.begin(), m_placements.end(),
                     [&](const ImagePlacement &p) {
                         return p.image_id == cmd.image_id && p.placement_id == cmd.placement_id;
                     }),
-                placements_.end());
+                m_placements.end());
             break;
         default:
             break;
@@ -178,35 +178,35 @@ void ImageStore::delete_images(const KittyGraphicsCommand &cmd) {
 }
 
 void ImageStore::remove_all() {
-    placements_.clear();
-    for (auto &[id, img] : images_) {
+    m_placements.clear();
+    for (auto &[id, img] : m_images) {
         if (img.gl_texture)
             glDeleteTextures(1, &img.gl_texture);
     }
-    images_.clear();
+    m_images.clear();
 }
 
 void ImageStore::gc_placements(int min_abs_line) {
-    placements_.erase(
-        std::remove_if(placements_.begin(), placements_.end(),
+    m_placements.erase(
+        std::remove_if(m_placements.begin(), m_placements.end(),
             [min_abs_line](const ImagePlacement &p) { return p.anchor_abs_line < min_abs_line; }),
-        placements_.end());
+        m_placements.end());
 
     // Remove images with no remaining placements
     std::vector<uint32_t> to_remove;
-    for (auto &[id, img] : images_) {
+    for (auto &[id, img] : m_images) {
         bool has_placement = false;
-        for (const auto &p : placements_) {
+        for (const auto &p : m_placements) {
             if (p.image_id == id) { has_placement = true; break; }
         }
         if (!has_placement) to_remove.push_back(id);
     }
     for (uint32_t id : to_remove) {
-        auto it = images_.find(id);
-        if (it != images_.end()) {
+        auto it = m_images.find(id);
+        if (it != m_images.end()) {
             if (it->second.gl_texture)
                 glDeleteTextures(1, &it->second.gl_texture);
-            images_.erase(it);
+            m_images.erase(it);
         }
     }
 }

@@ -6,26 +6,26 @@
 namespace rivt {
 
 Pane::Pane(int cols, int rows, const Config &config)
-    : screen_(cols, rows, config.scrollback_lines)
-    , parser_(screen_)
+    : m_screen(cols, rows, config.scrollback_lines)
+    , m_parser(m_screen)
 {
 }
 
 Pane::~Pane() = default;
 
 bool Pane::spawn_shell(EventLoop &loop) {
-    if (!pty_.spawn(screen_.cols(), screen_.rows()))
+    if (!m_pty.spawn(m_screen.cols(), m_screen.rows()))
         return false;
 
-    pty_fd_registered_ = pty_.fd();
-    loop.add_fd(pty_.fd(), [this](uint32_t events) {
+    m_pty_fd_registered = m_pty.fd();
+    loop.add_fd(m_pty.fd(), [this](uint32_t events) {
         if (events & EPOLLIN) {
             char buf[65536];
             int n;
-            while ((n = pty_.read(buf, sizeof(buf))) > 0) {
+            while ((n = m_pty.read(buf, sizeof(buf))) > 0) {
                 // If in tmux PTY mode, forward all data to override
-                if (pty_data_override_) {
-                    pty_data_override_(buf, n);
+                if (m_pty_data_override) {
+                    m_pty_data_override(buf, n);
                     continue;
                 }
 
@@ -43,27 +43,27 @@ bool Pane::spawn_shell(EventLoop &loop) {
                     if (found) {
                         // Feed data before marker to VtParser
                         if (found > buf) {
-                            parser_.feed(buf, found - buf);
+                            m_parser.feed(buf, found - buf);
                             if (on_needs_render) on_needs_render();
                         }
-                        // Fire callback — handler sets pty_data_override_
+                        // Fire callback — handler sets m_pty_data_override
                         on_tmux_control_mode(this);
                         // Feed remainder after marker to tmux client
                         const char *after = found + marker_len;
                         int remaining = n - (int)(after - buf);
-                        if (remaining > 0 && pty_data_override_) {
-                            pty_data_override_(after, remaining);
+                        if (remaining > 0 && m_pty_data_override) {
+                            m_pty_data_override(after, remaining);
                         }
                         continue;
                     }
                 }
 
-                parser_.feed(buf, n);
+                m_parser.feed(buf, n);
                 if (on_needs_render) on_needs_render();
             }
             // Incrementally update search matches for new output
-            if (screen_.search.active && !screen_.search.query.empty()) {
-                screen_.find_matches_incremental();
+            if (m_screen.search.active && !m_screen.search.query.empty()) {
+                m_screen.find_matches_incremental();
             }
             if (n < 0) {
                 if (on_dead) on_dead(this);
@@ -78,44 +78,44 @@ bool Pane::spawn_shell(EventLoop &loop) {
 }
 
 void Pane::detach(EventLoop &loop) {
-    if (pty_fd_registered_ >= 0) {
-        loop.remove_fd(pty_fd_registered_);
-        pty_fd_registered_ = -1;
+    if (m_pty_fd_registered >= 0) {
+        loop.remove_fd(m_pty_fd_registered);
+        m_pty_fd_registered = -1;
     }
 }
 
 void Pane::write(const std::string &data) {
-    if (write_callback_) write_callback_(data);
-    else pty_.write(data);
+    if (m_write_callback) m_write_callback(data);
+    else m_pty.write(data);
 }
 
 void Pane::write(const char *data, size_t len) {
-    if (write_callback_) write_callback_(std::string(data, len));
-    else pty_.write(data, (int)len);
+    if (m_write_callback) m_write_callback(std::string(data, len));
+    else m_pty.write(data, (int)len);
 }
 
 void Pane::feed_data(const char *buf, size_t len) {
-    parser_.feed(buf, len);
-    if (screen_.search.active && !screen_.search.query.empty())
-        screen_.find_matches_incremental();
+    m_parser.feed(buf, len);
+    if (m_screen.search.active && !m_screen.search.query.empty())
+        m_screen.find_matches_incremental();
     if (on_needs_render) on_needs_render();
 }
 
 void Pane::resize(int cols, int rows) {
-    screen_.resize(cols, rows);
+    m_screen.resize(cols, rows);
     // Don't resize the PTY if this pane is a tmux gateway — the tmux
     // window controls the client size via refresh-client -C, and a
     // TIOCSWINSZ here would cause tmux to fight over the dimensions.
-    if (pty_fd_registered_ >= 0 && !pty_data_override_) pty_.resize(cols, rows);
+    if (m_pty_fd_registered >= 0 && !m_pty_data_override) m_pty.resize(cols, rows);
 }
 
 void Pane::setup_callbacks(Platform *platform, const Config &config) {
-    screen_.on_title_change = [this, platform](const std::string &title) {
+    m_screen.on_title_change = [this, platform](const std::string &title) {
         platform->set_title(title);
         if (on_title_change) on_title_change(this, title);
     };
 
-    screen_.on_osc52_write = [platform, &config](const std::string &sel, const std::string &base64, const std::string &mime_type) {
+    m_screen.on_osc52_write = [platform, &config](const std::string &sel, const std::string &base64, const std::string &mime_type) {
         if (!config.osc52_write) return;
         std::string data = base64_decode(base64);
         bool primary = (sel.find('p') != std::string::npos);
@@ -127,11 +127,11 @@ void Pane::setup_callbacks(Platform *platform, const Config &config) {
         }
     };
 
-    screen_.on_write_back = [this](const std::string &data) {
+    m_screen.on_write_back = [this](const std::string &data) {
         write(data);
     };
 
-    screen_.on_osc52_read = [this, platform, &config](const std::string &sel, const std::string &mime_type) {
+    m_screen.on_osc52_read = [this, platform, &config](const std::string &sel, const std::string &mime_type) {
         if (!config.osc52_read) return;
         bool primary = (sel.find('p') != std::string::npos);
         std::string data;

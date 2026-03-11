@@ -30,8 +30,8 @@ public:
     const GlyphEntry *get(Font &font, int font_index, uint32_t glyph_id);
 
     // GL texture
-    unsigned int texture_id() const { return texture_id_; }
-    int texture_size() const { return tex_size_; }
+    unsigned int texture_id() const { return m_texture_id; }
+    int texture_size() const { return m_tex_size; }
 
     // Invalidate all (e.g. on font size change)
     void clear();
@@ -41,13 +41,13 @@ private:
     void grow_texture();
     void upload_region(int x, int y, int w, int h, const uint8_t *data, GlyphType type);
 
-    unsigned int texture_id_ = 0;
-    int tex_size_ = 0;
+    unsigned int m_texture_id = 0;
+    int m_tex_size = 0;
 
     // Shelf packing state
-    int shelf_x_ = 0;
-    int shelf_y_ = 0;
-    int shelf_height_ = 0;
+    int m_shelf_x = 0;
+    int m_shelf_y = 0;
+    int m_shelf_height = 0;
 
     struct GlyphKey {
         int font_index;
@@ -63,7 +63,7 @@ private:
         }
     };
 
-    std::unordered_map<GlyphKey, GlyphEntry, KeyHash> cache_;
+    std::unordered_map<GlyphKey, GlyphEntry, KeyHash> m_cache;
 };
 
 } // namespace rivt

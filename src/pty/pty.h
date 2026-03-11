@@ -23,20 +23,20 @@ public:
     void resize(int cols, int rows);
 
     // File descriptor for epoll
-    int fd() const { return master_fd_; }
+    int fd() const { return m_master_fd; }
 
     // Check if child is still alive
     bool alive() const;
 
     // Get child PID
-    pid_t child_pid() const { return child_pid_; }
+    pid_t child_pid() const { return m_child_pid; }
 
     // Close PTY
     void close();
 
 private:
-    int master_fd_ = -1;
-    pid_t child_pid_ = -1;
+    int m_master_fd = -1;
+    pid_t m_child_pid = -1;
 };
 
 } // namespace rivt

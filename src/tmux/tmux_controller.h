@@ -19,10 +19,10 @@ public:
     void initialize(int cols, int rows, int cell_w, int cell_h, int content_x, int content_y);
     void handle_resize(int cols, int rows, int cell_w, int cell_h, int content_x, int content_y);
     void detach();
-    bool is_active() const { return active_; }
+    bool is_active() const { return m_active; }
 
     // Set the gateway pane (the pane whose PTY carries tmux traffic in PTY mode)
-    void set_gateway_pane(Pane *pane) { gateway_pane_ = pane; }
+    void set_gateway_pane(Pane *pane) { m_gateway_pane = pane; }
 
     // Callback: fired when tmux exits in PTY mode (so Window can clean up)
     std::function<void()> on_tmux_exit;
@@ -48,22 +48,22 @@ public:
     static std::vector<PaneGeom> parse_layout(const std::string &layout);
 
 private:
-    TmuxClient &client_;
-    Window &window_;
-    TabManager &tabs_;
-    EventLoop &loop_;
-    bool active_ = false;
+    TmuxClient &m_client;
+    Window &m_window;
+    TabManager &m_tabs;
+    EventLoop &m_loop;
+    bool m_active = false;
 
-    std::unordered_map<int, Pane *> pane_map_;    // tmux %pane_id -> rivt Pane*
-    std::unordered_map<int, Tab *> window_map_;   // tmux @window_id -> rivt Tab*
+    std::unordered_map<int, Pane *> m_pane_map;    // tmux %pane_id -> rivt Pane*
+    std::unordered_map<int, Tab *> m_window_map;   // tmux @window_id -> rivt Tab*
 
-    std::unordered_map<int, std::string> output_buffer_;
+    std::unordered_map<int, std::string> m_output_buffer;
 
-    int cell_w_ = 0, cell_h_ = 0;
-    int content_x_ = 0, content_y_ = 0;
-    bool initial_resize_done_ = false;
+    int m_cell_w = 0, m_cell_h = 0;
+    int m_content_x = 0, m_content_y = 0;
+    bool m_initial_resize_done = false;
 
-    Pane *gateway_pane_ = nullptr;  // PTY mode only
+    Pane *m_gateway_pane = nullptr;  // PTY mode only
 };
 
 } // namespace rivt

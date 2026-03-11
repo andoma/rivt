@@ -18,7 +18,7 @@ public:
 
     bool init(const Config &config);
     void set_viewport(int width, int height);
-    void set_focused(bool focused) { focused_ = focused; }
+    void set_focused(bool focused) { m_focused = focused; }
 
     // Original single-buffer render (still works for simple case)
     void render(const ScreenBuffer &buffer, const Config &config);
@@ -58,15 +58,15 @@ public:
     void draw_text(float x, float y, const std::string &text,
                    float r, float g, float b, float atlas_size);
 
-    Font &font() { return font_; }
+    Font &font() { return m_font; }
     void set_font_size(float size_pt, float dpi);
-    const FontMetrics &metrics() const { return font_.metrics(); }
+    const FontMetrics &metrics() const { return m_font.metrics(); }
 
     // Compute grid dimensions from pixel size
     void compute_grid(int pixel_w, int pixel_h, int &cols, int &rows) const;
 
-    int viewport_w() const { return viewport_w_; }
-    int viewport_h() const { return viewport_h_; }
+    int viewport_w() const { return m_viewport_w; }
+    int viewport_h() const { return m_viewport_h; }
 
 private:
     void build_shaders();
@@ -79,18 +79,18 @@ private:
                              int offset_x, int offset_y, int clip_w, int clip_h,
                              bool pane_focused);
 
-    Font font_;
-    GlyphAtlas atlas_;
+    Font m_font;
+    GlyphAtlas m_atlas;
 
-    unsigned int bg_shader_ = 0;
-    unsigned int glyph_shader_ = 0;
-    unsigned int image_shader_ = 0;
-    unsigned int vao_ = 0;
-    unsigned int vbo_ = 0;
+    unsigned int m_bg_shader = 0;
+    unsigned int m_glyph_shader = 0;
+    unsigned int m_image_shader = 0;
+    unsigned int m_vao = 0;
+    unsigned int m_vbo = 0;
 
-    int viewport_w_ = 0;
-    int viewport_h_ = 0;
-    bool focused_ = true;
+    int m_viewport_w = 0;
+    int m_viewport_h = 0;
+    bool m_focused = true;
 
     struct QuadVertex {
         float x, y;       // position
@@ -98,7 +98,7 @@ private:
         float r, g, b, a; // color
         float type;        // 0=bg, 1=mask, 2=color
     };
-    std::vector<QuadVertex> vertices_;
+    std::vector<QuadVertex> m_vertices;
 };
 
 } // namespace rivt

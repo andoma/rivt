@@ -8,15 +8,15 @@ namespace rivt {
 LayoutTree::LayoutTree() = default;
 
 void LayoutTree::init(Pane *pane) {
-    root_ = std::make_unique<LayoutNode>();
-    root_->pane = pane;
+    m_root = std::make_unique<LayoutNode>();
+    m_root->pane = pane;
 }
 
 bool LayoutTree::split(Pane *target, Pane *new_pane, SplitDir dir) {
-    if (!root_) return false;
+    if (!m_root) return false;
 
     // Find the leaf containing target
-    LayoutNode *leaf = find_leaf(root_.get(), target);
+    LayoutNode *leaf = find_leaf(m_root.get(), target);
     if (!leaf) return false;
 
     // Convert this leaf into an internal node with two children
@@ -36,16 +36,16 @@ bool LayoutTree::split(Pane *target, Pane *new_pane, SplitDir dir) {
 }
 
 bool LayoutTree::remove(Pane *target) {
-    if (!root_) return false;
+    if (!m_root) return false;
 
     // Special case: root is the target leaf
-    if (root_->is_leaf() && root_->pane == target) {
-        root_.reset();
+    if (m_root->is_leaf() && m_root->pane == target) {
+        m_root.reset();
         return true;
     }
 
     // Find parent of the leaf containing target
-    LayoutNode *parent = find_parent(root_.get(), target);
+    LayoutNode *parent = find_parent(m_root.get(), target);
     if (!parent) return false;
 
     // Determine which child contains target and which is the sibling
@@ -70,8 +70,8 @@ bool LayoutTree::remove(Pane *target) {
 
 void LayoutTree::compute_layout(int x, int y, int w, int h, int border_width,
                                  int cell_w, int cell_h) {
-    if (root_)
-        compute_node(root_.get(), x, y, w, h, border_width, cell_w, cell_h);
+    if (m_root)
+        compute_node(m_root.get(), x, y, w, h, border_width, cell_w, cell_h);
 }
 
 void LayoutTree::compute_node(LayoutNode *node, int x, int y, int w, int h,
@@ -118,8 +118,8 @@ void LayoutTree::compute_node(LayoutNode *node, int x, int y, int w, int h,
 }
 
 Pane *LayoutTree::pane_at(int px, int py) const {
-    if (!root_) return nullptr;
-    return pane_at_node(root_.get(), px, py);
+    if (!m_root) return nullptr;
+    return pane_at_node(m_root.get(), px, py);
 }
 
 Pane *LayoutTree::pane_at_node(const LayoutNode *node, int px, int py) const {
@@ -136,10 +136,10 @@ Pane *LayoutTree::pane_at_node(const LayoutNode *node, int px, int py) const {
 }
 
 Pane *LayoutTree::navigate(Pane *from, NavDir dir) const {
-    if (!root_) return from;
+    if (!m_root) return from;
 
     std::vector<PaneCenter> centers;
-    collect_centers(root_.get(), centers);
+    collect_centers(m_root.get(), centers);
 
     // Find center of 'from'
     int from_cx = 0, from_cy = 0;
@@ -181,7 +181,7 @@ Pane *LayoutTree::navigate(Pane *from, NavDir dir) const {
 }
 
 void LayoutTree::collect_panes(std::vector<Pane *> &out) const {
-    if (root_) collect_node(root_.get(), out);
+    if (m_root) collect_node(m_root.get(), out);
 }
 
 void LayoutTree::collect_node(const LayoutNode *node, std::vector<Pane *> &out) const {

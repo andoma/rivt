@@ -22,7 +22,7 @@ public:
     // Feed raw data from PTY (used in PTY mode)
     void feed_data(const char *buf, size_t len);
 
-    bool is_pty_mode() const { return !!pty_write_; }
+    bool is_pty_mode() const { return !!m_pty_write; }
 
     using ResponseCallback = std::function<void(const std::string &output)>;
     void send_command(const std::string &cmd, ResponseCallback cb = nullptr);
@@ -45,22 +45,22 @@ private:
     void parse_line(const std::string &line);
     static std::string decode_octal(const std::string &s);
 
-    EventLoop &loop_;
-    int write_fd_ = -1;
-    int read_fd_ = -1;
-    pid_t pid_ = -1;
-    std::string line_buf_;
+    EventLoop &m_loop;
+    int m_write_fd = -1;
+    int m_read_fd = -1;
+    pid_t m_pid = -1;
+    std::string m_line_buf;
 
     // %begin/%end tracking
-    bool in_block_ = false;
-    int block_cmd_num_ = -1;
-    std::string block_output_;
+    bool m_in_block = false;
+    int m_block_cmd_num = -1;
+    std::string m_block_output;
 
     // PTY mode: write callback instead of pipe
-    std::function<void(const std::string &)> pty_write_;
+    std::function<void(const std::string &)> m_pty_write;
 
     // Command response queue: one entry per command sent
-    std::deque<ResponseCallback> response_queue_;
+    std::deque<ResponseCallback> m_response_queue;
 };
 
 } // namespace rivt

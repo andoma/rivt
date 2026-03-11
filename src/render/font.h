@@ -30,9 +30,9 @@ public:
 
     FT_Face face(int index = 0) const;
     hb_font_t *hb_font(int index = 0) const;
-    int font_count() const { return (int)faces_.size(); }
+    int font_count() const { return (int)m_faces.size(); }
 
-    const FontMetrics &metrics() const { return metrics_; }
+    const FontMetrics &metrics() const { return m_metrics; }
 
     // Find glyph in fallback chain, returns (font_index, glyph_id)
     std::pair<int, uint32_t> find_glyph(uint32_t codepoint) const;
@@ -42,18 +42,18 @@ private:
     std::string find_font(const std::string &family, int weight, int slant);
     void compute_metrics();
 
-    FT_Library ft_lib_ = nullptr;
+    FT_Library m_ft_lib = nullptr;
 
     struct FaceEntry {
         FT_Face ft_face = nullptr;
         hb_font_t *hb_font = nullptr;
         std::string path;
     };
-    std::vector<FaceEntry> faces_;
+    std::vector<FaceEntry> m_faces;
 
-    FontMetrics metrics_{};
-    float size_pt_ = 12.0f;
-    float dpi_ = 96.0f;
+    FontMetrics m_metrics{};
+    float m_size_pt = 12.0f;
+    float m_dpi = 96.0f;
 };
 
 } // namespace rivt

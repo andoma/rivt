@@ -54,10 +54,10 @@ public:
     void collect_panes(std::vector<Pane *> &out) const;
 
     // Get root node (for inspection)
-    LayoutNode *root() { return root_.get(); }
-    const LayoutNode *root() const { return root_.get(); }
+    LayoutNode *root() { return m_root.get(); }
+    const LayoutNode *root() const { return m_root.get(); }
 
-    bool empty() const { return !root_; }
+    bool empty() const { return !m_root; }
 
 private:
     // Find the parent of the node containing target pane
@@ -73,7 +73,7 @@ private:
     struct PaneCenter { Pane *pane; int cx, cy; };
     void collect_centers(const LayoutNode *node, std::vector<PaneCenter> &out) const;
 
-    std::unique_ptr<LayoutNode> root_;
+    std::unique_ptr<LayoutNode> m_root;
 };
 
 } // namespace rivt
