@@ -93,6 +93,10 @@ if(CMAKE_BUILD_TYPE STREQUAL "RelWithDebInfo")
     target_compile_options(rivt PRIVATE -O2 -g -fno-omit-frame-pointer)
 endif()
 
+# Install
+include(GNUInstallDirs)
+install(TARGETS rivt RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR})
+
 # Tests
 enable_testing()
 
