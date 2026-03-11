@@ -65,6 +65,7 @@ static int kitty_keycode(uint32_t keysym) {
         case XKB_KEY_Return:    return 13;
         case XKB_KEY_KP_Enter:  return 13;
         case XKB_KEY_Tab:       return 9;
+        case XKB_KEY_ISO_Left_Tab: return 9;
         case XKB_KEY_BackSpace: return 127;
         case XKB_KEY_Insert:    return 57348;
         case XKB_KEY_Delete:    return 57349;
@@ -237,6 +238,9 @@ std::string encode_key_legacy(const KeyEvent &key, const ScreenBuffer &buffer) {
             break;
         case XKB_KEY_Tab:
             seq = shift ? "\033[Z" : "\t";
+            break;
+        case XKB_KEY_ISO_Left_Tab:
+            seq = "\033[Z";
             break;
         case XKB_KEY_Escape:
             seq = "\033";
