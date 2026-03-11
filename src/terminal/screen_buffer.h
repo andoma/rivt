@@ -222,6 +222,7 @@ private:
 
     // Kitty keyboard protocol — stack of flag sets
     std::vector<int> m_kitty_kbd_stack;
+    std::vector<int> m_saved_kitty_kbd_stack;  // saved on alt screen entry
 
 public:
     // Image storage for Kitty graphics protocol
