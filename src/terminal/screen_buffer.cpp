@@ -484,6 +484,7 @@ void ScreenBuffer::set_mode(int mode, bool enable, bool dec_private) {
             }
             break;
         case 2004: m_mode_bracketed_paste = enable; break;
+        case 2026: m_mode_synchronized_update = enable; break;
         case 2027: m_mode_grapheme_cluster = enable; break;
     }
 }

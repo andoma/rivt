@@ -61,6 +61,15 @@ bool Pane::spawn_shell(EventLoop &loop, const std::string &start_cwd) {
                 }
 
                 m_parser.feed(buf, n);
+                if (!m_screen.synchronized_update()) {
+                    if (on_needs_render) on_needs_render();
+                }
+            }
+            // If still in synchronized update after draining all available
+            // data, render anyway to avoid indefinitely frozen display
+            // (e.g. if the end-sync arrives in a later event loop iteration
+            // or the application crashes before sending it).
+            if (m_screen.synchronized_update()) {
                 if (on_needs_render) on_needs_render();
             }
             // Incrementally update search matches for new output
@@ -100,7 +109,9 @@ void Pane::feed_data(const char *buf, size_t len) {
     m_parser.feed(buf, len);
     if (m_screen.search.active && !m_screen.search.query.empty())
         m_screen.find_matches_incremental();
-    if (on_needs_render) on_needs_render();
+    if (!m_screen.synchronized_update()) {
+        if (on_needs_render) on_needs_render();
+    }
 }
 
 void Pane::resize(int cols, int rows) {

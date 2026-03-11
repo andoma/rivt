@@ -136,6 +136,9 @@ public:
     bool any_dirty() const;
     void clear_dirty();
 
+    // Synchronized update (DEC private mode 2026)
+    bool synchronized_update() const { return m_mode_synchronized_update; }
+
     // Callbacks
     std::function<void(const std::string &)> on_title_change;
     std::function<void()> on_bell;
@@ -219,6 +222,7 @@ private:
     int m_mouse_mode = 0;        // 0=off, 1000/1002/1003
     bool m_mode_sgr_mouse = false;
     bool m_mode_grapheme_cluster = false;
+    bool m_mode_synchronized_update = false;
 
     // Kitty keyboard protocol — stack of flag sets
     std::vector<int> m_kitty_kbd_stack;
