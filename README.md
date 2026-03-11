@@ -2,8 +2,6 @@
 
 A modern Linux terminal emulator written in C++20 with first-class tmux integration.
 
-![screenshot](screenshot.png)
-
 ## Highlights
 
 - **Splits, tabs, and windows** — vertical/horizontal split panes, tabbed windows, and multi-window support built in
