@@ -1,4 +1,5 @@
 #include "render/font.h"
+#include "core/debug.h"
 #include <cmath>
 #include <stdexcept>
 
@@ -50,13 +51,34 @@ std::string Font::find_font(const std::string &family, int weight, int slant) {
 }
 
 bool Font::load_face(const std::string &path, int face_index) {
+    if (m_loaded_paths.count(path))
+        return false;
+    m_loaded_paths.insert(path);
+
     FaceEntry entry;
     entry.path = path;
     if (FT_New_Face(m_ft_lib, path.c_str(), face_index, &entry.ft_face))
         return false;
 
     int size_26_6 = (int)(m_size_pt * 64.0f);
-    FT_Set_Char_Size(entry.ft_face, size_26_6, 0, (int)m_dpi, 0);
+    if (FT_Set_Char_Size(entry.ft_face, size_26_6, 0, (int)m_dpi, 0)) {
+        // Scalable sizing failed — try selecting a fixed bitmap strike
+        // (common for color emoji fonts like Noto Color Emoji)
+        if (entry.ft_face->num_fixed_sizes > 0) {
+            int best = 0;
+            int target_height = (int)(m_size_pt * m_dpi / 72.0f);
+            int best_diff = abs(entry.ft_face->available_sizes[0].height - target_height);
+            for (int i = 1; i < entry.ft_face->num_fixed_sizes; i++) {
+                int diff = abs(entry.ft_face->available_sizes[i].height - target_height);
+                if (diff < best_diff) {
+                    best_diff = diff;
+                    best = i;
+                }
+            }
+            FT_Select_Size(entry.ft_face, best);
+            entry.fixed_strike = true;
+        }
+    }
 
     entry.hb_font = hb_ft_font_create_referenced(entry.ft_face);
     m_faces.push_back(entry);
@@ -91,7 +113,8 @@ void Font::set_size(float size_pt, float dpi) {
     m_dpi = dpi;
     int size_26_6 = (int)(m_size_pt * 64.0f);
     for (auto &entry : m_faces) {
-        FT_Set_Char_Size(entry.ft_face, size_26_6, 0, (int)m_dpi, 0);
+        if (!entry.fixed_strike)
+            FT_Set_Char_Size(entry.ft_face, size_26_6, 0, (int)m_dpi, 0);
         if (entry.hb_font) {
             hb_font_destroy(entry.hb_font);
             entry.hb_font = hb_ft_font_create_referenced(entry.ft_face);
@@ -130,12 +153,62 @@ hb_font_t *Font::hb_font(int index) const {
     return nullptr;
 }
 
-std::pair<int, uint32_t> Font::find_glyph(uint32_t codepoint) const {
+std::string Font::find_font_for_codepoint(uint32_t codepoint) {
+    FcConfig *config = FcInitLoadConfigAndFonts();
+    FcPattern *pattern = FcPatternCreate();
+    FcCharSet *cs = FcCharSetCreate();
+    FcCharSetAddChar(cs, codepoint);
+    FcPatternAddCharSet(pattern, FC_CHARSET, cs);
+    FcPatternAddBool(pattern, FC_SCALABLE, FcTrue);
+
+    FcConfigSubstitute(config, pattern, FcMatchPattern);
+    FcDefaultSubstitute(pattern);
+
+    FcResult result;
+    FcPattern *match = FcFontMatch(config, pattern, &result);
+
+    std::string path;
+    if (match) {
+        // Verify the matched font actually contains the codepoint
+        FcCharSet *match_cs = nullptr;
+        if (FcPatternGetCharSet(match, FC_CHARSET, 0, &match_cs) == FcResultMatch
+            && FcCharSetHasChar(match_cs, codepoint)) {
+            FcChar8 *file = nullptr;
+            if (FcPatternGetString(match, FC_FILE, 0, &file) == FcResultMatch)
+                path = (const char *)file;
+        }
+        FcPatternDestroy(match);
+    }
+
+    FcCharSetDestroy(cs);
+    FcPatternDestroy(pattern);
+    FcConfigDestroy(config);
+    return path;
+}
+
+std::pair<int, uint32_t> Font::find_glyph(uint32_t codepoint) {
     for (int i = 0; i < (int)m_faces.size(); i++) {
         uint32_t glyph_id = FT_Get_Char_Index(m_faces[i].ft_face, codepoint);
         if (glyph_id != 0)
             return {i, glyph_id};
     }
+
+    // Ask fontconfig for a font that covers this codepoint
+    std::string path = find_font_for_codepoint(codepoint);
+    if (!path.empty() && load_face(path)) {
+        int idx = (int)m_faces.size() - 1;
+        uint32_t glyph_id = FT_Get_Char_Index(m_faces[idx].ft_face, codepoint);
+        if (glyph_id != 0) {
+            dbg("font: loaded fallback %s for U+%04X", path.c_str(), codepoint);
+            return {idx, glyph_id};
+        }
+        dbg("font: fallback %s matched for U+%04X but glyph not found", path.c_str(), codepoint);
+    } else if (path.empty()) {
+        dbg("font: no font found for U+%04X", codepoint);
+    } else {
+        dbg("font: fallback %s already loaded, no glyph for U+%04X", path.c_str(), codepoint);
+    }
+
     // Return .notdef from primary font
     return {0, 0};
 }

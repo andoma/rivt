@@ -6,6 +6,7 @@
 #include <fontconfig/fontconfig.h>
 #include <string>
 #include <vector>
+#include <unordered_set>
 #include <memory>
 
 namespace rivt {
@@ -35,11 +36,13 @@ public:
     const FontMetrics &metrics() const { return m_metrics; }
 
     // Find glyph in fallback chain, returns (font_index, glyph_id)
-    std::pair<int, uint32_t> find_glyph(uint32_t codepoint) const;
+    // May load new fallback fonts on demand via fontconfig
+    std::pair<int, uint32_t> find_glyph(uint32_t codepoint);
 
 private:
     bool load_face(const std::string &path, int face_index = 0);
     std::string find_font(const std::string &family, int weight, int slant);
+    std::string find_font_for_codepoint(uint32_t codepoint);
     void compute_metrics();
 
     FT_Library m_ft_lib = nullptr;
@@ -48,12 +51,16 @@ private:
         FT_Face ft_face = nullptr;
         hb_font_t *hb_font = nullptr;
         std::string path;
+        bool fixed_strike = false;  // true for bitmap-only fonts (e.g. color emoji)
     };
     std::vector<FaceEntry> m_faces;
 
     FontMetrics m_metrics{};
     float m_size_pt = 12.0f;
     float m_dpi = 96.0f;
+
+    // Tracks font paths already loaded or rejected to avoid repeated lookups
+    std::unordered_set<std::string> m_loaded_paths;
 };
 
 } // namespace rivt

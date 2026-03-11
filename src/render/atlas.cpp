@@ -1,4 +1,5 @@
 #include "render/atlas.h"
+#include "core/debug.h"
 #include <GL/gl.h>
 #include <cstring>
 #include <vector>
@@ -106,22 +107,33 @@ void GlyphAtlas::upload_region(int x, int y, int w, int h, const uint8_t *data, 
 
 bool GlyphAtlas::insert_glyph(Font &font, int font_index, uint32_t glyph_id, GlyphEntry &entry) {
     FT_Face face = font.face(font_index);
-    if (!face) return false;
+    if (!face) {
+        dbg("atlas: insert_glyph font_idx=%d glyph=%u — no face", font_index, glyph_id);
+        return false;
+    }
 
     FT_Int32 load_flags = FT_LOAD_DEFAULT;
     bool is_color = FT_HAS_COLOR(face);
     if (is_color)
         load_flags |= FT_LOAD_COLOR;
 
-    if (FT_Load_Glyph(face, glyph_id, load_flags))
+    FT_Error err = FT_Load_Glyph(face, glyph_id, load_flags);
+    if (err) {
+        dbg("atlas: FT_Load_Glyph failed font_idx=%d glyph=%u err=%d is_color=%d",
+            font_index, glyph_id, err, is_color);
         return false;
+    }
 
     FT_Render_Mode render_mode = FT_RENDER_MODE_NORMAL;
     if (is_color)
         render_mode = FT_RENDER_MODE_NORMAL;
 
-    if (FT_Render_Glyph(face->glyph, render_mode))
+    err = FT_Render_Glyph(face->glyph, render_mode);
+    if (err) {
+        dbg("atlas: FT_Render_Glyph failed font_idx=%d glyph=%u err=%d pixel_mode=%d",
+            font_index, glyph_id, err, face->glyph->bitmap.pixel_mode);
         return false;
+    }
 
     FT_Bitmap &bmp = face->glyph->bitmap;
     int bw = bmp.width;

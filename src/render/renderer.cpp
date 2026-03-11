@@ -3,6 +3,7 @@
 #include "terminal/screen_buffer.h"
 #include "terminal/image_store.h"
 #include "core/tab_manager.h"
+#include "core/debug.h"
 #include <GL/gl.h>
 #include <cstdio>
 #include <cmath>
@@ -290,20 +291,43 @@ void Renderer::build_pane_vertices(const ScreenBuffer &buffer, const Config &con
                 m_vertices.push_back({x_left,  y_bottom, 0, 0, cell_bg_r, cell_bg_g, cell_bg_b, 1.0f, 0});
             }
 
-            if ((cell.attrs & ATTR_WIDE_CONT) || (cell.codepoint == ' ' && !(cell.attrs & ATTR_UNDERLINE_MASK)))
+            if ((cell.attrs & ATTR_WIDE_CONT) || (cell.codepoint == ' ' && !(cell.attrs & ATTR_UNDERLINE_MASK))) {
+                if (cell.codepoint == 0x23F8)
+                    dbg("U+23F8: skipped at col=%d attrs=0x%04x (wide_cont or space)", col, cell.attrs);
                 continue;
+            }
 
             uint32_t cp = cell.codepoint;
+            if (cp == 0x23F8) {
+                dbg("U+23F8: attrs=0x%04x wide_cont=%d codepoint=0x%X col=%d",
+                    cell.attrs, !!(cell.attrs & ATTR_WIDE_CONT), cell.codepoint, col);
+            }
             if (cp >= GRAPHEME_SENTINEL_BASE) continue;
 
             auto [font_idx, glyph_id] = m_font.find_glyph(cp);
             const GlyphEntry *ge = m_atlas.get(m_font, font_idx, glyph_id);
+            if (cp == 0x23F8) {
+                dbg("U+23F8: font_idx=%d glyph_id=%u ge=%p ge->w=%d ge->h=%d",
+                    font_idx, glyph_id, (void*)ge, ge ? ge->w : -1, ge ? ge->h : -1);
+            }
             if (!ge || ge->w == 0) continue;
 
-            float gx = x_left + ge->bearing_x;
-            float gy = y_top + m.ascender - ge->bearing_y;
-            float gx2 = gx + ge->w;
-            float gy2 = gy + ge->h;
+            float gx, gy, gx2, gy2;
+            if (ge->type == GlyphType::Color && ge->h > m.cell_height) {
+                // Scale color emoji to fit cell height
+                float scale = (float)m.cell_height / ge->h;
+                float sw = ge->w * scale;
+                float sh = m.cell_height;
+                gx = x_left + (m.cell_width - sw) * 0.5f;
+                gy = y_top;
+                gx2 = gx + sw;
+                gy2 = gy + sh;
+            } else {
+                gx = x_left + ge->bearing_x;
+                gy = y_top + m.ascender - ge->bearing_y;
+                gx2 = gx + ge->w;
+                gy2 = gy + ge->h;
+            }
 
             float tu = ge->u / atlas_size;
             float tv = ge->v / atlas_size;
