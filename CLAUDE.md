@@ -9,8 +9,8 @@ rivt is a modern Linux terminal emulator written in C++20 with first-class tmux 
 ## Build
 
 ```bash
-cmake -B build -DCMAKE_BUILD_TYPE=Debug .   # Debug includes ASan
-cmake --build build -j$(nproc)
+cmake -B build -G Ninja -DCMAKE_BUILD_TYPE=Debug .   # Debug includes ASan
+cmake --build build
 ```
 
 Debug builds automatically enable `-fsanitize=address -Og -ggdb`. Release builds use standard optimization.
