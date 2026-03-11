@@ -157,11 +157,13 @@ void TmuxController::on_layout_change(int window_id, const std::string &layout_s
     dbg("tmux: layout-change @%d layout='%s' active=%d", window_id, layout_str.c_str(), is_active);
     auto wit = m_window_map.find(window_id);
     Tab *tab;
+    bool new_tab = false;
     if (wit == m_window_map.end()) {
         dbg("tmux: layout-change: creating new tab for @%d", window_id);
         tab = m_tabs.new_empty_tab("tmux");
         tab->tmux_managed = true;
         m_window_map[window_id] = tab;
+        new_tab = true;
     } else {
         tab = wit->second;
     }
@@ -244,8 +246,10 @@ void TmuxController::on_layout_change(int window_id, const std::string &layout_s
         m_tabs.remove_pane(tab, pane);
     }
 
-    // Activate this tab if tmux says it's the active window
-    if (is_active) {
+    // Activate this tab if it's new and tmux says it's the active window.
+    // Don't re-activate existing tabs — layout-change fires on resize too,
+    // and we don't want to yank the user away from the tab they're viewing.
+    if (is_active && new_tab) {
         for (int i = 0; i < m_tabs.tab_count(); i++) {
             if (m_tabs.tabs()[i].get() == tab) {
                 m_tabs.activate_tab(i);
