@@ -13,6 +13,7 @@ pkg_check_modules(FONTCONFIG REQUIRED fontconfig)
 pkg_check_modules(XCB REQUIRED xcb)
 pkg_check_modules(XCB_KEYSYMS REQUIRED xcb-keysyms)
 pkg_check_modules(XCB_ICCCM REQUIRED xcb-icccm)
+pkg_check_modules(XCB_XKB REQUIRED xcb-xkb)
 pkg_check_modules(XKBCOMMON REQUIRED xkbcommon)
 pkg_check_modules(XKBCOMMON_X11 REQUIRED xkbcommon-x11)
 pkg_check_modules(X11_XCB REQUIRED x11-xcb)
@@ -55,6 +56,7 @@ target_include_directories(rivt PRIVATE
     ${XCB_INCLUDE_DIRS}
     ${XCB_KEYSYMS_INCLUDE_DIRS}
     ${XCB_ICCCM_INCLUDE_DIRS}
+    ${XCB_XKB_INCLUDE_DIRS}
     ${XKBCOMMON_INCLUDE_DIRS}
     ${XKBCOMMON_X11_INCLUDE_DIRS}
     ${X11_XCB_INCLUDE_DIRS}
@@ -70,6 +72,7 @@ target_link_libraries(rivt PRIVATE
     ${XCB_LIBRARIES}
     ${XCB_KEYSYMS_LIBRARIES}
     ${XCB_ICCCM_LIBRARIES}
+    ${XCB_XKB_LIBRARIES}
     ${XKBCOMMON_LIBRARIES}
     ${XKBCOMMON_X11_LIBRARIES}
     ${X11_XCB_LIBRARIES}

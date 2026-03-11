@@ -1,5 +1,10 @@
 #include "platform/x11_backend.h"
+#include "core/debug.h"
 #include <xcb/xcb_icccm.h>
+// xcb/xkb.h uses 'explicit' as a field name which is a C++ keyword
+#define explicit explicit_
+#include <xcb/xkb.h>
+#undef explicit
 #include <cstring>
 #include <cstdlib>
 #include <stdexcept>
@@ -82,9 +87,21 @@ bool X11Backend::create_window(int width, int height, const std::string &title) 
     xcb_flush(m_conn);
 
     // Setup xkbcommon-x11
-    xkb_x11_setup_xkb_extension(m_conn,
-        XKB_X11_MIN_MAJOR_XKB_VERSION, XKB_X11_MIN_MINOR_XKB_VERSION,
-        XKB_X11_SETUP_XKB_EXTENSION_NO_FLAGS, nullptr, nullptr, nullptr, nullptr);
+    {
+        uint8_t xkb_base_event, xkb_base_error;
+        xkb_x11_setup_xkb_extension(m_conn,
+            XKB_X11_MIN_MAJOR_XKB_VERSION, XKB_X11_MIN_MINOR_XKB_VERSION,
+            XKB_X11_SETUP_XKB_EXTENSION_NO_FLAGS, nullptr, nullptr,
+            &xkb_base_event, &xkb_base_error);
+        m_xkb_first_event = xkb_base_event;
+
+        // Subscribe to XKB events: keymap changes and state changes
+        uint16_t events = XCB_XKB_EVENT_TYPE_NEW_KEYBOARD_NOTIFY
+                        | XCB_XKB_EVENT_TYPE_MAP_NOTIFY
+                        | XCB_XKB_EVENT_TYPE_STATE_NOTIFY;
+        xcb_xkb_select_events(m_conn, XCB_XKB_ID_USE_CORE_KBD,
+                              events, 0, events, 0, 0, nullptr);
+    }
 
     m_xkb_device_id = xkb_x11_get_core_keyboard_device_id(m_conn);
     m_xkb_keymap = xkb_x11_keymap_new_from_device(m_xkb_ctx, m_conn, m_xkb_device_id,
@@ -404,6 +421,32 @@ void X11Backend::process_events() {
                 break;
             }
             default:
+                if (type == m_xkb_first_event) {
+                    auto *xkb_ev = (xcb_xkb_state_notify_event_t *)ev;
+                    switch (xkb_ev->xkbType) {
+                        case XCB_XKB_NEW_KEYBOARD_NOTIFY:
+                        case XCB_XKB_MAP_NOTIFY:
+                            // Keymap changed — reload from server
+                            dbg("xkb: keymap changed, reloading");
+                            m_xkb_device_id = xkb_x11_get_core_keyboard_device_id(m_conn);
+                            if (m_xkb_state) xkb_state_unref(m_xkb_state);
+                            if (m_xkb_keymap) xkb_keymap_unref(m_xkb_keymap);
+                            m_xkb_keymap = xkb_x11_keymap_new_from_device(
+                                m_xkb_ctx, m_conn, m_xkb_device_id,
+                                XKB_KEYMAP_COMPILE_NO_FLAGS);
+                            m_xkb_state = xkb_x11_state_new_from_device(
+                                m_xkb_keymap, m_conn, m_xkb_device_id);
+                            if (m_key_symbols) xcb_key_symbols_free(m_key_symbols);
+                            m_key_symbols = xcb_key_symbols_alloc(m_conn);
+                            break;
+                        case XCB_XKB_STATE_NOTIFY:
+                            // Modifier/group state changed externally
+                            xkb_state_update_mask(m_xkb_state,
+                                xkb_ev->baseMods, xkb_ev->latchedMods, xkb_ev->lockedMods,
+                                xkb_ev->baseGroup, xkb_ev->latchedGroup, xkb_ev->lockedGroup);
+                            break;
+                    }
+                }
                 break;
         }
         free(ev);

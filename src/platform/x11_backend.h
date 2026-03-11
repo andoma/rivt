@@ -52,6 +52,7 @@ private:
     struct xkb_keymap *m_xkb_keymap = nullptr;
     struct xkb_state *m_xkb_state = nullptr;
     int32_t m_xkb_device_id = -1;
+    uint8_t m_xkb_first_event = 0;
 
     EGLDisplay m_egl_display = EGL_NO_DISPLAY;
     EGLContext m_egl_context = EGL_NO_CONTEXT;
