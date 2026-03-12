@@ -111,6 +111,7 @@ void TmuxController::on_window_add(int window_id) {
                 dbg("tmux: window-add: @%d layout='%s'", wid, layout.c_str());
                 on_layout_change(wid, layout, true);
                 request_window_names();
+                save_affinities();
                 return;
             }
             dbg("tmux: window-add: @%d not found in list-windows", window_id);
@@ -139,6 +140,7 @@ void TmuxController::on_window_close(int window_id) {
         m_window.mark_closing();
     }
     m_window_map.erase(it);
+    save_affinities();
 
     // Tab bar may have appeared/disappeared — reposition all panes
     reposition_all_panes();
@@ -334,8 +336,9 @@ void TmuxController::on_session_changed() {
                 dbg("tmux: list-windows: @%d layout='%s'", window_id, layout.c_str());
                 on_layout_change(window_id, layout);
             }
-            // After layouts are set up, fetch window names
+            // After layouts are set up, fetch window names and save affinities
             request_window_names();
+            save_affinities();
         });
 }
 
@@ -385,6 +388,41 @@ void TmuxController::request_window_names() {
                 }
             }
         });
+}
+
+void TmuxController::save_affinities() {
+    // Build an iTerm2-compatible @affinities string so that when iTerm2
+    // attaches to this tmux session it groups our windows as tabs rather
+    // than opening each as a separate OS window.
+    //
+    // Decoded format: space-separated equivalence classes, each class is
+    //   "wid1,wid2,...;window-options"
+    // We put all known windows into one class (rivt uses a single OS window).
+    //
+    // Encoded format: "a_" prefix + hex-encoded UTF-8 of the decoded string.
+
+    if (m_window_map.empty()) return;
+
+    std::string siblings;
+    for (auto &[wid, tab] : m_window_map) {
+        if (!siblings.empty()) siblings += ",";
+        siblings += std::to_string(wid);
+    }
+    siblings += ";"; // empty window-options
+
+    // Hex-encode with a_ prefix
+    std::string encoded = "a_";
+    for (unsigned char c : siblings) {
+        char hex[3];
+        snprintf(hex, sizeof(hex), "%02x", c);
+        encoded += hex;
+    }
+
+    std::string cmd = "set @affinities \"" + encoded + "\"";
+    if (cmd == m_last_affinities_cmd) return;
+    m_last_affinities_cmd = cmd;
+    dbg("tmux: save_affinities: %s (decoded: %s)", encoded.c_str(), siblings.c_str());
+    m_client.send_command(cmd);
 }
 
 void TmuxController::reposition_all_panes() {
