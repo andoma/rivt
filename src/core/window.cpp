@@ -459,7 +459,7 @@ void Window::handle_key(const KeyEvent &key) {
                 }
                 return;
             case XKB_KEY_0:
-                m_config.font_size = 10.0f;
+                m_config.font_size = 11.0f;
                 resize_font();
                 return;
             // Pane splits
@@ -531,7 +531,7 @@ void Window::handle_key(const KeyEvent &key) {
                 }
                 return;
             case XKB_KEY_0:
-                m_config.font_size = 10.0f;
+                m_config.font_size = 11.0f;
                 resize_font();
                 return;
         }
