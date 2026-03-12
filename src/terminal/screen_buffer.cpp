@@ -6,6 +6,41 @@
 
 namespace rivt {
 
+// VT100 DEC Special Graphics character set (maps 0x60..0x7E to Unicode)
+static const uint32_t dec_special_graphics[] = {
+    0x25C6, // 0x60 ` → ◆ (diamond)
+    0x2592, // 0x61 a → ▒ (checkerboard)
+    0x2409, // 0x62 b → HT symbol
+    0x240C, // 0x63 c → FF symbol
+    0x240D, // 0x64 d → CR symbol
+    0x240A, // 0x65 e → LF symbol
+    0x00B0, // 0x66 f → ° (degree)
+    0x00B1, // 0x67 g → ± (plus/minus)
+    0x2424, // 0x68 h → NL symbol
+    0x240B, // 0x69 i → VT symbol
+    0x2518, // 0x6A j → ┘ (lower-right)
+    0x2510, // 0x6B k → ┐ (upper-right)
+    0x250C, // 0x6C l → ┌ (upper-left)
+    0x2514, // 0x6D m → └ (lower-left)
+    0x253C, // 0x6E n → ┼ (crossing)
+    0x23BA, // 0x6F o → scan line 1
+    0x23BB, // 0x70 p → scan line 3
+    0x2500, // 0x71 q → ─ (horizontal)
+    0x23BC, // 0x72 r → scan line 7
+    0x23BD, // 0x73 s → scan line 9
+    0x251C, // 0x74 t → ├ (left tee)
+    0x2524, // 0x75 u → ┤ (right tee)
+    0x2534, // 0x76 v → ┴ (bottom tee)
+    0x252C, // 0x77 w → ┬ (top tee)
+    0x2502, // 0x78 x → │ (vertical)
+    0x2264, // 0x79 y → ≤
+    0x2265, // 0x7A z → ≥
+    0x03C0, // 0x7B { → π
+    0x2260, // 0x7C | → ≠
+    0x00A3, // 0x7D } → £
+    0x00B7, // 0x7E ~ → · (middle dot)
+};
+
 ScreenBuffer::ScreenBuffer(int cols, int rows, int scrollback_limit)
     : m_cols(cols), m_rows(rows), m_scrollback_limit(scrollback_limit),
       m_scroll_bottom(rows - 1) {
@@ -287,6 +322,10 @@ void ScreenBuffer::set_cursor(int row, int col) {
 // VtHandler implementation
 
 void ScreenBuffer::print(uint32_t codepoint) {
+    // Translate through active character set (G0 or G1)
+    int charset = (m_gl_charset == 0) ? m_charset_g0 : m_charset_g1;
+    if (charset == 1 && codepoint >= 0x60 && codepoint <= 0x7E)
+        codepoint = dec_special_graphics[codepoint - 0x60];
     put_char(codepoint);
 }
 
@@ -308,6 +347,12 @@ void ScreenBuffer::execute(uint8_t code) {
             break;
         case 0x0D: // CR
             m_cursor_col = 0;
+            break;
+        case 0x0E: // SO - shift out (activate G1)
+            m_gl_charset = 1;
+            break;
+        case 0x0F: // SI - shift in (activate G0)
+            m_gl_charset = 0;
             break;
     }
 }
@@ -455,7 +500,7 @@ void ScreenBuffer::set_mode(int mode, bool enable, bool dec_private) {
             if (enable) {
                 // Save cursor, switch to alt screen, clear
                 linearize_screen();
-                m_saved_cursor = { m_cursor_row, m_cursor_col, m_cur_fg, m_bg, m_cur_attrs };
+                m_saved_cursor = { m_cursor_row, m_cursor_col, m_cur_fg, m_bg, m_cur_attrs, m_charset_g0, m_charset_g1, m_gl_charset };
                 m_saved_kitty_kbd_stack = m_kitty_kbd_stack;
                 if (!m_using_alt_screen) {
                     std::swap(m_screen, m_alt_screen);
@@ -479,6 +524,9 @@ void ScreenBuffer::set_mode(int mode, bool enable, bool dec_private) {
                 m_cur_fg = m_saved_cursor.fg;
                 m_bg = m_saved_cursor.bg;
                 m_cur_attrs = m_saved_cursor.attrs;
+                m_charset_g0 = m_saved_cursor.charset_g0;
+                m_charset_g1 = m_saved_cursor.charset_g1;
+                m_gl_charset = m_saved_cursor.gl_charset;
                 m_kitty_kbd_stack = m_saved_kitty_kbd_stack;
                 m_saved_kitty_kbd_stack.clear();
                 for (auto &line : m_screen) line.dirty = true;
@@ -738,7 +786,7 @@ void ScreenBuffer::esc_dispatch(char intermediate, char final_byte) {
     if (intermediate == 0) {
         switch (final_byte) {
             case '7': // DECSC - save cursor
-                m_saved_cursor = { m_cursor_row, m_cursor_col, m_cur_fg, m_bg, m_cur_attrs };
+                m_saved_cursor = { m_cursor_row, m_cursor_col, m_cur_fg, m_bg, m_cur_attrs, m_charset_g0, m_charset_g1, m_gl_charset };
                 break;
             case '8': // DECRC - restore cursor
                 m_cursor_row = m_saved_cursor.row;
@@ -746,6 +794,9 @@ void ScreenBuffer::esc_dispatch(char intermediate, char final_byte) {
                 m_cur_fg = m_saved_cursor.fg;
                 m_bg = m_saved_cursor.bg;
                 m_cur_attrs = m_saved_cursor.attrs;
+                m_charset_g0 = m_saved_cursor.charset_g0;
+                m_charset_g1 = m_saved_cursor.charset_g1;
+                m_gl_charset = m_saved_cursor.gl_charset;
                 break;
             case 'D': // IND - index (move down, scroll if at bottom)
                 if (m_cursor_row == m_scroll_bottom)
@@ -770,6 +821,12 @@ void ScreenBuffer::esc_dispatch(char intermediate, char final_byte) {
                 *this = ScreenBuffer(m_cols, m_rows, m_scrollback_limit);
                 break;
         }
+    } else if (intermediate == '(') {
+        // SCS - designate G0 character set
+        m_charset_g0 = (final_byte == '0') ? 1 : 0;
+    } else if (intermediate == ')') {
+        // SCS - designate G1 character set
+        m_charset_g1 = (final_byte == '0') ? 1 : 0;
     }
 }
 

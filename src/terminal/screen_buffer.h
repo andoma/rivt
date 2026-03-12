@@ -202,6 +202,7 @@ private:
         uint32_t fg = COLOR_FLAG_DEFAULT;
         uint32_t bg = COLOR_FLAG_DEFAULT;
         uint16_t attrs = 0;
+        int charset_g0 = 0, charset_g1 = 0, gl_charset = 0;
     };
     SavedCursor m_saved_cursor;
 
@@ -223,6 +224,12 @@ private:
     bool m_mode_sgr_mouse = false;
     bool m_mode_grapheme_cluster = false;
     bool m_mode_synchronized_update = false;
+
+    // Character set state (G0/G1 designations, GL pointer)
+    // 0 = ASCII (B), 1 = DEC Special Graphics (0)
+    int m_charset_g0 = 0;
+    int m_charset_g1 = 0;
+    int m_gl_charset = 0;  // 0 = G0, 1 = G1
 
     // Kitty keyboard protocol — stack of flag sets
     std::vector<int> m_kitty_kbd_stack;
