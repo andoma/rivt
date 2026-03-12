@@ -246,7 +246,11 @@ void Renderer::build_pane_vertices(const ScreenBuffer &buffer, const Config &con
             if (cell.fg & COLOR_FLAG_DEFAULT) {
                 fg_r = def_fg_r; fg_g = def_fg_g; fg_b = def_fg_b;
             } else {
-                resolve_color(cell.fg, config, fg_r, fg_g, fg_b);
+                // Bold brightens standard palette colors 0-7 → 8-15
+                uint32_t fg_enc = cell.fg;
+                if ((cell.attrs & ATTR_BOLD) && !(fg_enc & COLOR_FLAG_TRUECOLOR) && (fg_enc & 0xFF) < 8)
+                    fg_enc = (fg_enc & 0xFF) + 8;
+                resolve_color(fg_enc, config, fg_r, fg_g, fg_b);
             }
 
             if (cell.bg & COLOR_FLAG_DEFAULT) {
