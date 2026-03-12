@@ -150,9 +150,25 @@ int Window::tab_bar_height() const {
 }
 
 void Window::recompute() {
+    adjust_tab_bar_height();
     int bar_h = tab_bar_height();
     m_tabs->recompute_layout(0, bar_h, m_win_w, m_win_h - bar_h);
     update_size_hints();
+}
+
+void Window::adjust_tab_bar_height() {
+    int bar_h = tab_bar_height();
+    if (bar_h == m_last_bar_h) return;
+    int delta = bar_h - m_last_bar_h;
+    m_last_bar_h = bar_h;
+    m_win_h += delta;
+    dbg("window: tab bar %s (%d -> %d px), window now %dx%d",
+        delta > 0 ? "appeared" : "disappeared", bar_h - delta, bar_h, m_win_w, m_win_h);
+    // Update size hints first so the WM knows the new base size before
+    // we request the resize — otherwise it may snap to the wrong grid.
+    update_size_hints();
+    m_platform->resize_window(m_win_w, m_win_h);
+    m_renderer.set_viewport(m_win_w, m_win_h);
 }
 
 void Window::update_size_hints() {
@@ -165,11 +181,10 @@ void Window::update_size_hints() {
 
 void Window::resize_to_cells(int cols, int rows) {
     const auto &m = m_renderer.metrics();
-    // Always reserve space for the tab bar — tmux sessions typically have
-    // multiple windows, and the bar will appear once the second tab arrives.
-    int bar_h = m.cell_height + 8;
+    int bar_h = tab_bar_height();
     m_win_w = cols * m.cell_width;
     m_win_h = rows * m.cell_height + bar_h;
+    m_last_bar_h = bar_h;
     dbg("window(%p): resize_to_cells %dx%d -> %dx%d px (bar_h=%d cell=%dx%d)",
         (void*)this, cols, rows, m_win_w, m_win_h, bar_h, m.cell_width, m.cell_height);
     m_platform->resize_window(m_win_w, m_win_h);
@@ -180,12 +195,14 @@ void Window::resize_to_cells(int cols, int rows) {
 
 void Window::resize_font() {
     int cols, rows;
-    m_renderer.compute_grid(m_win_w, m_win_h - tab_bar_height(), cols, rows);
+    m_renderer.compute_grid(m_win_w, m_win_h - m_last_bar_h, cols, rows);
     m_renderer.set_font_size(m_config.font_size, m_platform->get_dpi_scale() * 96.0f);
     m_tabs->set_cell_size(m_renderer.metrics().cell_width, m_renderer.metrics().cell_height);
     const auto &met = m_renderer.metrics();
+    int bar_h = tab_bar_height();
     m_win_w = cols * met.cell_width;
-    m_win_h = rows * met.cell_height + tab_bar_height();
+    m_win_h = rows * met.cell_height + bar_h;
+    m_last_bar_h = bar_h;
     m_platform->resize_window(m_win_w, m_win_h);
     m_renderer.set_viewport(m_win_w, m_win_h);
     recompute();
@@ -313,12 +330,13 @@ void Window::handle_resize(int w, int h) {
         (void*)m_tmux_gateway_pane);
     m_win_w = w;
     m_win_h = h;
+    m_last_bar_h = tab_bar_height();
     m_renderer.set_viewport(w, h);
     const auto &m = m_renderer.metrics();
     m_tabs->set_cell_size(m.cell_width, m.cell_height);
 
     if (m_tmux_controller && m_tmux_controller->is_active()) {
-        int bar_h = tab_bar_height();
+        int bar_h = m_last_bar_h;
         int cols = m.cell_width > 0 ? w / m.cell_width : 80;
         int rows = m.cell_height > 0 ? (h - bar_h) / m.cell_height : 24;
         dbg("window(%p): tmux resize -> %dx%d cells (bar_h=%d)", (void*)this, cols, rows, bar_h);

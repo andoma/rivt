@@ -37,6 +37,10 @@ public:
     // Resize window to fit a given cell grid (used by tmux controller)
     void resize_to_cells(int cols, int rows);
 
+    // Grow/shrink the X11 window when the tab bar appears/disappears,
+    // keeping the terminal content area unchanged.
+    void adjust_tab_bar_height();
+
     std::function<void()> on_new_window;
     std::function<void(Pane *gateway)> on_new_tmux_window;
     std::function<void(Window *)> on_close;
@@ -60,6 +64,7 @@ private:
     Renderer m_renderer;
     std::unique_ptr<TabManager> m_tabs;
     int m_win_w = 800, m_win_h = 600;
+    int m_last_bar_h = 0;  // tracks tab bar height for grow/shrink
     bool m_needs_render = true;
     bool m_focused = true;
     bool m_cursor_blink_on = true;

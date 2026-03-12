@@ -20,6 +20,7 @@ void ScreenBuffer::linearize_screen() {
 }
 
 void ScreenBuffer::resize(int cols, int rows) {
+    if (cols == m_cols && rows == m_rows) return;
     linearize_screen();
 
     // Reflow: for now, simple truncate/pad approach

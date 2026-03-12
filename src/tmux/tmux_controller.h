@@ -63,6 +63,7 @@ private:
     int m_cell_w = 0, m_cell_h = 0;
     int m_content_x = 0, m_content_y = 0;
     bool m_initial_resize_done = false;
+    int m_last_cols = 0, m_last_rows = 0;  // dedup refresh-client
 
     Pane *m_gateway_pane = nullptr;  // PTY mode only
     std::string m_last_affinities_cmd;  // dedup save_affinities()

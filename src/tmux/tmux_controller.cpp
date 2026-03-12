@@ -62,7 +62,11 @@ void TmuxController::handle_resize(int cols, int rows, int cell_w, int cell_h,
     m_cell_h = cell_h;
     m_content_x = content_x;
     m_content_y = content_y;
-    m_client.refresh_client_size(cols, rows);
+    if (cols != m_last_cols || rows != m_last_rows) {
+        m_last_cols = cols;
+        m_last_rows = rows;
+        m_client.refresh_client_size(cols, rows);
+    }
 }
 
 void TmuxController::detach() {
@@ -431,6 +435,10 @@ void TmuxController::reposition_all_panes() {
     dbg("tmux: reposition_all_panes content_y %d -> %d", m_content_y, new_y);
     int delta = new_y - m_content_y;
     m_content_y = new_y;
+
+    // Grow/shrink the X11 window so the terminal grid stays unchanged
+    m_window.adjust_tab_bar_height();
+
     for (auto &[wid, tab] : m_window_map) {
         for (auto &p : tab->panes) {
             p->rect.y += delta;
