@@ -326,6 +326,7 @@ void ScreenBuffer::print(uint32_t codepoint) {
     int charset = (m_gl_charset == 0) ? m_charset_g0 : m_charset_g1;
     if (charset == 1 && codepoint >= 0x60 && codepoint <= 0x7E)
         codepoint = dec_special_graphics[codepoint - 0x60];
+    m_last_printed = codepoint;
     put_char(codepoint);
 }
 
@@ -598,6 +599,13 @@ void ScreenBuffer::csi_dispatch(const CsiParams &params, char intermediate, char
             break;
         case '@': // ICH - insert characters
             insert_chars(std::max(1, params.get(0, 1)));
+            break;
+        case 'b': // REP - repeat preceding graphic character
+            if (m_last_printed) {
+                int count = std::max(1, params.get(0, 1));
+                for (int i = 0; i < count; i++)
+                    put_char(m_last_printed);
+            }
             break;
         case 'd': // VPA - line position absolute
             set_cursor(params.get(0, 1) - 1, m_cursor_col);

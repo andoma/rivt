@@ -231,6 +231,9 @@ private:
     int m_charset_g1 = 0;
     int m_gl_charset = 0;  // 0 = G0, 1 = G1
 
+    // Last printed codepoint for REP (CSI b)
+    uint32_t m_last_printed = 0;
+
     // Kitty keyboard protocol — stack of flag sets
     std::vector<int> m_kitty_kbd_stack;
     std::vector<int> m_saved_kitty_kbd_stack;  // saved on alt screen entry
