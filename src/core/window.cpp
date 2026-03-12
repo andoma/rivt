@@ -11,6 +11,9 @@
 
 namespace rivt {
 
+// Extra pixels below the last row so descenders/underscores aren't clipped
+static constexpr int kBottomPad = 2;
+
 Window::Window(const Config &base_config, EventLoop &loop)
     : m_config(base_config), m_loop(loop) {}
 
@@ -73,7 +76,7 @@ bool Window::init() {
     const auto &m = m_renderer.metrics();
     m_tabs->set_cell_size(m.cell_width, m.cell_height);
     m_win_w = m_config.initial_cols * m.cell_width;
-    m_win_h = m_config.initial_rows * m.cell_height;
+    m_win_h = m_config.initial_rows * m.cell_height + kBottomPad;
     m_platform->resize_window(m_win_w, m_win_h);
     m_renderer.set_viewport(m_win_w, m_win_h);
 
@@ -121,7 +124,7 @@ bool Window::init_tmux(const std::vector<std::string> &tmux_args) {
     const auto &m = m_renderer.metrics();
     m_tabs->set_cell_size(m.cell_width, m.cell_height);
     m_win_w = m_config.initial_cols * m.cell_width;
-    m_win_h = m_config.initial_rows * m.cell_height;
+    m_win_h = m_config.initial_rows * m.cell_height + kBottomPad;
     m_platform->resize_window(m_win_w, m_win_h);
     m_renderer.set_viewport(m_win_w, m_win_h);
 
@@ -136,7 +139,7 @@ bool Window::init_tmux(const std::vector<std::string> &tmux_args) {
 
     int bar_h = tab_bar_height();
     int cols = m.cell_width > 0 ? m_win_w / m.cell_width : 80;
-    int rows = m.cell_height > 0 ? (m_win_h - bar_h) / m.cell_height : 24;
+    int rows = m.cell_height > 0 ? (m_win_h - bar_h - kBottomPad) / m.cell_height : 24;
     m_tmux_controller->initialize(cols, rows, m.cell_width, m.cell_height, 0, bar_h);
 
     m_platform->show_window();
@@ -175,7 +178,7 @@ void Window::update_size_hints() {
     const auto &m = m_renderer.metrics();
     if (m.cell_width > 0 && m.cell_height > 0) {
         int bar_h = tab_bar_height();
-        m_platform->set_size_hints(m.cell_width, m.cell_height, 0, bar_h);
+        m_platform->set_size_hints(m.cell_width, m.cell_height, 0, bar_h + kBottomPad);
     }
 }
 
@@ -183,7 +186,7 @@ void Window::resize_to_cells(int cols, int rows) {
     const auto &m = m_renderer.metrics();
     int bar_h = tab_bar_height();
     m_win_w = cols * m.cell_width;
-    m_win_h = rows * m.cell_height + bar_h;
+    m_win_h = rows * m.cell_height + bar_h + kBottomPad;
     m_last_bar_h = bar_h;
     dbg("window(%p): resize_to_cells %dx%d -> %dx%d px (bar_h=%d cell=%dx%d)",
         (void*)this, cols, rows, m_win_w, m_win_h, bar_h, m.cell_width, m.cell_height);
@@ -195,13 +198,13 @@ void Window::resize_to_cells(int cols, int rows) {
 
 void Window::resize_font() {
     int cols, rows;
-    m_renderer.compute_grid(m_win_w, m_win_h - m_last_bar_h, cols, rows);
+    m_renderer.compute_grid(m_win_w, m_win_h - m_last_bar_h - kBottomPad, cols, rows);
     m_renderer.set_font_size(m_config.font_size, m_platform->get_dpi_scale() * 96.0f);
     m_tabs->set_cell_size(m_renderer.metrics().cell_width, m_renderer.metrics().cell_height);
     const auto &met = m_renderer.metrics();
     int bar_h = tab_bar_height();
     m_win_w = cols * met.cell_width;
-    m_win_h = rows * met.cell_height + bar_h;
+    m_win_h = rows * met.cell_height + bar_h + kBottomPad;
     m_last_bar_h = bar_h;
     m_platform->resize_window(m_win_w, m_win_h);
     m_renderer.set_viewport(m_win_w, m_win_h);
@@ -300,7 +303,7 @@ bool Window::init_tmux_pty(Pane *gateway_pane) {
 
     int bar_h = tab_bar_height();
     int cols = m.cell_width > 0 ? m_win_w / m.cell_width : 80;
-    int rows = m.cell_height > 0 ? (m_win_h - bar_h) / m.cell_height : 24;
+    int rows = m.cell_height > 0 ? (m_win_h - bar_h - kBottomPad) / m.cell_height : 24;
     m_tmux_controller->initialize(cols, rows, m.cell_width, m.cell_height, 0, bar_h);
 
     m_platform->show_window();
@@ -338,7 +341,7 @@ void Window::handle_resize(int w, int h) {
     if (m_tmux_controller && m_tmux_controller->is_active()) {
         int bar_h = m_last_bar_h;
         int cols = m.cell_width > 0 ? w / m.cell_width : 80;
-        int rows = m.cell_height > 0 ? (h - bar_h) / m.cell_height : 24;
+        int rows = m.cell_height > 0 ? (h - bar_h - kBottomPad) / m.cell_height : 24;
         dbg("window(%p): tmux resize -> %dx%d cells (bar_h=%d)", (void*)this, cols, rows, bar_h);
         m_tmux_controller->handle_resize(cols, rows, m.cell_width, m.cell_height, 0, bar_h);
     }
