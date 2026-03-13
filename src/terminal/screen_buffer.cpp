@@ -76,6 +76,16 @@ void ScreenBuffer::resize(int cols, int rows) {
         line.resize(cols);
     }
 
+    // Pull lines back from scrollback when growing vertically
+    while ((int)m_screen.size() < rows && !m_scrollback.empty()) {
+        auto line = std::move(m_scrollback.back());
+        m_scrollback.pop_back();
+        line.resize(cols);
+        line.dirty = true;
+        m_screen.insert(m_screen.begin(), std::move(line));
+        m_cursor_row++;
+    }
+
     // Add or remove rows
     while ((int)m_screen.size() < rows)
         m_screen.emplace_back(cols);
