@@ -8,6 +8,7 @@
 #include <cstring>
 #include <cstdlib>
 #include <stdexcept>
+#include <unistd.h>
 
 // EGL needs the X11 display for its native display type
 #include <X11/Xlib.h>
@@ -82,6 +83,19 @@ bool X11Backend::create_window(int width, int height, const std::string &title) 
     // Register for WM_DELETE_WINDOW
     xcb_change_property(m_conn, XCB_PROP_MODE_REPLACE, m_window,
                         m_atom_wm_protocols, XCB_ATOM_ATOM, 32, 1, &m_atom_wm_delete);
+
+    // Set WM_CLASS so the desktop environment can group windows and match icons
+    // Format: instance_name\0class_name\0
+    const char wm_class[] = "rivt\0rivt";
+    xcb_change_property(m_conn, XCB_PROP_MODE_REPLACE, m_window,
+                        XCB_ATOM_WM_CLASS, XCB_ATOM_STRING, 8,
+                        sizeof(wm_class), wm_class);
+
+    // Set _NET_WM_PID for taskbar integration
+    uint32_t pid = getpid();
+    xcb_change_property(m_conn, XCB_PROP_MODE_REPLACE, m_window,
+                        intern_atom("_NET_WM_PID"), XCB_ATOM_CARDINAL, 32,
+                        1, &pid);
 
     set_title(title);
     xcb_flush(m_conn);

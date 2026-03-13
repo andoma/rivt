@@ -1,0 +1,32 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 256 256">
+  <defs>
+    <linearGradient id="body" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0%" stop-color="#b0b8c4"/>
+      <stop offset="100%" stop-color="#6b7280"/>
+    </linearGradient>
+    <linearGradient id="head" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0%" stop-color="#d1d5db"/>
+      <stop offset="100%" stop-color="#9ca3af"/>
+    </linearGradient>
+    <radialGradient id="highlight" cx="0.4" cy="0.35" r="0.5">
+      <stop offset="0%" stop-color="#ffffff" stop-opacity="0.5"/>
+      <stop offset="100%" stop-color="#ffffff" stop-opacity="0"/>
+    </radialGradient>
+  </defs>
+  <!-- Terminal-dark rounded square background -->
+  <rect x="16" y="16" width="224" height="224" rx="40" fill="#1e1e2e"/>
+  <rect x="16" y="16" width="224" height="224" rx="40" fill="none" stroke="#374151" stroke-width="3"/>
+  <!-- Rivet shaft (tapered cylinder) -->
+  <path d="M108,100 L104,200 Q104,216 128,216 Q152,216 152,200 L148,100 Z"
+        fill="url(#body)" stroke="#4b5563" stroke-width="2"/>
+  <!-- Rivet head (dome / mushroom head) -->
+  <ellipse cx="128" cy="100" rx="52" ry="22" fill="url(#head)" stroke="#4b5563" stroke-width="2"/>
+  <ellipse cx="128" cy="94" rx="44" ry="16" fill="url(#highlight)"/>
+  <!-- Top dome arc for 3D effect -->
+  <path d="M80,100 Q80,68 128,62 Q176,68 176,100"
+        fill="url(#head)" stroke="#4b5563" stroke-width="2"/>
+  <path d="M88,94 Q90,72 128,67 Q166,72 168,94"
+        fill="url(#highlight)"/>
+  <!-- Terminal cursor blink on the shaft -->
+  <rect x="118" y="148" width="20" height="4" rx="1" fill="#4ade80" opacity="0.9"/>
+</svg>

@@ -99,6 +99,8 @@ endif()
 # Install
 include(GNUInstallDirs)
 install(TARGETS rivt RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR})
+install(FILES data/rivt.desktop DESTINATION ${CMAKE_INSTALL_DATADIR}/applications)
+install(FILES data/rivt.svg DESTINATION ${CMAKE_INSTALL_DATADIR}/icons/hicolor/scalable/apps)
 
 # Tests
 enable_testing()

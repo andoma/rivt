@@ -1,0 +1,9 @@
+[Desktop Entry]
+Name=rivt
+Comment=Modern terminal emulator with tmux integration
+Exec=rivt
+Icon=rivt
+Terminal=false
+Type=Application
+Categories=System;TerminalEmulator;
+StartupWMClass=rivt
