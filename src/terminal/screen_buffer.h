@@ -36,13 +36,22 @@ struct SearchState {
 
     int total_matches() const { return (int)matches.size(); }
 
-    // Check if a cell is part of any match; returns 0=no, 1=match, 2=current match
+    // Check if a cell is part of any match; returns 0=no, 1=match, 2=current match.
+    // Uses binary search on the sorted matches vector — O(log n + k) per call.
     int match_type(int abs_line, int col) const {
-        for (int i = 0; i < (int)matches.size(); i++) {
-            const auto &m = matches[i];
-            if (m.abs_line == abs_line && col >= m.start_col && col <= m.end_col) {
+        // Binary search for first match on this line
+        int lo = 0, hi = (int)matches.size();
+        while (lo < hi) {
+            int mid = (lo + hi) / 2;
+            if (matches[mid].abs_line < abs_line)
+                lo = mid + 1;
+            else
+                hi = mid;
+        }
+        // Check matches on this line
+        for (int i = lo; i < (int)matches.size() && matches[i].abs_line == abs_line; i++) {
+            if (col >= matches[i].start_col && col <= matches[i].end_col)
                 return (i == current_match) ? 2 : 1;
-            }
         }
         return 0;
     }
