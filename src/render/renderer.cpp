@@ -264,6 +264,10 @@ void Renderer::build_pane_vertices(const ScreenBuffer &buffer, const Config &con
         return !(cell.bg & COLOR_FLAG_DEFAULT) || (cell.attrs & ATTR_INVERSE) || selected || mt;
     };
 
+    // Pre-compute selection bounds once
+    int sel_sl = 0, sel_sc = 0, sel_el = 0, sel_ec = 0;
+    if (has_selection) buffer.selection.normalized(sel_sl, sel_sc, sel_el, sel_ec);
+
     for (int row = 0; row < buffer.rows(); row++) {
         const Line &line = buffer.line(row);
         float y_top = oy + row * m.cell_height;
@@ -273,6 +277,23 @@ void Renderer::build_pane_vertices(const ScreenBuffer &buffer, const Config &con
         int abs_line = buffer.absolute_line(row);
         int ncols = std::min(buffer.cols(), (int)line.cells.size());
 
+        // For selection rendering: limit highlight to the last non-space cell
+        // on lines that are fully selected (not the first/last line of selection).
+        // On wrapped lines the highlight extends to the full width.
+        int sel_right_limit = ncols;
+        if (has_selection && abs_line >= sel_sl && abs_line <= sel_el && !line.wrapped) {
+            int last_content = -1;
+            for (int c = ncols - 1; c >= 0; c--) {
+                if (line.cells[c].codepoint != ' ' ||
+                    !(line.cells[c].bg & COLOR_FLAG_DEFAULT) ||
+                    (line.cells[c].attrs & ~ATTR_WRAP)) {
+                    last_content = c;
+                    break;
+                }
+            }
+            sel_right_limit = last_content + 1;
+        }
+
         int run_start = -1;
         float run_r = 0, run_g = 0, run_b = 0;
 
@@ -281,6 +302,13 @@ void Renderer::build_pane_vertices(const ScreenBuffer &buffer, const Config &con
             bool has_bg = false;
             if (col < ncols) {
                 has_bg = resolve_cell_bg(line.cells[col], abs_line, col, bg_r, bg_g, bg_b);
+                // Suppress selection highlight past the last content cell
+                if (has_selection && col >= sel_right_limit &&
+                    buffer.selection.contains(abs_line, col) &&
+                    (line.cells[col].bg & COLOR_FLAG_DEFAULT) &&
+                    !(line.cells[col].attrs & ATTR_INVERSE)) {
+                    has_bg = false;
+                }
             }
 
             if (has_bg && run_start >= 0 && bg_r == run_r && bg_g == run_g && bg_b == run_b) {
