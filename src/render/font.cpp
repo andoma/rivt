@@ -193,6 +193,10 @@ std::pair<int, uint32_t> Font::find_glyph(uint32_t codepoint) {
             return {i, glyph_id};
     }
 
+    // Don't retry codepoints that already failed fontconfig lookup
+    if (m_failed_codepoints.count(codepoint))
+        return {0, 0};
+
     // Ask fontconfig for a font that covers this codepoint
     std::string path = find_font_for_codepoint(codepoint);
     if (!path.empty() && load_face(path)) {
@@ -208,6 +212,9 @@ std::pair<int, uint32_t> Font::find_glyph(uint32_t codepoint) {
     } else {
         dbg("font: fallback %s already loaded, no glyph for U+%04X", path.c_str(), codepoint);
     }
+
+    // Remember this codepoint failed so we don't retry expensive fontconfig queries
+    m_failed_codepoints.insert(codepoint);
 
     // Return .notdef from primary font
     return {0, 0};

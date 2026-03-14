@@ -61,6 +61,9 @@ private:
 
     // Tracks font paths already loaded or rejected to avoid repeated lookups
     std::unordered_set<std::string> m_loaded_paths;
+
+    // Codepoints for which fontconfig lookup already failed — avoids expensive repeated queries
+    std::unordered_set<uint32_t> m_failed_codepoints;
 };
 
 } // namespace rivt
