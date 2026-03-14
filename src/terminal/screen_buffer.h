@@ -113,7 +113,7 @@ public:
     // Selection
     Selection selection;
     int absolute_line(int screen_row) const {
-        return (int)m_scrollback.size() + m_viewport_offset + screen_row;
+        return m_scrollback_trimmed + (int)m_scrollback.size() + m_viewport_offset + screen_row;
     }
     std::string get_selection_text() const;
 
@@ -189,6 +189,7 @@ private:
 
     // Scrollback
     std::deque<Line> m_scrollback;
+    int m_scrollback_trimmed = 0;  // total lines evicted from front of scrollback
     int m_viewport_offset = 0;
 
     // Cursor state

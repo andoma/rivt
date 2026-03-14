@@ -377,7 +377,8 @@ void Window::handle_key(const KeyEvent &key) {
                     int rows = screen.rows();
                     int vis_row = match.abs_line - screen.absolute_line(0);
                     if (vis_row < 0 || vis_row >= rows) {
-                        int target_offset = -(int)screen.scrollback_count() + match.abs_line - rows / 2;
+                        int base = screen.absolute_line(0) - screen.viewport_offset();
+                        int target_offset = match.abs_line - base - rows / 2;
                         screen.scroll_viewport(target_offset - screen.viewport_offset());
                     }
                     m_needs_render = true;

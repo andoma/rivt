@@ -507,8 +507,7 @@ void Renderer::render_images(ScreenBuffer &buffer, int offset_x, int offset_y,
     if (store.placements().empty()) return;
 
     const auto &m = m_font.metrics();
-    int sb_count = buffer.scrollback_count();
-    int vp_offset = buffer.viewport_offset();
+    int abs_line0 = buffer.absolute_line(0);
 
     // Set up projection
     float proj[16] = {};
@@ -534,7 +533,7 @@ void Renderer::render_images(ScreenBuffer &buffer, int offset_x, int offset_y,
         if (!img.gl_texture) continue;
 
         // Compute screen row from absolute line
-        int screen_row = placement.anchor_abs_line - sb_count - vp_offset;
+        int screen_row = placement.anchor_abs_line - abs_line0;
 
         // Compute pixel rect
         float px = offset_x + placement.anchor_col * m.cell_width;

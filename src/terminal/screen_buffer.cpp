@@ -170,7 +170,8 @@ void ScreenBuffer::push_scrollback(Line &&line) {
         m_scrollback.push_back(std::move(line));
         while ((int)m_scrollback.size() > m_scrollback_limit) {
             m_scrollback.pop_front();
-            images.gc_placements((int)m_scrollback.size());
+            m_scrollback_trimmed++;
+            images.gc_placements(m_scrollback_trimmed);
         }
     }
 }
@@ -853,6 +854,7 @@ static void search_lines(const std::deque<Line> &scrollback,
                          int screen_top,
                          const std::vector<uint32_t> &qcps,
                          bool case_sensitive, int from, int to,
+                         int abs_offset,
                          std::vector<SearchMatch> &out) {
     auto tolower_cp = [](uint32_t cp) -> uint32_t {
         return (cp >= 'A' && cp <= 'Z') ? cp + 32 : cp;
@@ -873,7 +875,7 @@ static void search_lines(const std::deque<Line> &scrollback,
                 if (cp != qcps[k]) { match = false; break; }
             }
             if (match) {
-                out.push_back({ln, col, col + qlen - 1});
+                out.push_back({abs_offset + ln, col, col + qlen - 1});
             }
         }
     }
@@ -897,12 +899,13 @@ void ScreenBuffer::find_matches(const std::string &query, bool case_sensitive) {
 
     auto qcps = build_query_cps(query, case_sensitive);
     int total = total_lines();
-    search_lines(m_scrollback, m_screen, m_screen_top, qcps, case_sensitive, 0, total, search.matches);
+    search_lines(m_scrollback, m_screen, m_screen_top, qcps, case_sensitive, 0, total,
+                 m_scrollback_trimmed, search.matches);
     search.searched_up_to = total;
 
     // Set current match to the one nearest the viewport bottom
     if (!search.matches.empty()) {
-        int bottom_line = (int)m_scrollback.size() + m_viewport_offset + m_rows - 1;
+        int bottom_line = absolute_line(m_rows - 1);
         search.current_match = 0;
         for (int i = 0; i < (int)search.matches.size(); i++) {
             if (search.matches[i].abs_line <= bottom_line)
@@ -923,11 +926,11 @@ void ScreenBuffer::find_matches_incremental() {
     int rescan_from = std::min(search.searched_up_to, screen_start);
 
     // Remove stale matches from the screen area being rescanned
-    while (!search.matches.empty() && search.matches.back().abs_line >= rescan_from)
+    while (!search.matches.empty() && search.matches.back().abs_line >= m_scrollback_trimmed + rescan_from)
         search.matches.pop_back();
 
     search_lines(m_scrollback, m_screen, m_screen_top, qcps, search.case_sensitive,
-                 rescan_from, total, search.matches);
+                 rescan_from, total, m_scrollback_trimmed, search.matches);
     search.searched_up_to = total;
 }
 
@@ -938,9 +941,11 @@ std::string ScreenBuffer::get_selection_text() const {
     selection.normalized(sl, sc, el, ec);
 
     auto get_line = [&](int abs) -> const Line & {
+        int idx = abs - m_scrollback_trimmed;
         int sb_size = (int)m_scrollback.size();
-        if (abs < sb_size) return m_scrollback[abs];
-        int row = abs - sb_size;
+        if (idx < 0) { static Line empty(0); return empty; }
+        if (idx < sb_size) return m_scrollback[idx];
+        int row = idx - sb_size;
         if (row >= 0 && row < (int)m_screen.size()) return sline(row);
         static Line empty(0);
         return empty;
