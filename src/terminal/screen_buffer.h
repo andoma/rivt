@@ -182,6 +182,7 @@ private:
 
     void push_scrollback(Line &&line);
     void linearize_screen();
+    void reflow(int new_cols, int new_rows);
 
     // Ring-buffer access: maps logical row to physical index
     Line& sline(int row) { return m_screen[(m_screen_top + row) % (int)m_screen.size()]; }

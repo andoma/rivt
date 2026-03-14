@@ -55,6 +55,9 @@ public:
     // Ensure GL texture is uploaded for an image
     void ensure_texture(StoredImage &img);
 
+    // Clear all placements (e.g. on reflow where absolute line refs are invalidated)
+    void clear_placements() { m_placements.clear(); }
+
     // Access
     const std::unordered_map<uint32_t, StoredImage> &images() const { return m_images; }
     std::unordered_map<uint32_t, StoredImage> &images() { return m_images; }

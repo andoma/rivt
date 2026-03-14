@@ -411,6 +411,94 @@ TEST(kitty_kbd_reset_on_alt_screen) {
     t.feed("\033[?1049l");
 }
 
+// --- Reflow ---
+
+TEST(reflow_unwrap_on_grow) {
+    // "HelloWorld" in 5-col terminal: 2 wrapped lines → resize to 10 → 1 line
+    TestTerminal t(5, 5);
+    t.feed("HelloWorld");
+    ASSERT_STR_EQ(t.line_text(0), "Hello");
+    ASSERT_STR_EQ(t.line_text(1), "World");
+    t.screen.resize(10, 5);
+    ASSERT_STR_EQ(t.line_text(0), "HelloWorld");
+    ASSERT_STR_EQ(t.line_text(1), "");
+}
+
+TEST(reflow_rewrap_on_shrink) {
+    // "HelloWorld" in 10-col terminal (1 line) → resize to 5 → 2 wrapped lines
+    TestTerminal t(10, 5);
+    t.feed("HelloWorld");
+    ASSERT_STR_EQ(t.line_text(0), "HelloWorld");
+    t.screen.resize(5, 5);
+    ASSERT_STR_EQ(t.line_text(0), "Hello");
+    ASSERT_STR_EQ(t.line_text(1), "World");
+}
+
+TEST(reflow_hard_breaks_preserved) {
+    // "abc\ndef" stays two logical lines at any width
+    TestTerminal t(10, 5);
+    t.feed("abc\r\ndef");
+    t.screen.resize(20, 5);
+    ASSERT_STR_EQ(t.line_text(0), "abc");
+    ASSERT_STR_EQ(t.line_text(1), "def");
+    t.screen.resize(3, 5);
+    ASSERT_STR_EQ(t.line_text(0), "abc");
+    ASSERT_STR_EQ(t.line_text(1), "def");
+}
+
+TEST(reflow_cursor_tracking) {
+    // Cursor position maps to correct content after reflow
+    TestTerminal t(5, 5);
+    t.feed("HelloWorld");
+    // Cursor should be at row 1, col 5 (pending wrap position, clamped)
+    ASSERT_EQ(t.screen.cursor_row(), 1);
+    t.screen.resize(10, 5);
+    // After unwrap, cursor should be on row 0
+    ASSERT_EQ(t.screen.cursor_row(), 0);
+}
+
+TEST(reflow_scrollback) {
+    // Content in scrollback is reflowed too
+    TestTerminal t(5, 2);
+    t.feed("AAAAABBBBB\r\nCC");
+    // AAAAA and BBBBB are wrapped, CC on next line. With 2 rows, scrollback has content.
+    ASSERT_TRUE(t.screen.scrollback_count() > 0);
+    t.screen.resize(10, 2);
+    // After reflow: "AAAAABBBBB" is 1 line, "CC" is 1 line = 2 lines fits screen
+    ASSERT_STR_EQ(t.line_text(0), "AAAAABBBBB");
+    ASSERT_STR_EQ(t.line_text(1), "CC");
+}
+
+TEST(reflow_empty_lines_preserved) {
+    TestTerminal t(10, 5);
+    t.feed("abc\r\n\r\ndef");
+    t.screen.resize(20, 5);
+    ASSERT_STR_EQ(t.line_text(0), "abc");
+    ASSERT_STR_EQ(t.line_text(1), "");
+    ASSERT_STR_EQ(t.line_text(2), "def");
+}
+
+TEST(reflow_trailing_space_trimming) {
+    // Padded lines (default spaces) don't produce spurious wraps
+    TestTerminal t(10, 5);
+    t.feed("Hi");
+    // Line 0 has "Hi" + 8 default spaces
+    t.screen.resize(3, 5);
+    // Should not wrap the trailing spaces: "Hi" fits in 3 cols
+    ASSERT_STR_EQ(t.line_text(0), "Hi");
+    ASSERT_STR_EQ(t.line_text(1), "");
+}
+
+TEST(reflow_round_trip) {
+    // Resize 80→40→80 preserves content
+    TestTerminal t(80, 5);
+    t.feed("The quick brown fox jumps over the lazy dog");
+    std::string original = t.line_text(0);
+    t.screen.resize(40, 5);
+    t.screen.resize(80, 5);
+    ASSERT_STR_EQ(t.line_text(0), original);
+}
+
 int main() {
     return run_tests();
 }

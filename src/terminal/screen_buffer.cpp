@@ -58,8 +58,13 @@ void ScreenBuffer::resize(int cols, int rows) {
     if (cols == m_cols && rows == m_rows) return;
     linearize_screen();
 
-    // Reflow: for now, simple truncate/pad approach
-    // TODO: proper reflow of soft-wrapped lines
+    // Reflow soft-wrapped lines when columns change (not on alt screen)
+    if (cols != m_cols && !m_using_alt_screen) {
+        reflow(cols, rows);
+        return;
+    }
+
+    // Rows-only change or alt screen: simple truncate/pad approach
 
     // Push lines that would be lost above the new viewport into scrollback
     if (rows < m_rows && m_cursor_row >= rows) {
@@ -106,6 +111,219 @@ void ScreenBuffer::resize(int cols, int rows) {
     // Clamp cursor
     m_cursor_row = std::clamp(m_cursor_row, 0, m_rows - 1);
     m_cursor_col = std::clamp(m_cursor_col, 0, m_cols - 1);
+
+    // Mark all dirty
+    for (auto &line : m_screen) line.dirty = true;
+}
+
+static bool is_default_space(const Cell &c) {
+    return c.codepoint == ' ' &&
+           (c.fg & COLOR_FLAG_DEFAULT) &&
+           (c.bg & COLOR_FLAG_DEFAULT) &&
+           c.attrs == 0;
+}
+
+void ScreenBuffer::reflow(int new_cols, int new_rows) {
+    // Step 1: Save cursor position as (absolute_line_index, col) in the
+    // combined scrollback+screen stream.
+    int cursor_abs = (int)m_scrollback.size() + m_cursor_row;
+    int cursor_col = std::min(m_cursor_col, m_cols - 1);
+
+    // Step 2: Build unified line stream from scrollback + screen.
+    std::deque<Line> all_lines;
+    for (auto &line : m_scrollback)
+        all_lines.push_back(std::move(line));
+    for (auto &line : m_screen)
+        all_lines.push_back(std::move(line));
+    m_scrollback.clear();
+    m_screen.clear();
+    m_screen_top = 0;
+
+    // Trim trailing empty lines below the cursor to prevent them from
+    // pushing content into scrollback after re-wrap.
+    while ((int)all_lines.size() > cursor_abs + 1) {
+        auto &back = all_lines.back();
+        bool all_default = true;
+        for (auto &c : back.cells) {
+            if (!is_default_space(c)) { all_default = false; break; }
+        }
+        if (!all_default || back.wrapped) break;
+        all_lines.pop_back();
+    }
+
+    // Step 3: Group into logical lines.
+    // Each logical line is a vector of cells. We track where the cursor falls.
+    struct LogicalLine {
+        std::vector<Cell> cells;
+    };
+    std::vector<LogicalLine> logical_lines;
+    int cursor_logical = -1;  // which logical line the cursor is on
+    int cursor_cell_offset = -1;  // cell offset within that logical line
+
+    int i = 0;
+    while (i < (int)all_lines.size()) {
+        LogicalLine ll;
+        // Gather consecutive wrapped lines into one logical line
+        while (i < (int)all_lines.size()) {
+            auto &pline = all_lines[i];
+            int start_cell = (int)ll.cells.size();
+
+            // Track cursor
+            if (i == cursor_abs) {
+                cursor_logical = (int)logical_lines.size();
+                cursor_cell_offset = start_cell + cursor_col;
+            }
+
+            // Append cells from this physical line
+            for (auto &c : pline.cells) {
+                ll.cells.push_back(c);
+            }
+
+            bool was_wrapped = pline.wrapped;
+            i++;
+
+            if (!was_wrapped) break;
+
+            // Strip ATTR_WRAP from the last cell of the wrapped line
+            if (!ll.cells.empty()) {
+                ll.cells[ll.cells.size() - pline.cells.size()  + pline.cells.size() - 1].attrs &= ~ATTR_WRAP;
+            }
+        }
+
+        // Trim trailing default-space cells from the logical line
+        while (!ll.cells.empty() && is_default_space(ll.cells.back())) {
+            ll.cells.pop_back();
+        }
+
+        // Clamp cursor offset if it was on trailing spaces we trimmed
+        if (cursor_logical == (int)logical_lines.size() && cursor_cell_offset > (int)ll.cells.size()) {
+            cursor_cell_offset = (int)ll.cells.size();
+        }
+
+        logical_lines.push_back(std::move(ll));
+    }
+
+    // Handle cursor on a line that didn't get processed (shouldn't happen, but be safe)
+    if (cursor_logical < 0) {
+        cursor_logical = std::max(0, (int)logical_lines.size() - 1);
+        cursor_cell_offset = 0;
+    }
+
+    // Step 4: Re-wrap logical lines at new width.
+    std::deque<Line> new_lines;
+    int new_cursor_abs = -1;
+    int new_cursor_col = 0;
+
+    for (int li = 0; li < (int)logical_lines.size(); li++) {
+        auto &ll = logical_lines[li];
+
+        if (ll.cells.empty()) {
+            // Empty logical line → produce one empty physical line
+            if (li == cursor_logical) {
+                new_cursor_abs = (int)new_lines.size();
+                new_cursor_col = 0;
+            }
+            new_lines.emplace_back(new_cols);
+            continue;
+        }
+
+        int pos = 0;
+        int ncells = (int)ll.cells.size();
+        while (pos < ncells) {
+            Line pline(new_cols);
+            int end = std::min(pos + new_cols, ncells);
+
+            for (int c = pos; c < end; c++) {
+                pline.cells[c - pos] = ll.cells[c];
+            }
+
+            // Track cursor
+            if (li == cursor_logical && cursor_cell_offset >= pos && cursor_cell_offset < pos + new_cols) {
+                new_cursor_abs = (int)new_lines.size();
+                new_cursor_col = cursor_cell_offset - pos;
+            }
+
+            bool more_cells = (end < ncells);
+            if (more_cells) {
+                // Mark as wrapped continuation
+                pline.wrapped = true;
+                pline.cells[new_cols - 1].attrs |= ATTR_WRAP;
+            }
+
+            pline.dirty = true;
+            new_lines.push_back(std::move(pline));
+            pos = end;
+        }
+
+        // Cursor was past the end of content (e.g. at end of line)
+        if (li == cursor_logical && new_cursor_abs < 0) {
+            new_cursor_abs = (int)new_lines.size() - 1;
+            new_cursor_col = std::min(cursor_cell_offset - (int)(((ncells - 1) / new_cols) * new_cols), new_cols - 1);
+            if (new_cursor_col < 0) new_cursor_col = 0;
+        }
+    }
+
+    if (new_lines.empty()) {
+        new_lines.emplace_back(new_cols);
+    }
+
+    // Handle edge case: cursor wasn't found
+    if (new_cursor_abs < 0) {
+        new_cursor_abs = (int)new_lines.size() - 1;
+        new_cursor_col = 0;
+    }
+
+    // Step 5: Split into scrollback + screen.
+    // Last new_rows lines become screen; everything before is scrollback.
+    m_screen.clear();
+    m_scrollback.clear();
+
+    int total = (int)new_lines.size();
+    int screen_start = std::max(0, total - new_rows);
+
+    for (int j = 0; j < screen_start; j++) {
+        m_scrollback.push_back(std::move(new_lines[j]));
+    }
+    for (int j = screen_start; j < total; j++) {
+        m_screen.push_back(std::move(new_lines[j]));
+    }
+
+    // Pad with empty lines if fewer than new_rows
+    while ((int)m_screen.size() < new_rows) {
+        m_screen.emplace_back(new_cols);
+    }
+
+    // Trim scrollback to limit
+    while ((int)m_scrollback.size() > m_scrollback_limit) {
+        m_scrollback.pop_front();
+        m_scrollback_trimmed++;
+    }
+
+    // Step 6: Restore cursor — map new absolute line to screen row.
+    m_cursor_row = new_cursor_abs - screen_start;
+    m_cursor_col = new_cursor_col;
+
+    // Clamp cursor
+    m_cursor_row = std::clamp(m_cursor_row, 0, new_rows - 1);
+    m_cursor_col = std::clamp(m_cursor_col, 0, new_cols - 1);
+
+    // Step 7: Update dimensions and invalidate state.
+    m_cols = new_cols;
+    m_rows = new_rows;
+    m_screen_top = 0;
+    m_scroll_top = 0;
+    m_scroll_bottom = m_rows - 1;
+
+    // Resize alt screen (simple truncate/pad, never reflowed)
+    m_alt_screen.resize(new_rows, Line(new_cols));
+    for (auto &line : m_alt_screen)
+        line.resize(new_cols);
+
+    // Clear selection, search, image placements (abs line refs invalidated)
+    selection.clear();
+    search.clear();
+    images.clear_placements();
+    m_viewport_offset = 0;
 
     // Mark all dirty
     for (auto &line : m_screen) line.dirty = true;
