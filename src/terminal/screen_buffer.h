@@ -60,11 +60,12 @@ struct SearchState {
 
 struct Selection {
     bool active = false;
+    bool rectangular = false;  // block/column selection mode
     // Absolute line coordinates (scrollback-aware)
     int start_line = 0, start_col = 0;
     int end_line = 0, end_col = 0;
 
-    void clear() { active = false; }
+    void clear() { active = false; rectangular = false; }
 
     // Return normalized range (start <= end)
     void normalized(int &sl, int &sc, int &el, int &ec) const {
@@ -75,11 +76,22 @@ struct Selection {
         }
     }
 
+    // For rectangular selection: return the column range (always left <= right)
+    void rect_cols(int &left, int &right) const {
+        if (start_col <= end_col) { left = start_col; right = end_col; }
+        else { left = end_col; right = start_col; }
+    }
+
     bool contains(int abs_line, int col) const {
         if (!active) return false;
         int sl, sc, el, ec;
         normalized(sl, sc, el, ec);
         if (abs_line < sl || abs_line > el) return false;
+        if (rectangular) {
+            int left, right;
+            rect_cols(left, right);
+            return col >= left && col <= right;
+        }
         if (abs_line == sl && abs_line == el) return col >= sc && col <= ec;
         if (abs_line == sl) return col >= sc;
         if (abs_line == el) return col <= ec;

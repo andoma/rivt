@@ -1185,11 +1185,40 @@ std::string ScreenBuffer::get_selection_text() const {
         return empty;
     };
 
+    // For rectangular selection, use fixed column range on every line
+    int rect_left = 0, rect_right = 0;
+    if (selection.rectangular)
+        selection.rect_cols(rect_left, rect_right);
+
+    auto append_utf8 = [](std::string &out, uint32_t cp) {
+        if (cp < 0x80) {
+            out += (char)cp;
+        } else if (cp < 0x800) {
+            out += (char)(0xC0 | (cp >> 6));
+            out += (char)(0x80 | (cp & 0x3F));
+        } else if (cp < 0x10000) {
+            out += (char)(0xE0 | (cp >> 12));
+            out += (char)(0x80 | ((cp >> 6) & 0x3F));
+            out += (char)(0x80 | (cp & 0x3F));
+        } else {
+            out += (char)(0xF0 | (cp >> 18));
+            out += (char)(0x80 | ((cp >> 12) & 0x3F));
+            out += (char)(0x80 | ((cp >> 6) & 0x3F));
+            out += (char)(0x80 | (cp & 0x3F));
+        }
+    };
+
     std::string result;
     for (int ln = sl; ln <= el; ln++) {
         const Line &line = get_line(ln);
-        int c0 = (ln == sl) ? sc : 0;
-        int c1 = (ln == el) ? ec : (int)line.cells.size() - 1;
+        int c0, c1;
+        if (selection.rectangular) {
+            c0 = rect_left;
+            c1 = rect_right;
+        } else {
+            c0 = (ln == sl) ? sc : 0;
+            c1 = (ln == el) ? ec : (int)line.cells.size() - 1;
+        }
 
         // Find last non-space to trim trailing whitespace
         int last_non_space = c0 - 1;
@@ -1202,27 +1231,12 @@ std::string ScreenBuffer::get_selection_text() const {
 
         for (int c = c0; c <= last_non_space && c < (int)line.cells.size(); c++) {
             if (line.cells[c].attrs & ATTR_WIDE_CONT) continue;
-            uint32_t cp = line.cells[c].codepoint;
-            // UTF-8 encode
-            if (cp < 0x80) {
-                result += (char)cp;
-            } else if (cp < 0x800) {
-                result += (char)(0xC0 | (cp >> 6));
-                result += (char)(0x80 | (cp & 0x3F));
-            } else if (cp < 0x10000) {
-                result += (char)(0xE0 | (cp >> 12));
-                result += (char)(0x80 | ((cp >> 6) & 0x3F));
-                result += (char)(0x80 | (cp & 0x3F));
-            } else {
-                result += (char)(0xF0 | (cp >> 18));
-                result += (char)(0x80 | ((cp >> 12) & 0x3F));
-                result += (char)(0x80 | ((cp >> 6) & 0x3F));
-                result += (char)(0x80 | (cp & 0x3F));
-            }
+            append_utf8(result, line.cells[c].codepoint);
         }
 
-        // Add newline between lines (not after wrapped lines within selection)
-        if (ln < el && !line.wrapped) {
+        // Rectangular: always add newlines between lines
+        // Normal: add newline except after wrapped lines
+        if (ln < el && (selection.rectangular || !line.wrapped)) {
             result += '\n';
         }
     }

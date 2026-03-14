@@ -573,6 +573,40 @@ TEST(osc8_hyperlink_attr_set) {
     ASSERT_FALSE(t.screen.cell(0, 4).attrs & ATTR_HYPERLINK);
 }
 
+// --- Rectangular selection ---
+
+TEST(rect_selection_text) {
+    TestTerminal t(10, 5);
+    t.feed("ABCDEFGHIJ\r\n1234567890\r\nabcdefghij");
+    // Select columns 2-5 on lines 0-2 (absolute lines = scrollback + row)
+    int abs0 = t.screen.absolute_line(0);
+    t.screen.selection.active = true;
+    t.screen.selection.rectangular = true;
+    t.screen.selection.start_line = abs0;
+    t.screen.selection.start_col = 2;
+    t.screen.selection.end_line = abs0 + 2;
+    t.screen.selection.end_col = 5;
+    std::string text = t.screen.get_selection_text();
+    ASSERT_STR_EQ(text, "CDEF\n3456\ncdef");
+}
+
+TEST(rect_selection_contains) {
+    Selection sel;
+    sel.active = true;
+    sel.rectangular = true;
+    sel.start_line = 10;
+    sel.start_col = 5;
+    sel.end_line = 12;
+    sel.end_col = 3;  // cols go right-to-left (drag left)
+    // Columns should be normalized: 3-5
+    ASSERT_TRUE(sel.contains(11, 3));
+    ASSERT_TRUE(sel.contains(11, 5));
+    ASSERT_FALSE(sel.contains(11, 2));
+    ASSERT_FALSE(sel.contains(11, 6));
+    ASSERT_FALSE(sel.contains(9, 4));   // above selection
+    ASSERT_FALSE(sel.contains(13, 4));  // below selection
+}
+
 int main() {
     return run_tests();
 }

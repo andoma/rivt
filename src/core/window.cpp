@@ -742,6 +742,7 @@ void Window::handle_mouse(const MouseEvent &mouse) {
             if (target_pane->click_count == 1) {
                 target_pane->selecting = true;
                 screen.selection.active = true;
+                screen.selection.rectangular = (mouse.mods & KeyMod::Shift);
                 screen.selection.start_line = abs_line;
                 screen.selection.start_col = cell_col;
                 screen.selection.end_line = abs_line;
