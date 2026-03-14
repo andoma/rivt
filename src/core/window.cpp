@@ -630,7 +630,12 @@ void Window::handle_mouse(const MouseEvent &mouse) {
     } else {
         target_pane = tab->layout.pane_at(mouse.x, mouse.y);
     }
-    if (!target_pane) return;
+    if (!target_pane) {
+        // Mouse is outside all panes (e.g. release after dragging out of window).
+        // Deliver to the focused pane so selection drag can finish.
+        target_pane = tab->focused_pane;
+        if (!target_pane) return;
+    }
 
     // Focus follows mouse
     if (target_pane != tab->focused_pane) {

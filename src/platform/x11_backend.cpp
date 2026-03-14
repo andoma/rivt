@@ -319,6 +319,22 @@ void X11Backend::handle_button_event(xcb_button_press_event_t *ev, bool pressed)
         default: return;
     }
 
+    // Grab/ungrab pointer so we receive the release even if the cursor
+    // leaves the window (needed for drag-select).
+    if (mouse.button == MouseButton::Left) {
+        if (pressed) {
+            xcb_grab_pointer(m_conn, 0, m_window,
+                             XCB_EVENT_MASK_BUTTON_RELEASE |
+                             XCB_EVENT_MASK_POINTER_MOTION,
+                             XCB_GRAB_MODE_ASYNC, XCB_GRAB_MODE_ASYNC,
+                             XCB_NONE, XCB_NONE, XCB_CURRENT_TIME);
+            xcb_flush(m_conn);
+        } else {
+            xcb_ungrab_pointer(m_conn, XCB_CURRENT_TIME);
+            xcb_flush(m_conn);
+        }
+    }
+
     if (on_mouse) on_mouse(mouse);
 }
 
