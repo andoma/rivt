@@ -227,6 +227,43 @@ void Renderer::build_pane_vertices(const ScreenBuffer &buffer, const Config &con
 
     // Pass 1: backgrounds — emitted first so glyphs that extend beyond their
     // cell (e.g. underscore descenders) are not occluded by the next row's bg.
+    // Adjacent cells with the same color are coalesced into a single quad.
+    auto resolve_cell_bg = [&](const Cell &cell, int abs_line, int col,
+                               float &bg_r, float &bg_g, float &bg_b) -> bool {
+        if (cell.bg & COLOR_FLAG_DEFAULT) {
+            bg_r = def_bg_r; bg_g = def_bg_g; bg_b = def_bg_b;
+        } else {
+            resolve_color(cell.bg, config, bg_r, bg_g, bg_b);
+        }
+
+        bool selected = has_selection && buffer.selection.contains(abs_line, col);
+        if (selected) {
+            bg_r = sel_bg_r; bg_g = sel_bg_g; bg_b = sel_bg_b;
+        }
+
+        int mt = has_search ? buffer.search.match_type(abs_line, col) : 0;
+        if (mt == 2) {
+            bg_r = 0.9f; bg_g = 0.6f; bg_b = 0.1f;
+        } else if (mt == 1) {
+            bg_r = 0.6f; bg_g = 0.5f; bg_b = 0.1f;
+        }
+
+        if (cell.attrs & ATTR_INVERSE) {
+            float fg_r, fg_g, fg_b;
+            if (cell.fg & COLOR_FLAG_DEFAULT) {
+                fg_r = def_fg_r; fg_g = def_fg_g; fg_b = def_fg_b;
+            } else {
+                uint32_t fg_enc = cell.fg;
+                if ((cell.attrs & ATTR_BOLD) && !(fg_enc & COLOR_FLAG_TRUECOLOR) && (fg_enc & 0xFF) < 8)
+                    fg_enc = (fg_enc & 0xFF) + 8;
+                resolve_color(fg_enc, config, fg_r, fg_g, fg_b);
+            }
+            bg_r = fg_r; bg_g = fg_g; bg_b = fg_b;
+        }
+
+        return !(cell.bg & COLOR_FLAG_DEFAULT) || (cell.attrs & ATTR_INVERSE) || selected || mt;
+    };
+
     for (int row = 0; row < buffer.rows(); row++) {
         const Line &line = buffer.line(row);
         float y_top = oy + row * m.cell_height;
@@ -234,57 +271,39 @@ void Renderer::build_pane_vertices(const ScreenBuffer &buffer, const Config &con
         if (y_top >= oy + clip_h) break;
 
         int abs_line = buffer.absolute_line(row);
+        int ncols = std::min(buffer.cols(), (int)line.cells.size());
 
-        for (int col = 0; col < buffer.cols() && col < (int)line.cells.size(); col++) {
-            const Cell &cell = line.cells[col];
-            float x_left = ox + col * m.cell_width;
-            float x_right = x_left + m.cell_width;
-            float y_bottom = y_top + m.cell_height;
+        int run_start = -1;
+        float run_r = 0, run_g = 0, run_b = 0;
 
-            if (x_left >= ox + clip_w) break;
-
-            float cell_bg_r, cell_bg_g, cell_bg_b;
-
-            if (cell.bg & COLOR_FLAG_DEFAULT) {
-                cell_bg_r = def_bg_r; cell_bg_g = def_bg_g; cell_bg_b = def_bg_b;
-            } else {
-                resolve_color(cell.bg, config, cell_bg_r, cell_bg_g, cell_bg_b);
+        for (int col = 0; col <= ncols; col++) {
+            float bg_r, bg_g, bg_b;
+            bool has_bg = false;
+            if (col < ncols) {
+                has_bg = resolve_cell_bg(line.cells[col], abs_line, col, bg_r, bg_g, bg_b);
             }
 
-            bool selected = has_selection && buffer.selection.contains(abs_line, col);
-            if (selected) {
-                cell_bg_r = sel_bg_r;
-                cell_bg_g = sel_bg_g;
-                cell_bg_b = sel_bg_b;
+            if (has_bg && run_start >= 0 && bg_r == run_r && bg_g == run_g && bg_b == run_b) {
+                continue;  // extend current run
             }
 
-            int mt = has_search ? buffer.search.match_type(abs_line, col) : 0;
-            if (mt == 2) {
-                cell_bg_r = 0.9f; cell_bg_g = 0.6f; cell_bg_b = 0.1f;
-            } else if (mt == 1) {
-                cell_bg_r = 0.6f; cell_bg_g = 0.5f; cell_bg_b = 0.1f;
+            // Flush previous run
+            if (run_start >= 0) {
+                float x_left = ox + run_start * m.cell_width;
+                float x_right = ox + col * m.cell_width;
+                float y_bottom = y_top + m.cell_height;
+                m_vertices.push_back({x_left,  y_top,    0, 0, run_r, run_g, run_b, 1.0f, 0});
+                m_vertices.push_back({x_right, y_top,    0, 0, run_r, run_g, run_b, 1.0f, 0});
+                m_vertices.push_back({x_right, y_bottom, 0, 0, run_r, run_g, run_b, 1.0f, 0});
+                m_vertices.push_back({x_left,  y_top,    0, 0, run_r, run_g, run_b, 1.0f, 0});
+                m_vertices.push_back({x_right, y_bottom, 0, 0, run_r, run_g, run_b, 1.0f, 0});
+                m_vertices.push_back({x_left,  y_bottom, 0, 0, run_r, run_g, run_b, 1.0f, 0});
+                run_start = -1;
             }
 
-            if (cell.attrs & ATTR_INVERSE) {
-                float fg_r, fg_g, fg_b;
-                if (cell.fg & COLOR_FLAG_DEFAULT) {
-                    fg_r = def_fg_r; fg_g = def_fg_g; fg_b = def_fg_b;
-                } else {
-                    uint32_t fg_enc = cell.fg;
-                    if ((cell.attrs & ATTR_BOLD) && !(fg_enc & COLOR_FLAG_TRUECOLOR) && (fg_enc & 0xFF) < 8)
-                        fg_enc = (fg_enc & 0xFF) + 8;
-                    resolve_color(fg_enc, config, fg_r, fg_g, fg_b);
-                }
-                cell_bg_r = fg_r; cell_bg_g = fg_g; cell_bg_b = fg_b;
-            }
-
-            if (!(cell.bg & COLOR_FLAG_DEFAULT) || (cell.attrs & ATTR_INVERSE) || selected || mt) {
-                m_vertices.push_back({x_left,  y_top,    0, 0, cell_bg_r, cell_bg_g, cell_bg_b, 1.0f, 0});
-                m_vertices.push_back({x_right, y_top,    0, 0, cell_bg_r, cell_bg_g, cell_bg_b, 1.0f, 0});
-                m_vertices.push_back({x_right, y_bottom, 0, 0, cell_bg_r, cell_bg_g, cell_bg_b, 1.0f, 0});
-                m_vertices.push_back({x_left,  y_top,    0, 0, cell_bg_r, cell_bg_g, cell_bg_b, 1.0f, 0});
-                m_vertices.push_back({x_right, y_bottom, 0, 0, cell_bg_r, cell_bg_g, cell_bg_b, 1.0f, 0});
-                m_vertices.push_back({x_left,  y_bottom, 0, 0, cell_bg_r, cell_bg_g, cell_bg_b, 1.0f, 0});
+            if (has_bg) {
+                run_start = col;
+                run_r = bg_r; run_g = bg_g; run_b = bg_b;
             }
         }
     }
