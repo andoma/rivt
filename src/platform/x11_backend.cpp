@@ -98,6 +98,7 @@ bool X11Backend::create_window(int width, int height, const std::string &title) 
                         1, &pid);
 
     set_title(title);
+    create_cursors();
     xcb_flush(m_conn);
 
     // Setup xkbcommon-x11
@@ -604,6 +605,39 @@ float X11Backend::get_dpi_scale() {
     // For now, return 1.0 as default
     // TODO: query Xrdb for Xft.dpi or use xrandr
     return 1.0f;
+}
+
+void X11Backend::create_cursors() {
+    // Open the standard cursor font
+    xcb_font_t font = xcb_generate_id(m_conn);
+    xcb_open_font(m_conn, font, 6, "cursor");
+
+    // XC_left_ptr = 68, XC_hand2 = 60, XC_xterm = 152
+    m_cursor_default = xcb_generate_id(m_conn);
+    xcb_create_glyph_cursor(m_conn, m_cursor_default, font, font, 68, 69, 0xFFFF, 0xFFFF, 0xFFFF, 0, 0, 0);
+
+    m_cursor_hand = xcb_generate_id(m_conn);
+    xcb_create_glyph_cursor(m_conn, m_cursor_hand, font, font, 60, 61, 0xFFFF, 0xFFFF, 0xFFFF, 0, 0, 0);
+
+    m_cursor_text = xcb_generate_id(m_conn);
+    xcb_create_glyph_cursor(m_conn, m_cursor_text, font, font, 152, 153, 0xFFFF, 0xFFFF, 0xFFFF, 0, 0, 0);
+
+    xcb_close_font(m_conn, font);
+}
+
+void X11Backend::set_mouse_cursor(MouseCursor mc) {
+    if (mc == m_current_cursor) return;
+    m_current_cursor = mc;
+
+    xcb_cursor_t cursor = m_cursor_default;
+    if (mc == MouseCursor::Hand) cursor = m_cursor_hand;
+    else if (mc == MouseCursor::Text) cursor = m_cursor_text;
+
+    if (cursor) {
+        uint32_t values[] = { cursor };
+        xcb_change_window_attributes(m_conn, m_window, XCB_CW_CURSOR, values);
+        xcb_flush(m_conn);
+    }
 }
 
 } // namespace rivt

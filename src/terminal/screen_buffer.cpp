@@ -409,7 +409,8 @@ void ScreenBuffer::put_char(uint32_t cp) {
     c.codepoint = cp;
     c.fg = m_cur_fg;
     c.bg = m_bg;
-    c.attrs = m_cur_attrs;
+    c.attrs = m_cur_attrs | (m_cur_hyperlink_id ? ATTR_HYPERLINK : 0);
+    c.hyperlink_id = m_cur_hyperlink_id;
     cl.dirty = true;
     m_cursor_col++;
 }
@@ -944,6 +945,21 @@ void ScreenBuffer::osc_dispatch(int command, const std::string &payload) {
             }
             break;
         }
+        case 8: { // Hyperlink: payload is "params;uri"
+            auto semi = payload.find(';');
+            if (semi == std::string::npos) break;
+            std::string uri = payload.substr(semi + 1);
+            if (uri.empty()) {
+                // End hyperlink
+                m_cur_hyperlink_id = 0;
+            } else {
+                // Start hyperlink — allocate an ID
+                m_cur_hyperlink_id = m_next_hyperlink_id++;
+                if (m_next_hyperlink_id == 0) m_next_hyperlink_id = 1;  // skip 0
+                m_hyperlinks[m_cur_hyperlink_id] = uri;
+            }
+            break;
+        }
         case 133: // Shell integration / semantic zones
             // TODO: track prompt zones
             break;
@@ -1212,6 +1228,113 @@ std::string ScreenBuffer::get_selection_text() const {
     }
 
     return result;
+}
+
+std::string ScreenBuffer::detect_url_at(int screen_row, int col) const {
+    const Line &l = line(screen_row);
+    int ncells = (int)l.cells.size();
+    if (col < 0 || col >= ncells) return {};
+
+    // Check for OSC 8 explicit hyperlink first
+    const Cell &clicked = l.cells[col];
+    if ((clicked.attrs & ATTR_HYPERLINK) && clicked.hyperlink_id) {
+        auto it = m_hyperlinks.find(clicked.hyperlink_id);
+        if (it != m_hyperlinks.end())
+            return it->second;
+    }
+
+    // Auto-detect URLs in the line text
+    auto cp_at = [&](int c) -> uint32_t {
+        return (c >= 0 && c < ncells) ? l.cells[c].codepoint : 0;
+    };
+
+    auto is_url_char = [](uint32_t cp) -> bool {
+        if (cp <= ' ' || cp >= 0x7F) return false;
+        if (cp == '<' || cp == '>' || cp == '"' || cp == '\'') return false;
+        return true;
+    };
+
+    auto match_at = [&](int pos, const char *str) -> bool {
+        for (int i = 0; str[i]; i++) {
+            if (pos + i >= ncells || cp_at(pos + i) != (uint32_t)(unsigned char)str[i])
+                return false;
+        }
+        return true;
+    };
+
+    static const struct { const char *prefix; int len; } schemes[] = {
+        {"https://", 8},
+        {"http://", 7},
+        {"ftp://", 6},
+        {"file://", 7},
+    };
+
+    for (int pos = 0; pos < ncells; ) {
+        int url_start = -1;
+        bool prepend_http = false;
+
+        for (auto &s : schemes) {
+            if (match_at(pos, s.prefix)) {
+                url_start = pos;
+                break;
+            }
+        }
+        if (url_start < 0 && match_at(pos, "www.")) {
+            url_start = pos;
+            prepend_http = true;
+        }
+
+        if (url_start < 0) { pos++; continue; }
+
+        // Ensure URL doesn't start mid-word (preceded by alphanumeric)
+        if (url_start > 0) {
+            uint32_t prev = cp_at(url_start - 1);
+            if ((prev >= 'a' && prev <= 'z') || (prev >= 'A' && prev <= 'Z') ||
+                (prev >= '0' && prev <= '9')) {
+                pos++;
+                continue;
+            }
+        }
+
+        // Find end of URL
+        int url_end = url_start;
+        while (url_end < ncells && is_url_char(cp_at(url_end)))
+            url_end++;
+
+        // Strip trailing punctuation that's unlikely part of URL
+        while (url_end > url_start) {
+            uint32_t c = cp_at(url_end - 1);
+            if (c == '.' || c == ',' || c == ';' || c == ':' || c == '!' || c == '?') {
+                url_end--;
+            } else if (c == ')') {
+                // Only strip closing paren if unmatched
+                int opens = 0, closes = 0;
+                for (int i = url_start; i < url_end; i++) {
+                    if (cp_at(i) == '(') opens++;
+                    if (cp_at(i) == ')') closes++;
+                }
+                if (closes > opens) url_end--;
+                else break;
+            } else {
+                break;
+            }
+        }
+
+        // Check if clicked col is within this URL
+        if (col >= url_start && col < url_end) {
+            std::string url;
+            if (prepend_http) url = "http://";
+            for (int c = url_start; c < url_end; c++) {
+                uint32_t cp = cp_at(c);
+                if (cp < 0x80) url += (char)cp;
+            }
+            return url;
+        }
+
+        pos = url_end;
+    }
+
+    return {};
 }
 
 } // namespace rivt

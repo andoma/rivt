@@ -46,6 +46,10 @@ public:
         return {};
     }
 
+    // Mouse cursor appearance
+    enum class MouseCursor { Default, Hand, Text };
+    virtual void set_mouse_cursor(MouseCursor /*cursor*/) {}
+
     // Display info
     virtual float get_dpi_scale() = 0;
 

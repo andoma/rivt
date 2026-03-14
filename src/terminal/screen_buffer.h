@@ -4,6 +4,7 @@
 #include "terminal/image_store.h"
 #include <deque>
 #include <string>
+#include <unordered_map>
 #include <vector>
 #include <functional>
 
@@ -141,6 +142,16 @@ public:
     }
     bool kitty_kbd_active() const { return kitty_kbd_flags() != 0; }
 
+    // URL / hyperlink detection
+    // Returns the URL at the given screen position (OSC 8 hyperlink or auto-detected)
+    std::string detect_url_at(int screen_row, int col) const;
+
+    // OSC 8 hyperlink table lookup
+    std::string hyperlink_uri(uint16_t id) const {
+        auto it = m_hyperlinks.find(id);
+        return it != m_hyperlinks.end() ? it->second : std::string{};
+    }
+
     // Dirty tracking
     bool any_dirty() const;
     void clear_dirty();
@@ -248,6 +259,11 @@ private:
     // Kitty keyboard protocol — stack of flag sets
     std::vector<int> m_kitty_kbd_stack;
     std::vector<int> m_saved_kitty_kbd_stack;  // saved on alt screen entry
+
+    // OSC 8 hyperlink state
+    std::unordered_map<uint16_t, std::string> m_hyperlinks;  // id → URI
+    uint16_t m_cur_hyperlink_id = 0;  // 0 = no active hyperlink
+    uint16_t m_next_hyperlink_id = 1;
 
 public:
     // Image storage for Kitty graphics protocol

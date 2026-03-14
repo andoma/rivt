@@ -35,6 +35,7 @@ public:
     std::string get_clipboard_data(const std::string &mime_type, bool primary) override;
 
     float get_dpi_scale() override;
+    void set_mouse_cursor(MouseCursor cursor) override;
 
 private:
     void handle_key_event(xcb_key_press_event_t *ev, bool pressed);
@@ -82,6 +83,12 @@ private:
     ClipboardEntry m_primary_typed;
 
     xcb_atom_t intern_atom(const char *name);
+    void create_cursors();
+
+    xcb_cursor_t m_cursor_default = 0;
+    xcb_cursor_t m_cursor_hand = 0;
+    xcb_cursor_t m_cursor_text = 0;
+    MouseCursor m_current_cursor = MouseCursor::Default;
 };
 
 } // namespace rivt

@@ -8,6 +8,11 @@
 #include <climits>
 #include <chrono>
 #include <cstdio>
+#include <cstdlib>
+#include <unistd.h>
+#include <spawn.h>
+
+extern "C" { extern char **environ; }
 
 namespace rivt {
 
@@ -693,6 +698,27 @@ void Window::handle_mouse(const MouseEvent &mouse) {
             screen.scroll_viewport(delta);
             m_needs_render = true;
         }
+    }
+
+    // URL detection: update cursor shape on Ctrl+hover, open on Ctrl+click
+    bool ctrl_held = mouse.mods & KeyMod::Ctrl;
+    if (ctrl_held && m_config.url_detection) {
+        std::string url = screen.detect_url_at(cell_row, cell_col);
+        if (!url.empty()) {
+            m_platform->set_mouse_cursor(Platform::MouseCursor::Hand);
+            if (mouse.button == MouseButton::Left && mouse.pressed && !mouse.motion) {
+                // Open URL with xdg-open, fire and forget
+                pid_t pid;
+                const char *argv[] = {"xdg-open", url.c_str(), nullptr};
+                posix_spawnp(&pid, "xdg-open", nullptr, nullptr,
+                             const_cast<char **>(argv), ::environ);
+                return;
+            }
+        } else {
+            m_platform->set_mouse_cursor(Platform::MouseCursor::Default);
+        }
+    } else if (!ctrl_held) {
+        m_platform->set_mouse_cursor(Platform::MouseCursor::Default);
     }
 
     // Selection handling (only when mouse mode is off)

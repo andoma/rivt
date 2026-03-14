@@ -499,6 +499,80 @@ TEST(reflow_round_trip) {
     ASSERT_STR_EQ(t.line_text(0), original);
 }
 
+// --- URL detection ---
+
+TEST(url_detect_https) {
+    TestTerminal t(80, 5);
+    t.feed("Visit https://example.com/path for info");
+    ASSERT_STR_EQ(t.screen.detect_url_at(0, 6), "https://example.com/path");
+    ASSERT_STR_EQ(t.screen.detect_url_at(0, 20), "https://example.com/path");
+    ASSERT_STR_EQ(t.screen.detect_url_at(0, 0), "");  // "Visit" is not a URL
+}
+
+TEST(url_detect_http) {
+    TestTerminal t(80, 5);
+    t.feed("http://foo.bar/baz");
+    ASSERT_STR_EQ(t.screen.detect_url_at(0, 0), "http://foo.bar/baz");
+}
+
+TEST(url_detect_www) {
+    TestTerminal t(80, 5);
+    t.feed("Go to www.example.com now");
+    ASSERT_STR_EQ(t.screen.detect_url_at(0, 6), "http://www.example.com");
+}
+
+TEST(url_detect_trailing_punctuation) {
+    TestTerminal t(80, 5);
+    t.feed("See https://example.com.");
+    ASSERT_STR_EQ(t.screen.detect_url_at(0, 10), "https://example.com");
+}
+
+TEST(url_detect_parens_balanced) {
+    TestTerminal t(80, 5);
+    t.feed("https://en.wikipedia.org/wiki/Foo_(bar)");
+    ASSERT_STR_EQ(t.screen.detect_url_at(0, 0), "https://en.wikipedia.org/wiki/Foo_(bar)");
+}
+
+TEST(url_detect_parens_unbalanced) {
+    TestTerminal t(80, 5);
+    t.feed("(https://example.com)");
+    // The trailing ) should be stripped since it's unbalanced within the URL
+    ASSERT_STR_EQ(t.screen.detect_url_at(0, 5), "https://example.com");
+}
+
+TEST(url_detect_no_false_positive) {
+    TestTerminal t(80, 5);
+    t.feed("not a url at all");
+    ASSERT_STR_EQ(t.screen.detect_url_at(0, 5), "");
+}
+
+TEST(url_detect_multiple_urls) {
+    TestTerminal t(80, 5);
+    t.feed("http://a.com and https://b.com");
+    ASSERT_STR_EQ(t.screen.detect_url_at(0, 0), "http://a.com");
+    ASSERT_STR_EQ(t.screen.detect_url_at(0, 20), "https://b.com");
+}
+
+// --- OSC 8 hyperlinks ---
+
+TEST(osc8_hyperlink) {
+    TestTerminal t(80, 5);
+    // OSC 8 ; params ; URI ST  text  OSC 8 ; ; ST
+    t.feed("\033]8;;https://example.com\033\\Click here\033]8;;\033\\");
+    ASSERT_STR_EQ(t.screen.detect_url_at(0, 0), "https://example.com");
+    ASSERT_STR_EQ(t.screen.detect_url_at(0, 5), "https://example.com");
+    // After the hyperlink text, clicking should not return the hyperlink
+    ASSERT_STR_EQ(t.screen.detect_url_at(0, 15), "");
+}
+
+TEST(osc8_hyperlink_attr_set) {
+    TestTerminal t(80, 5);
+    t.feed("\033]8;;https://test.org\033\\Link\033]8;;\033\\");
+    ASSERT_TRUE(t.screen.cell(0, 0).attrs & ATTR_HYPERLINK);
+    ASSERT_TRUE(t.screen.cell(0, 3).attrs & ATTR_HYPERLINK);
+    ASSERT_FALSE(t.screen.cell(0, 4).attrs & ATTR_HYPERLINK);
+}
+
 int main() {
     return run_tests();
 }

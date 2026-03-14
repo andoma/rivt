@@ -50,12 +50,14 @@ struct Cell {
     uint32_t fg = COLOR_FLAG_DEFAULT;
     uint32_t bg = COLOR_FLAG_DEFAULT;
     uint16_t attrs = 0;
+    uint16_t hyperlink_id = 0;  // 0 = no hyperlink, >0 = index into hyperlink table
 
     void reset() {
         codepoint = ' ';
         fg = COLOR_FLAG_DEFAULT;
         bg = COLOR_FLAG_DEFAULT;
         attrs = 0;
+        hyperlink_id = 0;
     }
 };
 
