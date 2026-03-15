@@ -731,6 +731,7 @@ void ScreenBuffer::set_mode(int mode, bool enable, bool dec_private) {
             if (enable) {
                 // Save cursor, switch to alt screen, clear
                 linearize_screen();
+                selection.clear();
                 m_saved_cursor = { m_cursor_row, m_cursor_col, m_cur_fg, m_bg, m_cur_attrs, m_charset_g0, m_charset_g1, m_gl_charset };
                 m_saved_kitty_kbd_stack = m_kitty_kbd_stack;
                 if (!m_using_alt_screen) {
@@ -744,6 +745,7 @@ void ScreenBuffer::set_mode(int mode, bool enable, bool dec_private) {
                 set_cursor(0, 0);
             } else {
                 // Restore from alt screen
+                selection.clear();
                 if (m_using_alt_screen) {
                     linearize_screen();
                     std::swap(m_screen, m_alt_screen);
