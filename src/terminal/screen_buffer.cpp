@@ -190,8 +190,13 @@ void ScreenBuffer::reflow(int new_cols, int new_rows) {
             }
         }
 
-        // Trim trailing default-space cells from the logical line
-        while (!ll.cells.empty() && is_default_space(ll.cells.back())) {
+        // Trim trailing default-space cells from the logical line,
+        // but preserve cells up to the cursor position so that
+        // trailing spaces before the cursor (e.g. shell prompt "$ ")
+        // are not lost.
+        int keep = (cursor_logical == (int)logical_lines.size())
+                       ? cursor_cell_offset + 1 : 0;
+        while ((int)ll.cells.size() > keep && is_default_space(ll.cells.back())) {
             ll.cells.pop_back();
         }
 
