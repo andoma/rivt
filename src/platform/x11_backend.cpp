@@ -24,6 +24,8 @@ X11Backend::X11Backend() {
 
 X11Backend::~X11Backend() {
     destroy_window();
+    if (m_xkb_compose_state) xkb_compose_state_unref(m_xkb_compose_state);
+    if (m_xkb_compose_table) xkb_compose_table_unref(m_xkb_compose_table);
     if (m_xkb_state) xkb_state_unref(m_xkb_state);
     if (m_xkb_keymap) xkb_keymap_unref(m_xkb_keymap);
     if (m_xkb_ctx) xkb_context_unref(m_xkb_ctx);
@@ -122,6 +124,18 @@ bool X11Backend::create_window(int width, int height, const std::string &title) 
     m_xkb_keymap = xkb_x11_keymap_new_from_device(m_xkb_ctx, m_conn, m_xkb_device_id,
                                                    XKB_KEYMAP_COMPILE_NO_FLAGS);
     m_xkb_state = xkb_x11_state_new_from_device(m_xkb_keymap, m_conn, m_xkb_device_id);
+
+    // Setup compose table from locale (for dead keys / compose sequences)
+    const char *locale = getenv("LC_ALL");
+    if (!locale || !*locale) locale = getenv("LC_CTYPE");
+    if (!locale || !*locale) locale = getenv("LANG");
+    if (!locale || !*locale) locale = "C";
+    m_xkb_compose_table = xkb_compose_table_new_from_locale(
+        m_xkb_ctx, locale, XKB_COMPOSE_COMPILE_NO_FLAGS);
+    if (m_xkb_compose_table) {
+        m_xkb_compose_state = xkb_compose_state_new(
+            m_xkb_compose_table, XKB_COMPOSE_STATE_NO_FLAGS);
+    }
 
     m_key_symbols = xcb_key_symbols_alloc(m_conn);
 
@@ -283,6 +297,32 @@ void X11Backend::handle_key_event(xcb_key_press_event_t *ev, bool pressed) {
     }
 
     if (pressed) {
+        // Feed keysym into compose state for dead key / compose sequence handling
+        if (m_xkb_compose_state) {
+            xkb_keysym_t raw_sym = xkb_state_key_get_one_sym(m_xkb_state, ev->detail);
+            xkb_compose_state_feed(m_xkb_compose_state, raw_sym);
+            enum xkb_compose_status status = xkb_compose_state_get_status(m_xkb_compose_state);
+
+            if (status == XKB_COMPOSE_COMPOSING) {
+                // In the middle of a compose sequence — swallow the event
+                return;
+            } else if (status == XKB_COMPOSE_COMPOSED) {
+                // Compose sequence complete — use composed keysym and text
+                key.keysym = xkb_compose_state_get_one_sym(m_xkb_compose_state);
+                char buf[64];
+                int len = xkb_compose_state_get_utf8(m_xkb_compose_state, buf, sizeof(buf));
+                if (len > 0 && buf[0] >= 0x20)
+                    key.text = std::string(buf, len);
+                xkb_compose_state_reset(m_xkb_compose_state);
+                if (on_key) on_key(key);
+                return;
+            } else if (status == XKB_COMPOSE_CANCELLED) {
+                xkb_compose_state_reset(m_xkb_compose_state);
+                // Fall through to normal handling
+            }
+            // XKB_COMPOSE_NOTHING — fall through to normal handling
+        }
+
         char buf[64];
         int len = xkb_state_key_get_utf8(m_xkb_state, ev->detail, buf, sizeof(buf));
         if (len > 0 && buf[0] >= 0x20) {
@@ -392,6 +432,7 @@ void X11Backend::process_events() {
                 // desync (e.g. Ctrl/Shift released while unfocused)
                 if (m_xkb_state) xkb_state_unref(m_xkb_state);
                 m_xkb_state = xkb_x11_state_new_from_device(m_xkb_keymap, m_conn, m_xkb_device_id);
+                if (m_xkb_compose_state) xkb_compose_state_reset(m_xkb_compose_state);
                 if (on_focus) on_focus(true);
                 break;
             case XCB_FOCUS_OUT:
@@ -467,6 +508,7 @@ void X11Backend::process_events() {
                                 XKB_KEYMAP_COMPILE_NO_FLAGS);
                             m_xkb_state = xkb_x11_state_new_from_device(
                                 m_xkb_keymap, m_conn, m_xkb_device_id);
+                            if (m_xkb_compose_state) xkb_compose_state_reset(m_xkb_compose_state);
                             if (m_key_symbols) xcb_key_symbols_free(m_key_symbols);
                             m_key_symbols = xcb_key_symbols_alloc(m_conn);
                             break;

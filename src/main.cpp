@@ -3,6 +3,7 @@
 #include "core/config.h"
 #include "core/debug.h"
 
+#include <clocale>
 #include <cstdio>
 #include <cstring>
 #include <signal.h>
@@ -19,6 +20,7 @@ static void sigchld_handler(int) {
 }
 
 int main(int argc, char *argv[]) {
+    setlocale(LC_ALL, "");
     signal(SIGCHLD, sigchld_handler);
 
     // Parse global flags

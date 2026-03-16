@@ -4,6 +4,7 @@
 #include <xcb/xcb_keysyms.h>
 #include <xkbcommon/xkbcommon.h>
 #include <xkbcommon/xkbcommon-x11.h>
+#include <xkbcommon/xkbcommon-compose.h>
 #include <EGL/egl.h>
 #include <X11/Xlib.h>
 
@@ -52,6 +53,8 @@ private:
     struct xkb_context *m_xkb_ctx = nullptr;
     struct xkb_keymap *m_xkb_keymap = nullptr;
     struct xkb_state *m_xkb_state = nullptr;
+    struct xkb_compose_table *m_xkb_compose_table = nullptr;
+    struct xkb_compose_state *m_xkb_compose_state = nullptr;
     int32_t m_xkb_device_id = -1;
     uint8_t m_xkb_first_event = 0;
 
