@@ -731,7 +731,7 @@ void Window::handle_mouse(const MouseEvent &mouse) {
 
             if (now_ms - target_pane->last_click_ms < 400 &&
                 cell_col == target_pane->last_click_col && cell_row == target_pane->last_click_row) {
-                target_pane->click_count = (target_pane->click_count % 3) + 1;
+                target_pane->click_count = (target_pane->click_count % 4) + 1;
             } else {
                 target_pane->click_count = 1;
             }
@@ -779,6 +779,19 @@ void Window::handle_mouse(const MouseEvent &mouse) {
                 screen.selection.end_col = (int)line.cells.size() - 1;
                 std::string text = screen.get_selection_text();
                 if (!text.empty()) m_platform->set_clipboard(text, true);
+            } else if (target_pane->click_count == 4) {
+                // Quadruple-click: select entire command output (OSC 133 zones)
+                target_pane->selecting = false;
+                int out_start, out_end;
+                if (screen.find_command_output(abs_line, out_start, out_end)) {
+                    screen.selection.active = true;
+                    screen.selection.start_line = out_start;
+                    screen.selection.start_col = 0;
+                    screen.selection.end_line = out_end;
+                    screen.selection.end_col = screen.cols() - 1;
+                    std::string text = screen.get_selection_text();
+                    if (!text.empty()) m_platform->set_clipboard(text, true);
+                }
             }
             m_needs_render = true;
         } else if (mouse.motion && target_pane->selecting) {

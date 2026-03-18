@@ -968,7 +968,11 @@ void ScreenBuffer::osc_dispatch(int command, const std::string &payload) {
             break;
         }
         case 133: // Shell integration / semantic zones
-            // TODO: track prompt zones
+            if (!payload.empty()) {
+                char zone = payload[0];
+                if (zone == 'A' || zone == 'C')
+                    sline(m_cursor_row).semantic_zone = zone;
+            }
             break;
     }
 }
@@ -1249,6 +1253,42 @@ std::string ScreenBuffer::get_selection_text() const {
     }
 
     return result;
+}
+
+bool ScreenBuffer::find_command_output(int abs_line, int &out_start, int &out_end) const {
+    int first_abs = m_scrollback_trimmed;
+    int last_abs = m_scrollback_trimmed + (int)m_scrollback.size() + m_rows - 1;
+
+    auto get_zone = [&](int abs) -> uint32_t {
+        int idx = abs - m_scrollback_trimmed;
+        int sb_size = (int)m_scrollback.size();
+        if (idx < 0) return 0;
+        if (idx < sb_size) return m_scrollback[idx].semantic_zone;
+        int row = idx - sb_size;
+        if (row >= 0 && row < m_rows) return sline(row).semantic_zone;
+        return 0;
+    };
+
+    // If clicked line itself has a marker, it's a prompt line, not output
+    if (get_zone(abs_line) != 0) return false;
+
+    // Scan backward to find the nearest 'C' (output start) marker
+    bool found_start = false;
+    for (int i = abs_line - 1; i >= first_abs; i--) {
+        uint32_t z = get_zone(i);
+        if (z == 'C') { out_start = i + 1; found_start = true; break; }
+        if (z == 'A') return false;  // in prompt area, not output
+    }
+    if (!found_start) return false;
+
+    // Scan forward to find the next 'A' or 'C' marker (next prompt)
+    out_end = last_abs;
+    for (int i = abs_line + 1; i <= last_abs; i++) {
+        uint32_t z = get_zone(i);
+        if (z == 'A' || z == 'C') { out_end = i - 1; break; }
+    }
+
+    return out_start <= out_end;
 }
 
 std::string ScreenBuffer::detect_url_at(int screen_row, int col) const {

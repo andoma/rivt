@@ -138,6 +138,7 @@ public:
         return m_scrollback_trimmed + (int)m_scrollback.size() + m_viewport_offset + screen_row;
     }
     std::string get_selection_text() const;
+    bool find_command_output(int abs_line, int &start_line, int &end_line) const;
 
     // Search
     SearchState search;
