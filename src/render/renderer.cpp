@@ -814,7 +814,26 @@ int Renderer::tab_hit_test(const TabManager &tabs, int x) {
     return -1;
 }
 
-void Renderer::render_tab_bar(const TabManager &tabs, const Config &/*config*/, int bar_height) {
+int Renderer::tab_close_hit_test(const TabManager &tabs, int x, int y, int bar_height) {
+    int n = tabs.tab_count();
+    if (n == 0) return -1;
+    const auto &m = m_font.metrics();
+    float tab_w = uniform_tab_width(n);
+    float btn_size = m.cell_height;
+    float btn_y = (bar_height - 1 - btn_size) / 2.0f;
+    float tab_x = 4;
+    for (int i = 0; i < n; i++) {
+        float btn_x = tab_x + tab_w - btn_size - 4;
+        if (x >= btn_x && x < btn_x + btn_size &&
+            y >= btn_y && y < btn_y + btn_size)
+            return i;
+        tab_x += tab_w + 4;
+    }
+    return -1;
+}
+
+void Renderer::render_tab_bar(const TabManager &tabs, const Config &/*config*/, int bar_height,
+                              int hover_close_idx) {
     const auto &m = m_font.metrics();
     float atlas_size = (float)m_atlas.texture_size();
     float bar_w = (float)m_viewport_w;
@@ -842,7 +861,8 @@ void Renderer::render_tab_bar(const TabManager &tabs, const Config &/*config*/, 
     int active_idx = tabs.active_index();
     int n = tabs.tab_count();
     float tab_w = uniform_tab_width(n);
-    int max_title_chars = (int)(tab_w / m.cell_width) - 2;  // padding on each side
+    float close_btn_size = m.cell_height;
+    int max_title_chars = (int)((tab_w - close_btn_size - 4) / m.cell_width) - 2;
     if (max_title_chars < 1) max_title_chars = 1;
 
     for (int i = 0; i < n; i++) {
@@ -852,7 +872,8 @@ void Renderer::render_tab_bar(const TabManager &tabs, const Config &/*config*/, 
             title = utf8_truncate(title, max_title_chars) + "\xe2\x80\xa6";
 
         float text_w = utf8_len(title) * m.cell_width;
-        float text_x = tab_x + (tab_w - text_w) / 2.0f;
+        float text_area = tab_w - close_btn_size - 4;
+        float text_x = tab_x + (text_area - text_w) / 2.0f;
 
         if (i == active_idx) {
             // Active tab background
@@ -889,6 +910,30 @@ void Renderer::render_tab_bar(const TabManager &tabs, const Config &/*config*/, 
 
             draw_text(text_x, text_y, title, 0.5f, 0.5f, 0.5f, atlas_size);
         }
+
+        // Close button "x"
+        float btn_x = tab_x + tab_w - close_btn_size - 4;
+        float btn_y = ((float)bar_height - 1 - close_btn_size) / 2.0f;
+        bool hovered = (i == hover_close_idx);
+
+        // Hover background (rounded feel via small rect)
+        if (hovered) {
+            float hr = 0.35f, hg = 0.35f, hb = 0.35f;
+            m_vertices.push_back({btn_x,                btn_y,                 0,0, hr,hg,hb,1, 0});
+            m_vertices.push_back({btn_x+close_btn_size, btn_y,                 0,0, hr,hg,hb,1, 0});
+            m_vertices.push_back({btn_x+close_btn_size, btn_y+close_btn_size,  0,0, hr,hg,hb,1, 0});
+            m_vertices.push_back({btn_x,                btn_y,                 0,0, hr,hg,hb,1, 0});
+            m_vertices.push_back({btn_x+close_btn_size, btn_y+close_btn_size,  0,0, hr,hg,hb,1, 0});
+            m_vertices.push_back({btn_x,                btn_y+close_btn_size,  0,0, hr,hg,hb,1, 0});
+        }
+
+        // Draw "x" character centered in button area
+        float xr = hovered ? 0.9f : 0.5f;
+        float xg = xr, xb = xr;
+        float x_char_w = m.cell_width;
+        float x_text_x = btn_x + (close_btn_size - x_char_w) / 2.0f;
+        float x_text_y = btn_y + (close_btn_size - m.cell_height) / 2.0f;
+        draw_text(x_text_x, x_text_y, "\xc3\x97", xr, xg, xb, atlas_size);  // × (multiplication sign)
 
         tab_x += tab_w + 4;
     }

@@ -36,11 +36,14 @@ public:
     void render_dot_grid(int offset_x, int offset_y, int w, int h,
                          int cell_w, int cell_h);
 
-    // Render tab bar
-    void render_tab_bar(const TabManager &tabs, const Config &config, int bar_height);
+    // Render tab bar (hover_close_idx = index of tab whose close button is hovered, -1 for none)
+    void render_tab_bar(const TabManager &tabs, const Config &config, int bar_height,
+                        int hover_close_idx = -1);
 
     // Hit-test tab bar, returns tab index or -1
     int tab_hit_test(const TabManager &tabs, int x);
+    // Hit-test close button on tabs, returns tab index or -1
+    int tab_close_hit_test(const TabManager &tabs, int x, int y, int bar_height);
     float uniform_tab_width(int tab_count) const;
 
     // Render inline images for a pane

@@ -69,6 +69,7 @@ private:
     bool m_focused = true;
     bool m_cursor_blink_on = true;
     bool m_closing = false;
+    int m_hover_close_tab = -1;  // tab index whose close button is hovered
 
     std::unique_ptr<TmuxClient> m_tmux_client;
     std::unique_ptr<TmuxController> m_tmux_controller;

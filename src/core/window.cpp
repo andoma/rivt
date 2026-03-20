@@ -602,9 +602,28 @@ void Window::handle_mouse(const MouseEvent &mouse) {
     const auto &met = m_renderer.metrics();
     int bar_h = tab_bar_height();
 
-    // Tab bar click handling
+    // Tab bar click and hover handling
     if (bar_h > 0 && mouse.y < bar_h) {
+        // Track close button hover
+        int close_hover = m_renderer.tab_close_hit_test(*m_tabs, mouse.x, mouse.y, bar_h);
+        if (close_hover != m_hover_close_tab) {
+            m_hover_close_tab = close_hover;
+            m_needs_render = true;
+        }
+
         if (mouse.pressed && !mouse.motion) {
+            // Check close button first
+            int close_hit = m_renderer.tab_close_hit_test(*m_tabs, mouse.x, mouse.y, bar_h);
+            if (close_hit >= 0 && mouse.button == MouseButton::Left) {
+                if (!m_tabs->close_tab(close_hit)) {
+                    if (on_close) on_close(this);
+                }
+                m_hover_close_tab = -1;
+                recompute();
+                m_needs_render = true;
+                return;
+            }
+
             int hit = m_renderer.tab_hit_test(*m_tabs, mouse.x);
             if (hit >= 0) {
                 if (mouse.button == MouseButton::Left) {
@@ -619,6 +638,12 @@ void Window::handle_mouse(const MouseEvent &mouse) {
             }
         }
         return;
+    }
+
+    // Clear close button hover when mouse leaves tab bar
+    if (m_hover_close_tab != -1) {
+        m_hover_close_tab = -1;
+        m_needs_render = true;
     }
 
     // Route mouse to correct pane
@@ -844,7 +869,7 @@ void Window::render_if_needed() {
 
         // Render tab bar if multiple tabs
         if (bar_h > 0) {
-            m_renderer.render_tab_bar(*m_tabs, m_config, bar_h);
+            m_renderer.render_tab_bar(*m_tabs, m_config, bar_h, m_hover_close_tab);
             m_renderer.flush();
         }
 
