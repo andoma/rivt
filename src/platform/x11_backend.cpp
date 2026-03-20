@@ -311,7 +311,7 @@ void X11Backend::handle_key_event(xcb_key_press_event_t *ev, bool pressed) {
                 key.keysym = xkb_compose_state_get_one_sym(m_xkb_compose_state);
                 char buf[64];
                 int len = xkb_compose_state_get_utf8(m_xkb_compose_state, buf, sizeof(buf));
-                if (len > 0 && buf[0] >= 0x20)
+                if (len > 0 && (unsigned char)buf[0] >= 0x20)
                     key.text = std::string(buf, len);
                 xkb_compose_state_reset(m_xkb_compose_state);
                 if (on_key) on_key(key);
@@ -325,7 +325,7 @@ void X11Backend::handle_key_event(xcb_key_press_event_t *ev, bool pressed) {
 
         char buf[64];
         int len = xkb_state_key_get_utf8(m_xkb_state, ev->detail, buf, sizeof(buf));
-        if (len > 0 && buf[0] >= 0x20) {
+        if (len > 0 && (unsigned char)buf[0] >= 0x20) {
             key.text = std::string(buf, len);
         }
         // When Ctrl is held, xkb produces control chars (< 0x20) with no text.
