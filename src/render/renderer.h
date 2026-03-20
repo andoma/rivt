@@ -41,6 +41,7 @@ public:
 
     // Hit-test tab bar, returns tab index or -1
     int tab_hit_test(const TabManager &tabs, int x);
+    float uniform_tab_width(int tab_count) const;
 
     // Render inline images for a pane
     void render_images(ScreenBuffer &buffer, int offset_x, int offset_y,

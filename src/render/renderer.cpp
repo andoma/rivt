@@ -789,14 +789,24 @@ static std::string utf8_truncate(const std::string &s, int max_chars) {
     return s.substr(0, i);
 }
 
-int Renderer::tab_hit_test(const TabManager &tabs, int x) {
+float Renderer::uniform_tab_width(int tab_count) const {
     const auto &m = m_font.metrics();
+    float gap = 4;
+    float margin = 4;
+    float max_tab_w = 20 * m.cell_width;  // cap at ~20 characters
+    float avail = (float)m_viewport_w - margin * 2 - gap * (tab_count - 1);
+    float tab_w = avail / tab_count;
+    if (tab_w > max_tab_w) tab_w = max_tab_w;
+    if (tab_w < 4 * m.cell_width) tab_w = 4 * m.cell_width;  // minimum
+    return tab_w;
+}
+
+int Renderer::tab_hit_test(const TabManager &tabs, int x) {
+    int n = tabs.tab_count();
+    if (n == 0) return -1;
+    float tab_w = uniform_tab_width(n);
     float tab_x = 4;
-    for (int i = 0; i < tabs.tab_count(); i++) {
-        const Tab &tab = *tabs.tabs()[i];
-        std::string title = tab.title.empty() ? "Terminal" : format_tab_title(tab.title);
-        if (utf8_len(title) > 15) title = utf8_truncate(title, 15) + "\xe2\x80\xa6";
-        float tab_w = (utf8_len(title) + 2) * m.cell_width;
+    for (int i = 0; i < n; i++) {
         if (x >= tab_x && x < tab_x + tab_w)
             return i;
         tab_x += tab_w + 4;
@@ -830,13 +840,19 @@ void Renderer::render_tab_bar(const TabManager &tabs, const Config &/*config*/, 
     float tab_x = 4;
     float text_y = 4;
     int active_idx = tabs.active_index();
+    int n = tabs.tab_count();
+    float tab_w = uniform_tab_width(n);
+    int max_title_chars = (int)(tab_w / m.cell_width) - 2;  // padding on each side
+    if (max_title_chars < 1) max_title_chars = 1;
 
-    for (int i = 0; i < tabs.tab_count(); i++) {
+    for (int i = 0; i < n; i++) {
         const Tab &tab = *tabs.tabs()[i];
         std::string title = tab.title.empty() ? "Terminal" : format_tab_title(tab.title);
-        if (utf8_len(title) > 15) title = utf8_truncate(title, 15) + "\xe2\x80\xa6";
+        if ((int)utf8_len(title) > max_title_chars)
+            title = utf8_truncate(title, max_title_chars) + "\xe2\x80\xa6";
 
-        float tab_w = (utf8_len(title) + 2) * m.cell_width;
+        float text_w = utf8_len(title) * m.cell_width;
+        float text_x = tab_x + (tab_w - text_w) / 2.0f;
 
         if (i == active_idx) {
             // Active tab background
@@ -856,7 +872,7 @@ void Renderer::render_tab_bar(const TabManager &tabs, const Config &/*config*/, 
             m_vertices.push_back({tab_x+tab_w, (float)bar_height, 0,0, 0.3f,0.6f,1.0f,1, 0});
             m_vertices.push_back({tab_x,       (float)bar_height, 0,0, 0.3f,0.6f,1.0f,1, 0});
 
-            draw_text(tab_x + m.cell_width, text_y, title, 0.9f, 0.9f, 0.9f, atlas_size);
+            draw_text(text_x, text_y, title, 0.9f, 0.9f, 0.9f, atlas_size);
         } else {
             // Activity indicator
             if (tab.has_activity) {
@@ -871,7 +887,7 @@ void Renderer::render_tab_bar(const TabManager &tabs, const Config &/*config*/, 
                 m_vertices.push_back({dot_x,   dot_y+4, 0,0, 0.3f,0.7f,1.0f,1, 0});
             }
 
-            draw_text(tab_x + m.cell_width, text_y, title, 0.5f, 0.5f, 0.5f, atlas_size);
+            draw_text(text_x, text_y, title, 0.5f, 0.5f, 0.5f, atlas_size);
         }
 
         tab_x += tab_w + 4;
