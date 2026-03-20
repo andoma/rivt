@@ -1,6 +1,7 @@
 #include "core/tab_manager.h"
 #include "platform/platform.h"
 #include "render/font.h"
+#include <algorithm>
 
 namespace rivt {
 
