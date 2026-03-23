@@ -142,10 +142,30 @@ static LegacyKey legacy_csi_key(uint32_t keysym) {
     }
 }
 
+static bool is_modifier_key(uint32_t keysym) {
+    switch (keysym) {
+        case XKB_KEY_Shift_L: case XKB_KEY_Shift_R:
+        case XKB_KEY_Control_L: case XKB_KEY_Control_R:
+        case XKB_KEY_Alt_L: case XKB_KEY_Alt_R:
+        case XKB_KEY_Super_L: case XKB_KEY_Super_R:
+        case XKB_KEY_Hyper_L: case XKB_KEY_Hyper_R:
+        case XKB_KEY_Meta_L: case XKB_KEY_Meta_R:
+            return true;
+        default:
+            return false;
+    }
+}
+
 std::string encode_key_kitty(const KeyEvent &key, const ScreenBuffer &buffer) {
     if (!key.pressed) return "";
 
     int flags = buffer.kitty_kbd_flags();
+
+    // Modifier-only keys are only reported when flag 0x8
+    // (report all keys as escape codes) is set
+    if (is_modifier_key(key.keysym) && !(flags & 8))
+        return "";
+
     int mods = kitty_modifiers(key.mods);
     int mod_param = mods + 1;
 
