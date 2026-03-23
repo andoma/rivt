@@ -240,6 +240,7 @@ private:
         int charset_g0 = 0, charset_g1 = 0, gl_charset = 0;
     };
     SavedCursor m_saved_cursor;
+    int m_saved_viewport_offset = 0;
 
     // Current text attributes
     uint32_t m_cur_fg = COLOR_FLAG_DEFAULT;

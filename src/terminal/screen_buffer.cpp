@@ -395,6 +395,10 @@ void ScreenBuffer::push_scrollback(Line &&line) {
             m_scrollback.pop_front();
             m_scrollback_trimmed++;
             images.gc_placements(m_scrollback_trimmed);
+            // If the trimmed line was above the viewport, adjust so the
+            // viewport doesn't drift past the start of scrollback.
+            if (m_viewport_offset < -(int)m_scrollback.size())
+                m_viewport_offset = -(int)m_scrollback.size();
         }
     }
 }
@@ -506,6 +510,7 @@ void ScreenBuffer::erase_display(int mode) {
             break;
         case 3: // All + scrollback
             m_scrollback.clear();
+            m_viewport_offset = 0;
             images.remove_all();
             for (int r = 0; r < m_rows; r++)
                 erase_line(r);
@@ -743,6 +748,8 @@ void ScreenBuffer::set_mode(int mode, bool enable, bool dec_private) {
                     std::swap(m_screen, m_alt_screen);
                     m_using_alt_screen = true;
                     m_screen_top = 0;
+                    m_saved_viewport_offset = m_viewport_offset;
+                    m_viewport_offset = 0;
                 }
                 for (auto &line : m_screen) {
                     line = Line(m_cols);
@@ -756,6 +763,8 @@ void ScreenBuffer::set_mode(int mode, bool enable, bool dec_private) {
                     std::swap(m_screen, m_alt_screen);
                     m_using_alt_screen = false;
                     m_screen_top = 0;
+                    m_viewport_offset = m_saved_viewport_offset;
+                    m_saved_viewport_offset = 0;
                 }
                 m_cursor_row = m_saved_cursor.row;
                 m_cursor_col = m_saved_cursor.col;
