@@ -652,21 +652,10 @@ void ScreenBuffer::handle_sgr(const CsiParams &params) {
                 m_cur_fg = color_palette(p - 30);
                 break;
             case 38: // Extended foreground
-                if (i + 1 < params.count()) {
-                    int mode = params.get(i + 1);
-                    if (mode == 5 && i + 2 < params.count()) {
-                        m_cur_fg = color_palette(params.get(i + 2));
-                        i += 2;
-                    } else if (mode == 2 && i + 4 < params.count()) {
-                        m_cur_fg = color_rgb(params.get(i + 2), params.get(i + 3), params.get(i + 4));
-                        i += 4;
-                    }
-                }
-                // Also check sub-parameters (colon form: 38:2::R:G:B)
-                else if (!params.params[i].sub.empty()) {
+                if (!params.params[i].sub.empty()) {
+                    // Colon form: 38:2::R:G:B or 38:5:N
                     auto &sub = params.params[i].sub;
                     if (sub.size() >= 1 && sub[0] == 2 && sub.size() >= 4) {
-                        // 38:2::R:G:B  (sub[1] may be colorspace, often empty)
                         int r_idx = (sub.size() >= 5) ? 2 : 1;
                         m_cur_fg = color_rgb(
                             std::max(0, sub[r_idx]),
@@ -674,6 +663,16 @@ void ScreenBuffer::handle_sgr(const CsiParams &params) {
                             std::max(0, sub[r_idx + 2]));
                     } else if (sub.size() >= 1 && sub[0] == 5 && sub.size() >= 2) {
                         m_cur_fg = color_palette(std::max(0, sub[1]));
+                    }
+                } else if (i + 1 < params.count()) {
+                    // Semicolon form: 38;2;R;G;B or 38;5;N
+                    int mode = params.get(i + 1);
+                    if (mode == 5 && i + 2 < params.count()) {
+                        m_cur_fg = color_palette(params.get(i + 2));
+                        i += 2;
+                    } else if (mode == 2 && i + 4 < params.count()) {
+                        m_cur_fg = color_rgb(params.get(i + 2), params.get(i + 3), params.get(i + 4));
+                        i += 4;
                     }
                 }
                 break;
@@ -685,17 +684,8 @@ void ScreenBuffer::handle_sgr(const CsiParams &params) {
                 m_bg = color_palette(p - 40);
                 break;
             case 48: // Extended background
-                if (i + 1 < params.count()) {
-                    int mode = params.get(i + 1);
-                    if (mode == 5 && i + 2 < params.count()) {
-                        m_bg = color_palette(params.get(i + 2));
-                        i += 2;
-                    } else if (mode == 2 && i + 4 < params.count()) {
-                        m_bg = color_rgb(params.get(i + 2), params.get(i + 3), params.get(i + 4));
-                        i += 4;
-                    }
-                }
-                else if (!params.params[i].sub.empty()) {
+                if (!params.params[i].sub.empty()) {
+                    // Colon form: 48:2::R:G:B or 48:5:N
                     auto &sub = params.params[i].sub;
                     if (sub.size() >= 1 && sub[0] == 2 && sub.size() >= 4) {
                         int r_idx = (sub.size() >= 5) ? 2 : 1;
@@ -706,9 +696,34 @@ void ScreenBuffer::handle_sgr(const CsiParams &params) {
                     } else if (sub.size() >= 1 && sub[0] == 5 && sub.size() >= 2) {
                         m_bg = color_palette(std::max(0, sub[1]));
                     }
+                } else if (i + 1 < params.count()) {
+                    // Semicolon form: 48;2;R;G;B or 48;5;N
+                    int mode = params.get(i + 1);
+                    if (mode == 5 && i + 2 < params.count()) {
+                        m_bg = color_palette(params.get(i + 2));
+                        i += 2;
+                    } else if (mode == 2 && i + 4 < params.count()) {
+                        m_bg = color_rgb(params.get(i + 2), params.get(i + 3), params.get(i + 4));
+                        i += 4;
+                    }
                 }
                 break;
             case 49: m_bg = COLOR_FLAG_DEFAULT; break;
+
+            case 58: // Underline color (not stored, but must consume params)
+                if (!params.params[i].sub.empty()) {
+                    // Colon form: 58:2::R:G:B or 58:5:N — already one param, nothing to skip
+                } else if (i + 1 < params.count()) {
+                    // Semicolon form: 58;2;R;G;B or 58;5;N — consume extra params
+                    int mode = params.get(i + 1);
+                    if (mode == 5 && i + 2 < params.count()) {
+                        i += 2;
+                    } else if (mode == 2 && i + 4 < params.count()) {
+                        i += 4;
+                    }
+                }
+                break;
+            case 59: break; // Default underline color (no-op)
 
             // Bright foreground
             case 90: case 91: case 92: case 93:
@@ -864,8 +879,9 @@ void ScreenBuffer::csi_dispatch(const CsiParams &params, char intermediate, char
             for (int i = 0; i < params.count(); i++)
                 set_mode(params.get(i), false, dec_private);
             break;
-        case 'm': // SGR
-            handle_sgr(params);
+        case 'm': // SGR — only when no intermediate (plain CSI, not CSI > or CSI ?)
+            if (intermediate == 0)
+                handle_sgr(params);
             break;
         case 'r': // DECSTBM - set scrolling region
             m_scroll_top = std::max(0, params.get(0, 1) - 1);
