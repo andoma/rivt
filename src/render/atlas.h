@@ -27,7 +27,7 @@ public:
     bool init(int initial_size = 1024);
 
     // Get or rasterize glyph, returns entry
-    const GlyphEntry *get(Font &font, int font_index, uint32_t glyph_id);
+    const GlyphEntry *get(Font &font, int font_index, uint32_t glyph_id, bool bold = false);
 
     // GL texture
     unsigned int texture_id() const { return m_texture_id; }
@@ -37,7 +37,7 @@ public:
     void clear();
 
 private:
-    bool insert_glyph(Font &font, int font_index, uint32_t glyph_id, GlyphEntry &entry);
+    bool insert_glyph(Font &font, int font_index, uint32_t glyph_id, bool bold, GlyphEntry &entry);
     void grow_texture();
     void upload_region(int x, int y, int w, int h, const uint8_t *data, GlyphType type);
 
@@ -52,14 +52,15 @@ private:
     struct GlyphKey {
         int font_index;
         uint32_t glyph_id;
+        bool bold;
         bool operator==(const GlyphKey &o) const {
-            return font_index == o.font_index && glyph_id == o.glyph_id;
+            return font_index == o.font_index && glyph_id == o.glyph_id && bold == o.bold;
         }
     };
 
     struct KeyHash {
         size_t operator()(const GlyphKey &k) const {
-            return std::hash<uint64_t>()(((uint64_t)k.font_index << 32) | k.glyph_id);
+            return std::hash<uint64_t>()(((uint64_t)k.font_index << 32) | k.glyph_id | ((uint64_t)k.bold << 63));
         }
     };
 

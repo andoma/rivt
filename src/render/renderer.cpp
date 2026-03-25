@@ -403,7 +403,8 @@ void Renderer::build_pane_vertices(const ScreenBuffer &buffer, const Config &con
             if (cp >= GRAPHEME_SENTINEL_BASE) continue;
 
             auto [font_idx, glyph_id] = m_font.find_glyph(cp);
-            const GlyphEntry *ge = m_atlas.get(m_font, font_idx, glyph_id);
+            bool is_bold = cell.attrs & ATTR_BOLD;
+            const GlyphEntry *ge = m_atlas.get(m_font, font_idx, glyph_id, is_bold);
             if (cp == 0x23F8) {
                 dbg("U+23F8: font_idx=%d glyph_id=%u ge=%p ge->w=%d ge->h=%d",
                     font_idx, glyph_id, (void*)ge, ge ? ge->w : -1, ge ? ge->h : -1);

@@ -1,5 +1,7 @@
 #include "render/atlas.h"
 #include "core/debug.h"
+#include <ft2build.h>
+#include FT_SYNTHESIS_H
 #include <GL/gl.h>
 #include <cstring>
 #include <vector>
@@ -46,14 +48,14 @@ void GlyphAtlas::clear() {
                     GL_RGBA, GL_UNSIGNED_BYTE, zeros.data());
 }
 
-const GlyphEntry *GlyphAtlas::get(Font &font, int font_index, uint32_t glyph_id) {
-    GlyphKey key{font_index, glyph_id};
+const GlyphEntry *GlyphAtlas::get(Font &font, int font_index, uint32_t glyph_id, bool bold) {
+    GlyphKey key{font_index, glyph_id, bold};
     auto it = m_cache.find(key);
     if (it != m_cache.end())
         return &it->second;
 
     GlyphEntry entry{};
-    if (!insert_glyph(font, font_index, glyph_id, entry))
+    if (!insert_glyph(font, font_index, glyph_id, bold, entry))
         return nullptr;
 
     auto [ins, _] = m_cache.emplace(key, entry);
@@ -105,7 +107,7 @@ void GlyphAtlas::upload_region(int x, int y, int w, int h, const uint8_t *data, 
     }
 }
 
-bool GlyphAtlas::insert_glyph(Font &font, int font_index, uint32_t glyph_id, GlyphEntry &entry) {
+bool GlyphAtlas::insert_glyph(Font &font, int font_index, uint32_t glyph_id, bool bold, GlyphEntry &entry) {
     FT_Face face = font.face(font_index);
     if (!face) {
         dbg("atlas: insert_glyph font_idx=%d glyph=%u — no face", font_index, glyph_id);
@@ -123,6 +125,9 @@ bool GlyphAtlas::insert_glyph(Font &font, int font_index, uint32_t glyph_id, Gly
             font_index, glyph_id, err, is_color);
         return false;
     }
+
+    if (bold && !is_color)
+        FT_GlyphSlot_Embolden(face->glyph);
 
     FT_Render_Mode render_mode = FT_RENDER_MODE_NORMAL;
     if (is_color)
