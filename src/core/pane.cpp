@@ -123,8 +123,7 @@ void Pane::resize(int cols, int rows) {
 }
 
 void Pane::setup_callbacks(Platform *platform, const Config &config) {
-    m_screen.on_title_change = [this, platform](const std::string &title) {
-        platform->set_title(title);
+    m_screen.on_title_change = [this](const std::string &title) {
         if (on_title_change) on_title_change(this, title);
     };
 

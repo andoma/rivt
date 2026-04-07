@@ -66,9 +66,12 @@ void TabManager::setup_pane(Pane *pane) {
 
     pane->on_title_change = [this](Pane *p, const std::string &title) {
         // Update the tab title for whichever tab owns this pane
-        for (auto &tab : m_tabs) {
-            if (tab->focused_pane == p) {
-                tab->title = title;
+        for (int i = 0; i < (int)m_tabs.size(); i++) {
+            if (m_tabs[i]->focused_pane == p) {
+                m_tabs[i]->title = title;
+                // Only update the window title if this is the active tab
+                if (i == m_active_index)
+                    m_platform->set_title(title);
                 if (on_needs_render) on_needs_render();
                 break;
             }
@@ -202,7 +205,8 @@ void TabManager::activate_tab(int index) {
     if (index < 0 || index >= (int)m_tabs.size()) return;
     m_active_index = index;
     m_tabs[index]->has_activity = false;
-    // Update title from focused pane
+    if (!m_tabs[index]->title.empty())
+        m_platform->set_title(m_tabs[index]->title);
     if (on_needs_render) on_needs_render();
 }
 
