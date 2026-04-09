@@ -376,7 +376,7 @@ void Window::handle_key(const KeyEvent &key) {
                 // search_navigate
                 auto &s = screen.search;
                 if (!s.matches.empty()) {
-                    int delta = shift ? -1 : 1;
+                    int delta = shift ? 1 : -1;
                     s.current_match = (s.current_match + delta + (int)s.matches.size()) % (int)s.matches.size();
                     const auto &match = s.matches[s.current_match];
                     int rows = screen.rows();

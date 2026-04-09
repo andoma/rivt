@@ -558,20 +558,20 @@ void Renderer::build_pane_vertices(const ScreenBuffer &buffer, const Config &con
         m_vertices.push_back({cur_x+2, text_y + (float)m.cell_height, 0,0, 0.8f,0.8f,0.8f,0.8f, 0});
         m_vertices.push_back({cur_x,   text_y + (float)m.cell_height, 0,0, 0.8f,0.8f,0.8f,0.8f, 0});
 
-        if (!buffer.search.query.empty()) {
-            std::string info;
-            if (buffer.search.total_matches() == 0) {
-                info = "No matches";
-            } else {
-                info = std::to_string(buffer.search.current_match + 1) + " of "
-                     + std::to_string(buffer.search.total_matches());
-            }
-            float info_x = ox + bar_w - (info.size() + 1) * m.cell_width;
-            float info_r = buffer.search.total_matches() == 0 ? 0.8f : 0.6f;
-            float info_g = buffer.search.total_matches() == 0 ? 0.3f : 0.6f;
-            float info_b = buffer.search.total_matches() == 0 ? 0.3f : 0.6f;
-            draw_text(info_x, text_y, info, info_r, info_g, info_b, atlas_size);
+        std::string info;
+        float info_r = 0.4f, info_g = 0.4f, info_b = 0.4f;
+        if (buffer.search.query.empty()) {
+            info = "Enter=prev  Shift+Enter=next  Esc=close";
+        } else if (buffer.search.total_matches() == 0) {
+            info = "No matches";
+            info_r = 0.8f; info_g = 0.3f; info_b = 0.3f;
+        } else {
+            info = std::to_string(buffer.search.current_match + 1) + " of "
+                 + std::to_string(buffer.search.total_matches());
+            info_r = 0.6f; info_g = 0.6f; info_b = 0.6f;
         }
+        float info_x = ox + bar_w - (info.size() + 1) * m.cell_width;
+        draw_text(info_x, text_y, info, info_r, info_g, info_b, atlas_size);
     }
 }
 
