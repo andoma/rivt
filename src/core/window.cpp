@@ -838,6 +838,41 @@ void Window::handle_mouse(const MouseEvent &mouse) {
                 }
                 m_needs_render = true;
             }
+        } else if (mouse.button == MouseButton::Right && mouse.pressed && !mouse.motion) {
+            int abs_line = screen.absolute_line(cell_row);
+            if (!screen.selection.active) {
+                // First right-click: set anchor point
+                screen.selection.active = true;
+                screen.selection.rectangular = false;
+                screen.selection.start_line = abs_line;
+                screen.selection.start_col = cell_col;
+                screen.selection.end_line = abs_line;
+                screen.selection.end_col = cell_col;
+            } else {
+                // Move whichever endpoint is closest to the click
+                int sl, sc, el, ec;
+                screen.selection.normalized(sl, sc, el, ec);
+
+                // Distance from click to start vs end (line distance dominates)
+                int dist_start = std::abs(abs_line - sl) * screen.cols()
+                               + std::abs(cell_col - sc);
+                int dist_end = std::abs(abs_line - el) * screen.cols()
+                             + std::abs(cell_col - ec);
+
+                if (dist_start <= dist_end) {
+                    screen.selection.start_line = abs_line;
+                    screen.selection.start_col = cell_col;
+                } else {
+                    screen.selection.end_line = abs_line;
+                    screen.selection.end_col = cell_col;
+                }
+
+                // Copy to primary clipboard if non-degenerate
+                std::string text = screen.get_selection_text();
+                if (!text.empty())
+                    m_platform->set_clipboard(text, true);
+            }
+            m_needs_render = true;
         } else if (mouse.button == MouseButton::Middle && mouse.pressed) {
             std::string text = m_platform->get_clipboard(true);
             if (!text.empty()) {
