@@ -21,7 +21,6 @@ public:
     ~Window();
 
     bool init();
-    bool init_tmux(const std::vector<std::string> &tmux_args);
     bool init_tmux_pty(Pane *gateway_pane);
     void render_if_needed();
     bool reap_dead_panes();

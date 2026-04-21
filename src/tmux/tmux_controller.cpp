@@ -36,21 +36,15 @@ void TmuxController::initialize(int cols, int rows, int cell_w, int cell_h,
     dbg("tmux: initialize cell=%dx%d content_origin=%d,%d cols=%d rows=%d",
         cell_w, cell_h, content_x, content_y, cols, rows);
 
-    // In PTY mode, the tmux window (B) should keep its own size and tell
-    // tmux to adapt — never resize to match the session layout.  Mark the
-    // initial resize as done so on_layout_change won't call resize_to_cells.
-    if (m_client.is_pty_mode()) {
-        m_initial_resize_done = true;
-    }
-
-    // Send initial client size so tmux knows our dimensions and sends
-    // layout-change notifications for all windows in the session.
-    // In PTY mode, defer this — %session-changed will trigger list-windows.
-    // Sending commands before tmux is ready risks them reaching the shell
-    // if tmux exits immediately (e.g., no session to attach to).
-    if (cols > 0 && rows > 0 && !m_client.is_pty_mode()) {
-        m_client.refresh_client_size(cols, rows);
-    }
+    // The tmux window (B) keeps its own size and tells tmux to adapt —
+    // never resize to match the session layout.  Mark the initial resize
+    // as done so on_layout_change won't call resize_to_cells.
+    // Defer the initial refresh-client — %session-changed will trigger
+    // list-windows.  Sending commands before tmux is ready risks them
+    // reaching the shell if tmux exits immediately (e.g., no session).
+    m_initial_resize_done = true;
+    (void)cols;
+    (void)rows;
 }
 
 void TmuxController::handle_resize(int cols, int rows, int cell_w, int cell_h,

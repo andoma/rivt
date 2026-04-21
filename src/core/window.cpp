@@ -96,62 +96,6 @@ bool Window::init() {
     return true;
 }
 
-bool Window::init_tmux(const std::vector<std::string> &tmux_args) {
-    m_platform = Platform::create();
-    if (!m_platform) {
-        fprintf(stderr, "Failed to create platform\n");
-        return false;
-    }
-
-    if (!m_platform->create_window(m_win_w, m_win_h, "rivt [tmux]")) {
-        fprintf(stderr, "Failed to create window\n");
-        return false;
-    }
-
-    if (!m_platform->create_gl_context()) {
-        fprintf(stderr, "Failed to create GL context\n");
-        return false;
-    }
-
-    if (!m_renderer.init(m_config)) {
-        fprintf(stderr, "Failed to initialize renderer\n");
-        return false;
-    }
-
-    m_renderer.set_viewport(m_win_w, m_win_h);
-
-    m_tabs = std::make_unique<TabManager>(m_config, m_loop, m_platform.get());
-    m_tabs->on_needs_render = [this]() { m_needs_render = true; };
-    m_tabs->on_quit = [this]() {
-        if (on_close) on_close(this);
-    };
-
-    const auto &m = m_renderer.metrics();
-    m_tabs->set_cell_size(m.cell_width, m.cell_height);
-    m_win_w = m_config.initial_cols * m.cell_width;
-    m_win_h = m_config.initial_rows * m.cell_height + kBottomPad;
-    m_platform->resize_window(m_win_w, m_win_h);
-    m_renderer.set_viewport(m_win_w, m_win_h);
-
-    // Create tmux client and controller (no initial tab — tmux notifications create them)
-    m_tmux_client = std::make_unique<TmuxClient>(m_loop);
-    m_tmux_controller = std::make_unique<TmuxController>(*m_tmux_client, *this, *m_tabs, m_loop);
-
-    if (!m_tmux_client->start(tmux_args)) {
-        fprintf(stderr, "Failed to start tmux -CC\n");
-        return false;
-    }
-
-    int bar_h = tab_bar_height();
-    int cols = m.cell_width > 0 ? m_win_w / m.cell_width : 80;
-    int rows = m.cell_height > 0 ? (m_win_h - bar_h - kBottomPad) / m.cell_height : 24;
-    m_tmux_controller->initialize(cols, rows, m.cell_width, m.cell_height, 0, bar_h);
-
-    m_platform->show_window();
-    setup_callbacks();
-    return true;
-}
-
 int Window::tab_bar_height() const {
     const auto &m = m_renderer.metrics();
     return m_tabs->tab_count() > 1 ? m.cell_height + 8 : 0;

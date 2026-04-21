@@ -24,27 +24,15 @@ int main(int argc, char *argv[]) {
     signal(SIGCHLD, sigchld_handler);
 
     // Parse global flags
-    std::vector<std::string> args;
     for (int i = 1; i < argc; i++) {
         if (strcmp(argv[i], "--debug") == 0 || strcmp(argv[i], "-d") == 0) {
             debug_enabled() = true;
-        } else {
-            args.push_back(argv[i]);
         }
     }
 
     Config base_config;
     EventLoop loop;
     std::vector<std::unique_ptr<Window>> windows;
-
-    // Check for tmux subcommand: rivt tmux <args...>
-    bool tmux_mode = false;
-    std::vector<std::string> tmux_args;
-    if (!args.empty() && args[0] == "tmux") {
-        tmux_mode = true;
-        for (size_t i = 1; i < args.size(); i++)
-            tmux_args.push_back(args[i]);
-    }
 
     std::function<void(Pane *)> create_tmux_window;
     std::function<void()> create_window;
@@ -73,18 +61,7 @@ int main(int argc, char *argv[]) {
         windows.push_back(std::move(win));
     };
 
-    if (tmux_mode) {
-        auto win = std::make_unique<Window>(base_config, loop);
-        if (!win->init_tmux(tmux_args)) return 1;
-        Window *raw = win.get();
-        loop.add_fd(raw->event_fd(), [raw](uint32_t) {
-            raw->platform()->process_events();
-        });
-        raw->on_close = [](Window *w) { w->mark_closing(); };
-        windows.push_back(std::move(win));
-    } else {
-        create_window();
-    }
+    create_window();
     if (windows.empty()) return 1;
 
     loop.add_timer(600, [&]() {

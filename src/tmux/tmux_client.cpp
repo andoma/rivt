@@ -1,80 +1,13 @@
 #include "tmux/tmux_client.h"
 #include "core/debug.h"
 
-#include <unistd.h>
-#include <signal.h>
-#include <sys/wait.h>
-#include <sys/epoll.h>
 #include <cstdio>
-#include <cstring>
 
 namespace rivt {
 
 TmuxClient::TmuxClient(EventLoop &loop) : m_loop(loop) {}
 
-TmuxClient::~TmuxClient() {
-    if (m_read_fd >= 0) {
-        m_loop.remove_fd(m_read_fd);
-        close(m_read_fd);
-    }
-    if (m_write_fd >= 0) close(m_write_fd);
-    if (m_pid > 0) {
-        // Don't kill tmux — we want the session to survive detach
-        waitpid(m_pid, nullptr, WNOHANG);
-    }
-}
-
-bool TmuxClient::start(const std::vector<std::string> &args) {
-    int pipe_in[2], pipe_out[2];
-    if (pipe(pipe_in) < 0 || pipe(pipe_out) < 0) {
-        perror("pipe");
-        return false;
-    }
-
-    m_pid = fork();
-    if (m_pid < 0) {
-        perror("fork");
-        close(pipe_in[0]); close(pipe_in[1]);
-        close(pipe_out[0]); close(pipe_out[1]);
-        return false;
-    }
-
-    if (m_pid == 0) {
-        // Child: stdin from pipe_in[0], stdout/stderr to pipe_out[1]
-        close(pipe_in[1]);
-        close(pipe_out[0]);
-        dup2(pipe_in[0], STDIN_FILENO);
-        dup2(pipe_out[1], STDOUT_FILENO);
-        dup2(pipe_out[1], STDERR_FILENO);
-        close(pipe_in[0]);
-        close(pipe_out[1]);
-
-        // Build argv: tmux -CC <args...>
-        std::vector<const char *> argv;
-        argv.push_back("tmux");
-        argv.push_back("-CC");
-        for (auto &a : args) argv.push_back(a.c_str());
-        argv.push_back(nullptr);
-
-        execvp("tmux", const_cast<char *const *>(argv.data()));
-        perror("execvp tmux");
-        _exit(127);
-    }
-
-    // Parent
-    close(pipe_in[0]);
-    close(pipe_out[1]);
-    m_write_fd = pipe_in[1];
-    m_read_fd = pipe_out[0];
-
-    m_loop.add_fd(m_read_fd, [this](uint32_t events) {
-        if (events & (EPOLLIN | EPOLLHUP | EPOLLERR)) {
-            on_readable();
-        }
-    });
-
-    return true;
-}
+TmuxClient::~TmuxClient() = default;
 
 void TmuxClient::start_pty_mode(std::function<void(const std::string &)> write_fn) {
     m_pty_write = std::move(write_fn);
@@ -83,26 +16,6 @@ void TmuxClient::start_pty_mode(std::function<void(const std::string &)> write_f
 void TmuxClient::feed_data(const char *buf, size_t len) {
     m_line_buf.append(buf, len);
 
-    size_t pos;
-    while ((pos = m_line_buf.find('\n')) != std::string::npos) {
-        std::string line = m_line_buf.substr(0, pos);
-        m_line_buf.erase(0, pos + 1);
-        if (!line.empty() && line.back() == '\r') line.pop_back();
-        parse_line(line);
-    }
-}
-
-void TmuxClient::on_readable() {
-    char buf[65536];
-    ssize_t n = read(m_read_fd, buf, sizeof(buf));
-    if (n <= 0) {
-        if (on_exit) on_exit();
-        return;
-    }
-
-    m_line_buf.append(buf, n);
-
-    // Extract complete lines
     size_t pos;
     while ((pos = m_line_buf.find('\n')) != std::string::npos) {
         std::string line = m_line_buf.substr(0, pos);
@@ -253,19 +166,11 @@ std::string TmuxClient::decode_octal(const std::string &s) {
 void TmuxClient::send_command(const std::string &cmd, ResponseCallback cb) {
     dbg("tmux-client: >> %s", cmd.c_str());
     m_response_queue.push_back(std::move(cb));
-    std::string msg = cmd + "\n";
-    if (m_pty_write) {
-        m_pty_write(msg);
-    } else if (m_write_fd >= 0) {
-        if (::write(m_write_fd, msg.data(), msg.size()) < 0) {
-            // Connection to tmux lost
-        }
-    }
+    if (m_pty_write) m_pty_write(cmd + "\n");
 }
 
 void TmuxClient::send_keys(int pane_id, const std::string &data) {
-    if (data.empty()) return;
-    if (!m_pty_write && m_write_fd < 0) return;
+    if (data.empty() || !m_pty_write) return;
 
     std::string cmd = "send-keys -t %" + std::to_string(pane_id) + " -H";
     for (unsigned char c : data) {

@@ -4,7 +4,6 @@
 #include <functional>
 #include <string>
 #include <vector>
-#include <sys/types.h>
 
 namespace rivt {
 
@@ -13,16 +12,11 @@ public:
     TmuxClient(EventLoop &loop);
     ~TmuxClient();
 
-    // Start by spawning tmux -CC as subprocess (for `rivt tmux` command)
-    bool start(const std::vector<std::string> &args);
-
     // Start in PTY mode (tmux -CC running inside an existing PTY)
     void start_pty_mode(std::function<void(const std::string &)> write_fn);
 
     // Feed raw data from PTY (used in PTY mode)
     void feed_data(const char *buf, size_t len);
-
-    bool is_pty_mode() const { return !!m_pty_write; }
 
     using ResponseCallback = std::function<void(const std::string &output)>;
     void send_command(const std::string &cmd, ResponseCallback cb = nullptr);
@@ -41,14 +35,10 @@ public:
     std::function<void()> on_exit;
 
 private:
-    void on_readable();
     void parse_line(const std::string &line);
     static std::string decode_octal(const std::string &s);
 
     EventLoop &m_loop;
-    int m_write_fd = -1;
-    int m_read_fd = -1;
-    pid_t m_pid = -1;
     std::string m_line_buf;
 
     // %begin/%end tracking
