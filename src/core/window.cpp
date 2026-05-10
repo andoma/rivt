@@ -330,11 +330,23 @@ void Window::handle_resize(int w, int h) {
     m_needs_render = true;
 }
 
-void Window::handle_key(const KeyEvent &key) {
-    if (!key.pressed) return;
+void Window::handle_key(const KeyEvent &raw_key) {
+    if (!raw_key.pressed) return;
 
     Pane *pane = m_tabs->focused_pane();
     if (!pane) return;
+
+    // On macOS, treat Cmd (Super) as the canonical rivt-shortcut modifier
+    // — equivalent to Ctrl+Shift on Linux. This makes Cmd-F open search,
+    // Cmd-+/- resize font, Cmd-T open a tab, Cmd-D split a pane, etc.
+    // Cmd-N/W/C/V/Q are already routed via the native menu bar.
+    KeyEvent key = raw_key;
+#ifdef __APPLE__
+    bool macos_cmd_held = (key.mods & KeyMod::Super);
+    if (macos_cmd_held) key.mods = key.mods | KeyMod::Ctrl | KeyMod::Shift;
+#else
+    constexpr bool macos_cmd_held = false;
+#endif
 
     ScreenBuffer &screen = pane->screen();
     bool ctrl  = key.mods & KeyMod::Ctrl;
@@ -535,9 +547,13 @@ void Window::handle_key(const KeyEvent &key) {
         return;
     }
 
-    // Alt+1..9: switch to tab by index
+    // Alt+1..9 (Linux) or Cmd+1..9 (macOS): switch to tab by index.
     bool alt = key.mods & KeyMod::Alt;
-    if (alt && key.keysym >= XKB_KEY_1 && key.keysym <= XKB_KEY_9) {
+    bool tab_index_combo = alt;
+#ifdef __APPLE__
+    if (macos_cmd_held) tab_index_combo = true;
+#endif
+    if (tab_index_combo && key.keysym >= XKB_KEY_1 && key.keysym <= XKB_KEY_9) {
         int idx = key.keysym - XKB_KEY_1;
         if (idx < m_tabs->tab_count()) {
             m_tabs->activate_tab(idx);
@@ -558,6 +574,11 @@ void Window::handle_key(const KeyEvent &key) {
         m_needs_render = true;
         return;
     }
+
+    // Don't leak unmatched Cmd-<x> combos into the shell as Ctrl-codes.
+    // (Without this guard, Cmd-A would normalize to Ctrl-Shift-A and
+    // encode_key would emit ^A.)
+    if (macos_cmd_held) return;
 
     // Forward to PTY
     std::string seq = encode_key(key, screen);

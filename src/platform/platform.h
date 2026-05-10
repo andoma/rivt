@@ -71,6 +71,16 @@ public:
     std::function<void()> on_menu_paste;
 
     static std::unique_ptr<Platform> create();
+
+    // Process-wide handlers used by macOS for menu items and dock-icon
+    // interaction (Cmd-N from the menu when no window is focused; Cmd-Q
+    // routed through the main loop so destructors run; dock-click reopen).
+    // No-op on platforms that don't surface them (Linux/X11 keeps the
+    // existing per-window callback model).
+    static void set_new_window_handler(std::function<void()> handler);
+    static void set_quit_handler(std::function<void()> handler);
+    static const std::function<void()> &new_window_handler();
+    static const std::function<void()> &quit_handler();
 };
 
 } // namespace rivt

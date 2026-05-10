@@ -64,6 +64,12 @@ int main(int argc, char *argv[]) {
     create_window();
     if (windows.empty()) return 1;
 
+    // Process-wide handlers used by macOS for menu items and the dock
+    // (Cmd-N from the menu, Cmd-Q routed through our cleanup, dock-icon
+    // reopen). On Linux these are stored but never called.
+    Platform::set_new_window_handler(create_window);
+    Platform::set_quit_handler([&]() { loop.request_quit(); });
+
     loop.add_timer(600, [&]() {
         for (auto &w : windows) w->toggle_cursor_blink();
     }, true);
@@ -97,7 +103,13 @@ int main(int argc, char *argv[]) {
             }
         }
 
+#ifdef __APPLE__
+        // Standard macOS behavior: keep the app running even with no
+        // windows open. The user reopens via Cmd-N or the dock icon and
+        // quits explicitly via Cmd-Q (handled by the app delegate).
+#else
         if (windows.empty()) { loop.request_quit(); break; }
+#endif
 
         // render_if_needed() calls swap_buffers() which blocks until
         // vsync, naturally pacing the loop to the display refresh rate.

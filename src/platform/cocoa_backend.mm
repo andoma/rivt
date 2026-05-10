@@ -58,15 +58,39 @@ CocoaApp &CocoaApp::instance() {
 @end
 
 @implementation RivtAppDelegate
+// Standard macOS behavior: closing the last window leaves the app
+// running with just the menu bar visible. Cmd-Q (or App > Quit) is
+// what actually terminates.
 - (BOOL)applicationShouldTerminateAfterLastWindowClosed:(NSApplication *)sender {
     (void)sender;
+    return NO;
+}
+
+// Cmd-Q / App > Quit routes through our main loop so window destructors
+// run (PTYs get SIGHUP, GL contexts release, etc.). We return Cancel so
+// NSApp does not call exit() — instead the loop falls out of the while,
+// main() returns, and the process exits normally.
+- (NSApplicationTerminateReply)applicationShouldTerminate:(NSApplication *)sender {
+    (void)sender;
+    if (rivt::Platform::quit_handler()) rivt::Platform::quit_handler()();
+    return NSTerminateCancel;
+}
+
+// Dock-icon click while no windows are visible reopens a fresh window.
+- (BOOL)applicationShouldHandleReopen:(NSApplication *)sender hasVisibleWindows:(BOOL)flag {
+    (void)sender;
+    if (!flag && rivt::Platform::new_window_handler())
+        rivt::Platform::new_window_handler()();
     return YES;
 }
 
 - (void)rivtNewWindow:(id)sender {
     (void)sender;
-    auto *b = CocoaApp::instance().key_backend;
-    if (b && b->on_menu_new_window) b->on_menu_new_window();
+    // Always use the global handler so Cmd-N works even when no window
+    // is focused (which is the normal state once the user has closed
+    // every window without quitting the app).
+    if (rivt::Platform::new_window_handler())
+        rivt::Platform::new_window_handler()();
 }
 
 - (void)rivtCloseWindow:(id)sender {
