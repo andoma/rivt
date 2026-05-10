@@ -61,6 +61,15 @@ public:
     std::function<void(bool focused)> on_focus;
     std::function<void()> on_close;
 
+    // Menu actions (macOS native menu bar). Fired when the user picks
+    // File > New Window / Close Window or Edit > Copy / Paste. No-op on
+    // platforms without a native menu bar; rivt's existing keyboard
+    // shortcuts (Ctrl-Shift-C/V etc.) still work.
+    std::function<void()> on_menu_new_window;
+    std::function<void()> on_menu_close_window;
+    std::function<void()> on_menu_copy;
+    std::function<void()> on_menu_paste;
+
     static std::unique_ptr<Platform> create();
 };
 

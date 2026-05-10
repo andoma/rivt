@@ -3,7 +3,18 @@
 #include FT_FREETYPE_H
 #include <hb.h>
 #include <hb-ft.h>
+#ifndef __APPLE__
 #include <fontconfig/fontconfig.h>
+#else
+// Provide just the FC_WEIGHT_*/FC_SLANT_* values used by callers so
+// font.cpp can keep a single signature for find_font(family, weight, slant)
+// across platforms. Numeric values match fontconfig's table; the macOS
+// implementation in font.cpp re-maps them to Core Text traits.
+#define FC_WEIGHT_REGULAR  80
+#define FC_WEIGHT_BOLD     200
+#define FC_SLANT_ROMAN     0
+#define FC_SLANT_ITALIC    100
+#endif
 #include <string>
 #include <vector>
 #include <unordered_set>

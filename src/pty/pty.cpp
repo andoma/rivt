@@ -3,7 +3,11 @@
 #include <cstring>
 #include <unistd.h>
 #include <fcntl.h>
+#ifdef __APPLE__
+#include <util.h>
+#else
 #include <pty.h>
+#endif
 #include <sys/ioctl.h>
 #include <sys/wait.h>
 #include <signal.h>

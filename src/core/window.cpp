@@ -197,6 +197,37 @@ void Window::setup_callbacks() {
         m_closing = true;
     };
 
+    // Native menu actions (Cmd-N / Cmd-W / Cmd-C / Cmd-V on macOS).
+    // No-op on platforms without a menu bar; Ctrl-Shift-* shortcuts in
+    // handle_key still cover Linux.
+    m_platform->on_menu_new_window = [this]() {
+        if (on_new_window) on_new_window();
+    };
+    m_platform->on_menu_close_window = [this]() {
+        if (m_tabs && !m_tabs->close_focused_pane()) {
+            if (on_close) on_close(this);
+        }
+    };
+    m_platform->on_menu_copy = [this]() {
+        Pane *pane = m_tabs ? m_tabs->focused_pane() : nullptr;
+        if (!pane) return;
+        std::string text = pane->screen().get_selection_text();
+        if (!text.empty()) m_platform->set_clipboard(text, false);
+    };
+    m_platform->on_menu_paste = [this]() {
+        Pane *pane = m_tabs ? m_tabs->focused_pane() : nullptr;
+        if (!pane) return;
+        std::string text = m_platform->get_clipboard(false);
+        if (text.empty()) return;
+        if (pane->screen().bracketed_paste()) {
+            pane->write("\033[200~");
+            pane->write(text);
+            pane->write("\033[201~");
+        } else {
+            pane->write(text);
+        }
+    };
+
     // Detect tmux -CC control mode in any pane's PTY output
     m_tabs->on_tmux_control_mode = [this](Pane *pane) {
         start_tmux_from_pane(pane);

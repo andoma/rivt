@@ -3,6 +3,11 @@
 #include <cmath>
 #include <stdexcept>
 
+#ifdef __APPLE__
+#include <CoreText/CoreText.h>
+#include <CoreFoundation/CoreFoundation.h>
+#endif
+
 namespace rivt {
 
 Font::Font() {
@@ -17,6 +22,86 @@ Font::~Font() {
     }
     if (m_ft_lib) FT_Done_FreeType(m_ft_lib);
 }
+
+#ifdef __APPLE__
+
+namespace {
+
+// Map fontconfig's family aliases ("monospace"/"sans-serif"/"emoji") to a
+// reasonable macOS family. Other names pass through unchanged.
+const char *map_family(const std::string &family) {
+    if (family.empty() || family == "monospace") return "Menlo";
+    if (family == "sans-serif")                   return "Helvetica";
+    if (family == "emoji")                        return "Apple Color Emoji";
+    return family.c_str();
+}
+
+// Map fontconfig's 0..200 weight scale to Core Text's [-1, 1] range.
+// 80 (Regular) → 0, 200 (Bold) → ~0.4 (matches kCTFontWeightBold).
+float ct_weight(int fc_weight) {
+    return (fc_weight - 80) * (0.4f / 120.0f);
+}
+
+std::string url_to_path(CFURLRef url) {
+    if (!url) return {};
+    char buf[1024];
+    if (!CFURLGetFileSystemRepresentation(url, true, (UInt8 *)buf, sizeof(buf)))
+        return {};
+    return std::string(buf);
+}
+
+std::string font_path_for_descriptor(CTFontDescriptorRef desc) {
+    CFURLRef url = (CFURLRef)CTFontDescriptorCopyAttribute(desc, kCTFontURLAttribute);
+    std::string path = url_to_path(url);
+    if (url) CFRelease(url);
+    return path;
+}
+
+} // namespace
+
+std::string Font::find_font(const std::string &family, int weight, int slant) {
+    const char *resolved = map_family(family);
+    CFStringRef cf_family = CFStringCreateWithCString(nullptr, resolved, kCFStringEncodingUTF8);
+
+    CFMutableDictionaryRef traits = CFDictionaryCreateMutable(nullptr, 0,
+        &kCFTypeDictionaryKeyCallBacks, &kCFTypeDictionaryValueCallBacks);
+    float w = ct_weight(weight);
+    CFNumberRef weight_num = CFNumberCreate(nullptr, kCFNumberFloatType, &w);
+    CFDictionaryAddValue(traits, kCTFontWeightTrait, weight_num);
+    if (slant >= FC_SLANT_ITALIC) {
+        float s = 0.2f;
+        CFNumberRef slant_num = CFNumberCreate(nullptr, kCFNumberFloatType, &s);
+        CFDictionaryAddValue(traits, kCTFontSlantTrait, slant_num);
+        CFRelease(slant_num);
+    }
+    CFRelease(weight_num);
+
+    CFMutableDictionaryRef attrs = CFDictionaryCreateMutable(nullptr, 0,
+        &kCFTypeDictionaryKeyCallBacks, &kCFTypeDictionaryValueCallBacks);
+    CFDictionaryAddValue(attrs, kCTFontFamilyNameAttribute, cf_family);
+    CFDictionaryAddValue(attrs, kCTFontTraitsAttribute, traits);
+
+    CTFontDescriptorRef desc = CTFontDescriptorCreateWithAttributes(attrs);
+
+    CTFontDescriptorRef match = CTFontDescriptorCreateMatchingFontDescriptor(desc, nullptr);
+    std::string path;
+    if (match) {
+        path = font_path_for_descriptor(match);
+        CFRelease(match);
+    } else {
+        // Fall back: take the descriptor as-is — Core Text resolves it
+        // when a CTFont is created.
+        path = font_path_for_descriptor(desc);
+    }
+
+    CFRelease(desc);
+    CFRelease(attrs);
+    CFRelease(traits);
+    CFRelease(cf_family);
+    return path;
+}
+
+#else
 
 std::string Font::find_font(const std::string &family, int weight, int slant) {
     FcConfig *config = FcInitLoadConfigAndFonts();
@@ -49,6 +134,8 @@ std::string Font::find_font(const std::string &family, int weight, int slant) {
     FcConfigDestroy(config);
     return path;
 }
+
+#endif // __APPLE__
 
 bool Font::load_face(const std::string &path, int face_index) {
     if (m_loaded_paths.count(path))
@@ -153,6 +240,52 @@ hb_font_t *Font::hb_font(int index) const {
     return nullptr;
 }
 
+#ifdef __APPLE__
+
+std::string Font::find_font_for_codepoint(uint32_t codepoint) {
+    // Build a CFString containing just this codepoint.
+    UniChar utf16[2];
+    CFIndex utf16_len = 0;
+    if (codepoint <= 0xFFFF) {
+        utf16[0] = (UniChar)codepoint;
+        utf16_len = 1;
+    } else {
+        uint32_t cp = codepoint - 0x10000;
+        utf16[0] = (UniChar)(0xD800 | (cp >> 10));
+        utf16[1] = (UniChar)(0xDC00 | (cp & 0x3FF));
+        utf16_len = 2;
+    }
+    CFStringRef cf_str = CFStringCreateWithCharacters(nullptr, utf16, utf16_len);
+
+    // Start from a Menlo-derived base font; CTFontCreateForString picks a
+    // suitable substitute if Menlo lacks the codepoint.
+    CFStringRef base_family = CFSTR("Menlo");
+    CTFontRef base = CTFontCreateWithName(base_family, 12.0, nullptr);
+    CFRange range = CFRangeMake(0, utf16_len);
+    CTFontRef matched = CTFontCreateForString(base, cf_str, range);
+
+    std::string path;
+    if (matched) {
+        CTFontDescriptorRef desc = CTFontCopyFontDescriptor(matched);
+        if (desc) {
+            CFURLRef url = (CFURLRef)CTFontDescriptorCopyAttribute(desc, kCTFontURLAttribute);
+            if (url) {
+                char buf[1024];
+                if (CFURLGetFileSystemRepresentation(url, true, (UInt8 *)buf, sizeof(buf)))
+                    path = buf;
+                CFRelease(url);
+            }
+            CFRelease(desc);
+        }
+        CFRelease(matched);
+    }
+    if (base) CFRelease(base);
+    CFRelease(cf_str);
+    return path;
+}
+
+#else
+
 std::string Font::find_font_for_codepoint(uint32_t codepoint) {
     FcConfig *config = FcInitLoadConfigAndFonts();
     FcPattern *pattern = FcPatternCreate();
@@ -185,6 +318,8 @@ std::string Font::find_font_for_codepoint(uint32_t codepoint) {
     FcConfigDestroy(config);
     return path;
 }
+
+#endif // __APPLE__
 
 std::pair<int, uint32_t> Font::find_glyph(uint32_t codepoint) {
     for (int i = 0; i < (int)m_faces.size(); i++) {
