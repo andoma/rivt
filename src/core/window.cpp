@@ -4,7 +4,7 @@
 #include "tmux/tmux_client.h"
 #include "tmux/tmux_controller.h"
 
-#include <xkbcommon/xkbcommon-keysyms.h>
+#include "platform/keysym.h"
 #include <climits>
 #include <chrono>
 #include <cstdio>

@@ -2,7 +2,7 @@
 #include "core/debug.h"
 #include <ft2build.h>
 #include FT_SYNTHESIS_H
-#include <GL/gl.h>
+#include "render/gl.h"
 #include <cstring>
 #include <vector>
 #include <algorithm>

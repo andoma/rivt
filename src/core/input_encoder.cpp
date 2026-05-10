@@ -1,6 +1,6 @@
 #include "core/input_encoder.h"
 #include "terminal/screen_buffer.h"
-#include <xkbcommon/xkbcommon-keysyms.h>
+#include "platform/keysym.h"
 #include <cstdio>
 #include <cstring>
 

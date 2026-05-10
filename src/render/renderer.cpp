@@ -1,10 +1,9 @@
-#define GL_GLEXT_PROTOTYPES
 #include "render/renderer.h"
 #include "terminal/screen_buffer.h"
 #include "terminal/image_store.h"
 #include "core/tab_manager.h"
 #include "core/debug.h"
-#include <GL/gl.h>
+#include "render/gl.h"
 #include <cstdio>
 #include <cmath>
 #include <string>

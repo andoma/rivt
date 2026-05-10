@@ -3,8 +3,7 @@
 #define STBI_NO_STDIO
 #include "third_party/stb_image.h"
 
-#define GL_GLEXT_PROTOTYPES
-#include <GL/gl.h>
+#include "render/gl.h"
 
 #include "terminal/image_store.h"
 #include "terminal/kitty_graphics.h"
