@@ -24,7 +24,8 @@ public:
     virtual void make_current() = 0;
     virtual void swap_buffers() = 0;
 
-    // Event fd for epoll integration
+    // Event fd selectable by EventLoop. -1 indicates the platform has no
+    // per-window fd (e.g. Cocoa, where NSApp dispatches events centrally).
     virtual int get_event_fd() = 0;
 
     // Process pending events, call registered callbacks

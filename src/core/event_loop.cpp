@@ -1,42 +1,63 @@
 #include "core/event_loop.h"
 #include <unistd.h>
+#include <sys/epoll.h>
 #include <sys/timerfd.h>
 #include <stdexcept>
 #include <algorithm>
 #include <cstring>
+#include <cerrno>
 
 namespace rivt {
 
+static uint32_t to_epoll(uint32_t flags) {
+    uint32_t out = 0;
+    if (flags & EV_READ)  out |= EPOLLIN;
+    if (flags & EV_WRITE) out |= EPOLLOUT;
+    return out;
+}
+
+static uint32_t from_epoll(uint32_t bits) {
+    uint32_t out = 0;
+    if (bits & EPOLLIN)  out |= EV_READ;
+    if (bits & EPOLLOUT) out |= EV_WRITE;
+    if (bits & EPOLLHUP) out |= EV_HUP;
+    if (bits & EPOLLERR) out |= EV_ERR;
+    return out;
+}
+
 EventLoop::EventLoop() {
-    m_epoll_fd = epoll_create1(EPOLL_CLOEXEC);
-    if (m_epoll_fd < 0)
+    m_backend_fd = epoll_create1(EPOLL_CLOEXEC);
+    if (m_backend_fd < 0)
         throw std::runtime_error("epoll_create1 failed");
 }
 
 EventLoop::~EventLoop() {
-    for (auto &t : m_timers)
-        close(t.fd);
-    close(m_epoll_fd);
+    for (auto &t : m_timers) {
+        if (t.fd >= 0) close(t.fd);
+    }
+    close(m_backend_fd);
 }
 
 void EventLoop::add_fd(int fd, Callback cb, uint32_t events) {
+    if (fd < 0) return;  // no-op (Cocoa returns -1 from event_fd())
     struct epoll_event ev {};
-    ev.events = events;
+    ev.events = to_epoll(events);
     ev.data.fd = fd;
-    if (epoll_ctl(m_epoll_fd, EPOLL_CTL_ADD, fd, &ev) < 0)
+    if (epoll_ctl(m_backend_fd, EPOLL_CTL_ADD, fd, &ev) < 0)
         throw std::runtime_error("epoll_ctl ADD failed");
     m_fds.push_back({fd, std::move(cb)});
 }
 
 void EventLoop::remove_fd(int fd) {
-    epoll_ctl(m_epoll_fd, EPOLL_CTL_DEL, fd, nullptr);
+    if (fd < 0) return;
+    epoll_ctl(m_backend_fd, EPOLL_CTL_DEL, fd, nullptr);
     m_fds.erase(std::remove_if(m_fds.begin(), m_fds.end(),
         [fd](const FdEntry &e) { return e.fd == fd; }), m_fds.end());
 }
 
 bool EventLoop::poll(int timeout_ms) {
     struct epoll_event events[16];
-    int n = epoll_wait(m_epoll_fd, events, 16, timeout_ms);
+    int n = epoll_wait(m_backend_fd, events, 16, timeout_ms);
     if (n < 0) {
         if (errno == EINTR) return !m_quit;
         throw std::runtime_error("epoll_wait failed");
@@ -65,7 +86,7 @@ bool EventLoop::poll(int timeout_ms) {
         // Regular fd callbacks
         for (auto &entry : m_fds) {
             if (entry.fd == fd) {
-                entry.cb(events[i].events);
+                entry.cb(from_epoll(events[i].events));
                 break;
             }
         }
@@ -88,8 +109,8 @@ int EventLoop::add_timer(int interval_ms, TimerCallback cb, bool repeating) {
     timerfd_settime(tfd, 0, &ts, nullptr);
 
     int id = m_next_timer_id++;
-    m_timers.push_back({id, tfd, std::move(cb), repeating});
-    add_fd(tfd, [](uint32_t) {}, EPOLLIN);
+    m_timers.push_back({id, tfd, 0, std::move(cb), repeating});
+    add_fd(tfd, [](uint32_t) {}, EV_READ);
     return id;
 }
 

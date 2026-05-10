@@ -22,7 +22,7 @@ public:
     // Resize PTY
     void resize(int cols, int rows);
 
-    // File descriptor for epoll
+    // File descriptor for the EventLoop (epoll on Linux, kqueue on macOS).
     int fd() const { return m_master_fd; }
 
     // Check if child is still alive

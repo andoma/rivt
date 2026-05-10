@@ -1,7 +1,7 @@
 #include "core/pane.h"
 #include "core/debug.h"
+#include "core/event_loop.h"
 #include "platform/platform.h"
-#include <sys/epoll.h>
 #include <cstring>
 
 namespace rivt {
@@ -21,7 +21,7 @@ bool Pane::spawn_shell(EventLoop &loop, const std::string &start_cwd) {
 
     m_pty_fd_registered = m_pty.fd();
     loop.add_fd(m_pty.fd(), [this](uint32_t events) {
-        if (events & EPOLLIN) {
+        if (events & EV_READ) {
             char buf[65536];
             int n;
             while ((n = m_pty.read(buf, sizeof(buf))) > 0) {
@@ -80,7 +80,7 @@ bool Pane::spawn_shell(EventLoop &loop, const std::string &start_cwd) {
                 if (on_dead) on_dead(this);
             }
         }
-        if (events & (EPOLLHUP | EPOLLERR)) {
+        if (events & (EV_HUP | EV_ERR)) {
             if (on_dead) on_dead(this);
         }
     });
