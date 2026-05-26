@@ -385,6 +385,9 @@ void Window::handle_key(const KeyEvent &raw_key) {
                 }
                 return;
             default:
+                // Let Ctrl-modified keys (Ctrl-Shift-C copy, Ctrl-Shift-V
+                // paste, font resize, etc.) fall through to global shortcuts.
+                if (ctrl) break;
                 if (!key.text.empty() && key.text[0] >= ' ') {
                     screen.search.query += key.text;
                     screen.find_matches(screen.search.query, screen.search.case_sensitive);
