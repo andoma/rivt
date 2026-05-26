@@ -951,22 +951,17 @@ void ScreenBuffer::osc_dispatch(int command, const std::string &payload) {
 
                 // Parse optional metadata key=value pairs (Kitty clipboard protocol)
                 std::string mime_type;
+                // Kitty metadata pairs are always terminated by ';'. A lone '='
+                // without a following ';' is base64 padding, not metadata.
                 while (!data.empty()) {
-                    auto eq = data.find('=');
                     auto sc = data.find(';');
-                    if (eq != std::string::npos && (sc == std::string::npos || eq < sc)) {
-                        // Found a key=value pair before any semicolon
-                        std::string segment = data.substr(0, sc != std::string::npos ? sc : data.size());
-                        std::string key = segment.substr(0, eq);
-                        std::string val = segment.substr(eq + 1);
-                        if (key == "type") mime_type = val;
-                        if (sc != std::string::npos)
-                            data = data.substr(sc + 1);
-                        else
-                            data.clear();
-                    } else {
-                        break;  // No more metadata, rest is payload
-                    }
+                    if (sc == std::string::npos) break;
+                    auto eq = data.find('=');
+                    if (eq == std::string::npos || eq >= sc) break;
+                    std::string key = data.substr(0, eq);
+                    std::string val = data.substr(eq + 1, sc - eq - 1);
+                    if (key == "type") mime_type = val;
+                    data = data.substr(sc + 1);
                 }
 
                 if (data == "?") {
