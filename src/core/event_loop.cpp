@@ -48,6 +48,14 @@ void EventLoop::add_fd(int fd, Callback cb, uint32_t events) {
     m_fds.push_back({fd, std::move(cb)});
 }
 
+void EventLoop::modify_fd(int fd, uint32_t events) {
+    if (fd < 0) return;
+    struct epoll_event ev {};
+    ev.events = to_epoll(events);
+    ev.data.fd = fd;
+    epoll_ctl(m_backend_fd, EPOLL_CTL_MOD, fd, &ev);
+}
+
 void EventLoop::remove_fd(int fd) {
     if (fd < 0) return;
     epoll_ctl(m_backend_fd, EPOLL_CTL_DEL, fd, nullptr);

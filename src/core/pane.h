@@ -84,10 +84,16 @@ public:
     std::function<void(const char *, int)> m_pty_data_override;
 
 private:
+    // Arm or disarm EV_WRITE interest on the PTY fd to match whether the
+    // PTY has queued bytes waiting to be flushed.
+    void update_pty_write_interest();
+
     ScreenBuffer m_screen;
     VtParser m_parser;
     Pty m_pty;
+    EventLoop *m_loop = nullptr;
     int m_pty_fd_registered = -1;
+    bool m_pty_write_armed = false;
 };
 
 } // namespace rivt

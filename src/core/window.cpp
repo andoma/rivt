@@ -267,7 +267,10 @@ bool Window::init_tmux_pty(Pane *gateway_pane) {
     // Create tmux client in PTY mode — writes go to the gateway pane's PTY
     m_tmux_client = std::make_unique<TmuxClient>(m_loop);
     m_tmux_client->start_pty_mode([gateway_pane](const std::string &data) {
-        gateway_pane->pty().write(data);
+        // Route through Pane::write (not pty().write) so the queued-write
+        // flush interest is armed — large send-keys lines from a paste can
+        // exceed the PTY buffer and must be drained on writable.
+        gateway_pane->write(data);
     });
 
     m_tmux_controller = std::make_unique<TmuxController>(*m_tmux_client, *this, *m_tabs, m_loop);

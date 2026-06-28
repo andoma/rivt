@@ -19,8 +19,13 @@ bool Pane::spawn_shell(EventLoop &loop, const std::string &start_cwd) {
     if (!m_pty.spawn(m_screen.cols(), m_screen.rows(), "", start_cwd))
         return false;
 
+    m_loop = &loop;
     m_pty_fd_registered = m_pty.fd();
     loop.add_fd(m_pty.fd(), [this](uint32_t events) {
+        if (events & EV_WRITE) {
+            m_pty.flush_writes();
+            update_pty_write_interest();
+        }
         if (events & EV_READ) {
             char buf[65536];
             int n;
@@ -93,16 +98,28 @@ void Pane::detach(EventLoop &loop) {
         loop.remove_fd(m_pty_fd_registered);
         m_pty_fd_registered = -1;
     }
+    m_loop = nullptr;
+    m_pty_write_armed = false;
+}
+
+void Pane::update_pty_write_interest() {
+    if (!m_loop || m_pty_fd_registered < 0) return;
+    bool want = m_pty.has_pending();
+    if (want == m_pty_write_armed) return;  // avoid redundant epoll_ctl
+    m_pty_write_armed = want;
+    m_loop->modify_fd(m_pty_fd_registered, want ? (EV_READ | EV_WRITE) : EV_READ);
 }
 
 void Pane::write(const std::string &data) {
-    if (m_write_callback) m_write_callback(data);
-    else m_pty.write(data);
+    if (m_write_callback) { m_write_callback(data); return; }
+    m_pty.write(data);
+    update_pty_write_interest();
 }
 
 void Pane::write(const char *data, size_t len) {
-    if (m_write_callback) m_write_callback(std::string(data, len));
-    else m_pty.write(data, (int)len);
+    if (m_write_callback) { m_write_callback(std::string(data, len)); return; }
+    m_pty.write(data, (int)len);
+    update_pty_write_interest();
 }
 
 void Pane::feed_data(const char *buf, size_t len) {

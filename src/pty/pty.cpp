@@ -103,9 +103,47 @@ int Pty::read(char *buf, int max_len) {
 }
 
 int Pty::write(const char *buf, int len) {
-    if (m_master_fd < 0) return -1;
-    ssize_t n = ::write(m_master_fd, buf, len);
-    return (int)n;
+    if (m_master_fd < 0 || len < 0) return -1;
+
+    size_t off = 0;
+    // Fast path: nothing queued, so try to write directly. If anything is
+    // already queued we must not write ahead of it — fall through to append.
+    if (!has_pending()) {
+        while (off < (size_t)len) {
+            ssize_t n = ::write(m_master_fd, buf + off, (size_t)len - off);
+            if (n > 0) { off += (size_t)n; continue; }
+            if (n < 0 && errno == EINTR) continue;
+            if (n < 0 && (errno == EAGAIN || errno == EWOULDBLOCK)) break;
+            return -1;  // fatal (e.g. EIO after child exit)
+        }
+        if (off >= (size_t)len) return len;  // fully written, nothing queued
+    }
+
+    // Queue the remainder (or all of it) to flush once the fd is writable.
+    m_write_buf.append(buf + off, (size_t)len - off);
+    return len;
+}
+
+bool Pty::flush_writes() {
+    if (m_master_fd < 0) { m_write_buf.clear(); m_write_off = 0; return false; }
+
+    while (m_write_off < m_write_buf.size()) {
+        ssize_t n = ::write(m_master_fd, m_write_buf.data() + m_write_off,
+                            m_write_buf.size() - m_write_off);
+        if (n > 0) { m_write_off += (size_t)n; continue; }
+        if (n < 0 && errno == EINTR) continue;
+        if (n < 0 && (errno == EAGAIN || errno == EWOULDBLOCK)) break;
+        // Fatal error: drop the queue rather than spin forever.
+        m_write_buf.clear();
+        m_write_off = 0;
+        return false;
+    }
+
+    if (m_write_off >= m_write_buf.size()) {
+        m_write_buf.clear();
+        m_write_off = 0;
+    }
+    return has_pending();
 }
 
 void Pty::resize(int cols, int rows) {

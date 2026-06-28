@@ -27,6 +27,9 @@ public:
     void add_fd(int fd, Callback cb, uint32_t events = EV_READ);
     void remove_fd(int fd);
 
+    // Change the event mask for an already-registered fd (keeps callback).
+    void modify_fd(int fd, uint32_t events);
+
     // Run one iteration, blocking up to timeout_ms (-1 = forever).
     // Returns false if should quit.
     bool poll(int timeout_ms = -1);

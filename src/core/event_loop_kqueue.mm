@@ -110,6 +110,20 @@ void EventLoop::add_fd(int fd, Callback cb, uint32_t events) {
     m_fds.push_back({fd, std::move(cb)});
 }
 
+void EventLoop::modify_fd(int fd, uint32_t events) {
+    if (fd < 0) return;
+    // Add or delete each filter to match the requested mask. Deleting a
+    // filter that isn't registered fails harmlessly, so issue each change
+    // on its own so one ENOENT doesn't drop the other.
+    struct kevent ke;
+    EV_SET(&ke, fd, EVFILT_READ,
+           (events & EV_READ) ? (EV_ADD | EV_CLEAR) : EV_DELETE, 0, 0, nullptr);
+    kevent(m_backend_fd, &ke, 1, nullptr, 0, nullptr);
+    EV_SET(&ke, fd, EVFILT_WRITE,
+           (events & EV_WRITE) ? (EV_ADD | EV_CLEAR) : EV_DELETE, 0, 0, nullptr);
+    kevent(m_backend_fd, &ke, 1, nullptr, 0, nullptr);
+}
+
 void EventLoop::remove_fd(int fd) {
     if (fd < 0) return;
     struct kevent ke;
