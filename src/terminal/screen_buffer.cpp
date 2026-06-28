@@ -1324,9 +1324,28 @@ std::string ScreenBuffer::detect_url_at(int screen_row, int col) const {
             return it->second;
     }
 
-    // Auto-detect URLs in the line text
+    // Auto-detect URLs. A URL may wrap across several physical rows, so
+    // reconstruct the full logical line (the run of rows joined by the
+    // `wrapped` flag) that contains screen_row and scan that instead of a
+    // single row. cps holds the concatenated codepoints; click_idx is the
+    // clicked cell's index within that logical line.
+    int start_row = screen_row;
+    for (int guard = 0; guard < 10000 && line(start_row - 1).wrapped; guard++)
+        start_row--;
+
+    std::vector<uint32_t> cps;
+    int click_idx = -1;
+    for (int r = start_row, guard = 0; guard < 10000; r++, guard++) {
+        const Line &lr = line(r);
+        if (r == screen_row) click_idx = (int)cps.size() + col;
+        for (const Cell &cell : lr.cells)
+            cps.push_back(cell.codepoint);
+        if (!lr.wrapped) break;
+    }
+    ncells = (int)cps.size();
+
     auto cp_at = [&](int c) -> uint32_t {
-        return (c >= 0 && c < ncells) ? l.cells[c].codepoint : 0;
+        return (c >= 0 && c < ncells) ? cps[c] : 0;
     };
 
     auto is_url_char = [](uint32_t cp) -> bool {
@@ -1401,8 +1420,8 @@ std::string ScreenBuffer::detect_url_at(int screen_row, int col) const {
             }
         }
 
-        // Check if clicked col is within this URL
-        if (col >= url_start && col < url_end) {
+        // Check if clicked cell is within this URL
+        if (click_idx >= url_start && click_idx < url_end) {
             std::string url;
             if (prepend_http) url = "http://";
             for (int c = url_start; c < url_end; c++) {

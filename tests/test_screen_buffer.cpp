@@ -553,6 +553,19 @@ TEST(url_detect_multiple_urls) {
     ASSERT_STR_EQ(t.screen.detect_url_at(0, 20), "https://b.com");
 }
 
+TEST(url_detect_wrapped) {
+    // URL longer than the terminal width wraps onto a second row. Both the
+    // first row and the continuation row must yield the complete URL.
+    TestTerminal t(20, 5);
+    t.feed("https://example.com/abc/def/ghi");
+    ASSERT_STR_EQ(t.line_text(0), "https://example.com/");
+    ASSERT_STR_EQ(t.line_text(1), "abc/def/ghi");
+    ASSERT_TRUE(t.screen.line(0).wrapped);
+    const char *full = "https://example.com/abc/def/ghi";
+    ASSERT_STR_EQ(t.screen.detect_url_at(0, 5), full);   // click on first row
+    ASSERT_STR_EQ(t.screen.detect_url_at(1, 2), full);   // click on continuation row
+}
+
 // --- OSC 8 hyperlinks ---
 
 TEST(osc8_hyperlink) {
