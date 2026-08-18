@@ -114,6 +114,14 @@ int main(int argc, char *argv[]) {
         // render_if_needed() calls swap_buffers() which blocks until
         // vsync, naturally pacing the loop to the display refresh rate.
         for (auto &w : windows) w->render_if_needed();
+
+        // EGL shares our X connection, so eglSwapBuffers' round trips read
+        // the socket and can move events (e.g. SelectionRequest) into xcb's
+        // internal queue. The socket then looks idle to epoll, so drain the
+        // queue here or those events wait until unrelated X traffic arrives.
+        // Index-based: process_events() can append windows via Ctrl-Shift-N.
+        for (size_t i = 0; i < windows.size(); i++)
+            windows[i]->platform()->process_events();
     }
 
     return 0;
