@@ -52,6 +52,9 @@ private:
     void update_size_hints();
     void resize_font();
     void handle_key(const KeyEvent &key);
+    // Asynchronous paste: the clipboard reply can arrive long after the
+    // keystroke, so the target pane is re-validated before it is written to.
+    void paste_into(Pane *target, bool primary);
     void handle_mouse(const MouseEvent &mouse);
     void handle_resize(int w, int h);
     void start_tmux_from_pane(Pane *gateway);

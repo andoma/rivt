@@ -62,6 +62,11 @@ public:
     // Set up platform-dependent callbacks (title, clipboard, etc.)
     void setup_callbacks(Platform *platform, const Config &config);
 
+    // Liveness token for callbacks that can outlive this pane — an X11
+    // clipboard reply may land after the pane was closed. Capture the
+    // weak_ptr and bail out if it expired.
+    std::weak_ptr<int> alive_token() const { return m_alive; }
+
     // Callback: request re-render
     std::function<void()> on_needs_render;
 
@@ -94,6 +99,7 @@ private:
     EventLoop *m_loop = nullptr;
     int m_pty_fd_registered = -1;
     bool m_pty_write_armed = false;
+    std::shared_ptr<int> m_alive = std::make_shared<int>(0);
 };
 
 } // namespace rivt

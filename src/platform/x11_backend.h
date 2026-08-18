@@ -7,6 +7,8 @@
 #include <xkbcommon/xkbcommon-compose.h>
 #include <EGL/egl.h>
 #include <X11/Xlib.h>
+#include <chrono>
+#include <deque>
 
 namespace rivt {
 
@@ -34,6 +36,9 @@ public:
     std::string get_clipboard(bool primary) override;
     void set_clipboard_data(const std::string &data, const std::string &mime_type, bool primary) override;
     std::string get_clipboard_data(const std::string &mime_type, bool primary) override;
+    void request_clipboard(bool primary, ClipboardCallback cb) override;
+    void request_clipboard_data(const std::string &mime_type, bool primary,
+                                ClipboardCallback cb) override;
 
     float get_dpi_scale() override;
     void set_mouse_cursor(MouseCursor cursor) override;
@@ -43,6 +48,9 @@ private:
     void handle_button_event(xcb_button_press_event_t *ev, bool pressed);
     void handle_motion_event(xcb_motion_notify_event_t *ev);
     void handle_configure_event(xcb_configure_notify_event_t *ev);
+    void handle_selection_request(xcb_selection_request_event_t *ev);
+    void handle_selection_notify(xcb_selection_notify_event_t *ev);
+    void handle_property_notify(xcb_property_notify_event_t *ev);
     KeyMod translate_mods(uint16_t state);
 
     xcb_connection_t *m_conn = nullptr;
@@ -74,8 +82,34 @@ private:
     xcb_atom_t m_atom_wm_protocols = 0;
     xcb_atom_t m_atom_wm_delete = 0;
     xcb_atom_t m_atom_image_png = 0;
+    xcb_atom_t m_atom_incr = 0;
     std::string m_clipboard_text;
     std::string m_primary_text;
+
+    // Reads from a selection we don't own are asynchronous: the owner
+    // replies with a SelectionNotify, and large transfers arrive as a
+    // stream of PropertyNotify chunks (INCR). Requests are parked here
+    // until they complete or time out. Only the front one is in flight,
+    // since they all share the m_atom_rivt_sel property.
+    struct PendingPaste {
+        xcb_atom_t selection = 0;
+        xcb_atom_t target = 0;
+        ClipboardCallback cb;
+        std::string data;   // accumulated INCR chunks
+        bool incr = false;  // INCR transfer in progress
+        bool started = false;
+        std::chrono::steady_clock::time_point deadline;
+    };
+    std::deque<PendingPaste> m_pastes;
+
+    bool owns_selection(xcb_atom_t selection);
+    void queue_paste(xcb_atom_t selection, xcb_atom_t target, ClipboardCallback cb);
+    void start_front_paste();
+    void finish_front_paste(std::string data);
+    void expire_pastes();
+    // Reads m_atom_rivt_sel in full without deleting it. Returns false if
+    // the property is gone.
+    bool read_paste_property(std::string &out, xcb_atom_t &type);
 
     // Typed clipboard storage
     struct ClipboardEntry {

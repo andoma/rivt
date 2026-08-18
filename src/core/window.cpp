@@ -215,17 +215,7 @@ void Window::setup_callbacks() {
         if (!text.empty()) m_platform->set_clipboard(text, false);
     };
     m_platform->on_menu_paste = [this]() {
-        Pane *pane = m_tabs ? m_tabs->focused_pane() : nullptr;
-        if (!pane) return;
-        std::string text = m_platform->get_clipboard(false);
-        if (text.empty()) return;
-        if (pane->screen().bracketed_paste()) {
-            pane->write("\033[200~");
-            pane->write(text);
-            pane->write("\033[201~");
-        } else {
-            pane->write(text);
-        }
+        paste_into(m_tabs ? m_tabs->focused_pane() : nullptr, false);
     };
 
     // Detect tmux -CC control mode in any pane's PTY output
@@ -333,6 +323,22 @@ void Window::handle_resize(int w, int h) {
     m_needs_render = true;
 }
 
+void Window::paste_into(Pane *target, bool primary) {
+    if (!target) return;
+    m_platform->request_clipboard(primary, [this, target, alive = target->alive_token()]
+                                          (const std::string &text) {
+        if (text.empty() || alive.expired()) return;
+        if (target->screen().bracketed_paste()) {
+            target->write("\033[200~");
+            target->write(text);
+            target->write("\033[201~");
+        } else {
+            target->write(text);
+        }
+        m_needs_render = true;
+    });
+}
+
 void Window::handle_key(const KeyEvent &raw_key) {
     if (!raw_key.pressed) return;
 
@@ -428,19 +434,9 @@ void Window::handle_key(const KeyEvent &raw_key) {
                 m_needs_render = true;
                 return;
             case XKB_KEY_V:
-            case XKB_KEY_v: {
-                std::string text = m_platform->get_clipboard(false);
-                if (!text.empty()) {
-                    if (screen.bracketed_paste()) {
-                        pane->write("\033[200~");
-                        pane->write(text);
-                        pane->write("\033[201~");
-                    } else {
-                        pane->write(text);
-                    }
-                }
+            case XKB_KEY_v:
+                paste_into(pane, false);
                 return;
-            }
             case XKB_KEY_C:
             case XKB_KEY_c: {
                 std::string text = screen.get_selection_text();
@@ -876,16 +872,7 @@ void Window::handle_mouse(const MouseEvent &mouse) {
             }
             m_needs_render = true;
         } else if (mouse.button == MouseButton::Middle && mouse.pressed) {
-            std::string text = m_platform->get_clipboard(true);
-            if (!text.empty()) {
-                if (screen.bracketed_paste()) {
-                    target_pane->write("\033[200~");
-                    target_pane->write(text);
-                    target_pane->write("\033[201~");
-                } else {
-                    target_pane->write(text);
-                }
-            }
+            paste_into(target_pane, true);
         }
     }
 }

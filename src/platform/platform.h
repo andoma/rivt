@@ -35,6 +35,20 @@ public:
     virtual void set_clipboard(const std::string &text, bool primary = false) = 0;
     virtual std::string get_clipboard(bool primary = false) = 0;
 
+    // Asynchronous clipboard read. cb receives the contents, or an empty
+    // string if the request failed or timed out. On X11 the data comes from
+    // another client, so cb can run many event-loop iterations later (and
+    // may never run if this Platform is destroyed first). Platforms with a
+    // synchronous clipboard invoke it inline.
+    using ClipboardCallback = std::function<void(const std::string &)>;
+    virtual void request_clipboard(bool primary, ClipboardCallback cb) {
+        cb(get_clipboard(primary));
+    }
+    virtual void request_clipboard_data(const std::string &mime_type, bool primary,
+                                        ClipboardCallback cb) {
+        cb(get_clipboard_data(mime_type, primary));
+    }
+
     // Typed clipboard (for Kitty clipboard protocol)
     virtual void set_clipboard_data(const std::string &data, const std::string &mime_type, bool primary = false) {
         // Default: fall back to text clipboard for text types

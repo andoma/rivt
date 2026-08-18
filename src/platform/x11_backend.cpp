@@ -16,6 +16,11 @@
 
 namespace rivt {
 
+// A selection owner that never answers must not wedge paste forever, and a
+// hostile or buggy one must not make us allocate without bound.
+static constexpr auto kPasteTimeout = std::chrono::seconds(2);
+static constexpr size_t kMaxPasteBytes = 64 * 1024 * 1024;
+
 X11Backend::X11Backend() {
     m_xkb_ctx = xkb_context_new(XKB_CONTEXT_NO_FLAGS);
     if (!m_xkb_ctx)
@@ -81,6 +86,7 @@ bool X11Backend::create_window(int width, int height, const std::string &title) 
     m_atom_wm_protocols = intern_atom("WM_PROTOCOLS");
     m_atom_wm_delete = intern_atom("WM_DELETE_WINDOW");
     m_atom_image_png = intern_atom("image/png");
+    m_atom_incr = intern_atom("INCR");
 
     // Register for WM_DELETE_WINDOW
     xcb_change_property(m_conn, XCB_PROP_MODE_REPLACE, m_window,
@@ -445,53 +451,26 @@ void X11Backend::process_events() {
                 }
                 break;
             }
-            case XCB_SELECTION_REQUEST: {
-                // Respond to selection requests from other apps
-                auto *sr = (xcb_selection_request_event_t *)ev;
-                const std::string &text = (sr->selection == XCB_ATOM_PRIMARY) ? m_primary_text : m_clipboard_text;
-                const ClipboardEntry &typed = (sr->selection == XCB_ATOM_PRIMARY) ? m_primary_typed : m_clipboard_typed;
-
-                xcb_selection_notify_event_t notify{};
-                notify.response_type = XCB_SELECTION_NOTIFY;
-                notify.requestor = sr->requestor;
-                notify.selection = sr->selection;
-                notify.target = sr->target;
-                notify.time = sr->time;
-
-                if (sr->target == m_atom_image_png && typed.mime_type == "image/png") {
-                    if (typed.data.size() <= 256 * 1024) {
-                        xcb_change_property(m_conn, XCB_PROP_MODE_REPLACE,
-                                            sr->requestor, sr->property,
-                                            m_atom_image_png, 8,
-                                            typed.data.size(), typed.data.data());
-                        notify.property = sr->property;
-                    } else {
-                        // INCR not implemented yet — reject oversized transfers
-                        fprintf(stderr, "rivt: clipboard image too large for non-INCR transfer (%zu bytes)\n", typed.data.size());
-                        notify.property = XCB_ATOM_NONE;
-                    }
-                } else if (sr->target == m_atom_utf8_string || sr->target == XCB_ATOM_STRING) {
-                    xcb_change_property(m_conn, XCB_PROP_MODE_REPLACE,
-                                        sr->requestor, sr->property,
-                                        m_atom_utf8_string, 8,
-                                        text.size(), text.c_str());
-                    notify.property = sr->property;
-                } else if (sr->target == m_atom_targets) {
-                    std::vector<xcb_atom_t> targets = { m_atom_targets, m_atom_utf8_string, XCB_ATOM_STRING };
-                    if (!typed.data.empty() && typed.mime_type == "image/png")
-                        targets.push_back(m_atom_image_png);
-                    xcb_change_property(m_conn, XCB_PROP_MODE_REPLACE,
-                                        sr->requestor, sr->property,
-                                        XCB_ATOM_ATOM, 32, targets.size(), targets.data());
-                    notify.property = sr->property;
-                } else {
-                    notify.property = XCB_ATOM_NONE;
-                }
-
-                xcb_send_event(m_conn, false, sr->requestor, 0, (const char *)&notify);
-                xcb_flush(m_conn);
+            case XCB_SELECTION_REQUEST:
+                handle_selection_request((xcb_selection_request_event_t *)ev);
                 break;
-            }
+            case XCB_SELECTION_NOTIFY:
+                handle_selection_notify((xcb_selection_notify_event_t *)ev);
+                break;
+            case XCB_SELECTION_CLEAR:
+                // Another client took the selection; drop our copy so a
+                // later paste asks the new owner instead of echoing stale text.
+                if (((xcb_selection_clear_event_t *)ev)->selection == m_atom_clipboard) {
+                    m_clipboard_text.clear();
+                    m_clipboard_typed = {};
+                } else {
+                    m_primary_text.clear();
+                    m_primary_typed = {};
+                }
+                break;
+            case XCB_PROPERTY_NOTIFY:
+                handle_property_notify((xcb_property_notify_event_t *)ev);
+                break;
             default:
                 if (type == m_xkb_first_event) {
                     auto *xkb_ev = (xcb_xkb_state_notify_event_t *)ev;
@@ -524,6 +503,8 @@ void X11Backend::process_events() {
         }
         free(ev);
     }
+
+    expire_pastes();
 }
 
 void X11Backend::set_clipboard(const std::string &text, bool primary) {
@@ -537,51 +518,6 @@ void X11Backend::set_clipboard(const std::string &text, bool primary) {
     xcb_flush(m_conn);
 }
 
-std::string X11Backend::get_clipboard(bool primary) {
-    xcb_atom_t selection = primary ? (xcb_atom_t)XCB_ATOM_PRIMARY : m_atom_clipboard;
-
-    // Check if we own it
-    xcb_get_selection_owner_cookie_t owner_cookie = xcb_get_selection_owner(m_conn, selection);
-    xcb_get_selection_owner_reply_t *owner = xcb_get_selection_owner_reply(m_conn, owner_cookie, nullptr);
-    if (owner && owner->owner == m_window) {
-        free(owner);
-        return primary ? m_primary_text : m_clipboard_text;
-    }
-    free(owner);
-
-    // Request from owner
-    xcb_convert_selection(m_conn, m_window, selection, m_atom_utf8_string,
-                          m_atom_rivt_sel, XCB_CURRENT_TIME);
-    xcb_flush(m_conn);
-
-    // Wait for SelectionNotify (with timeout)
-    for (int i = 0; i < 50; i++) {
-        xcb_generic_event_t *ev = xcb_wait_for_event(m_conn);
-        if (!ev) break;
-        uint8_t type = ev->response_type & ~0x80;
-        if (type == XCB_SELECTION_NOTIFY) {
-            auto *sn = (xcb_selection_notify_event_t *)ev;
-            if (sn->property != XCB_ATOM_NONE) {
-                xcb_get_property_cookie_t prop_cookie = xcb_get_property(
-                    m_conn, 1, m_window, m_atom_rivt_sel, XCB_ATOM_ANY, 0, 1 << 20);
-                xcb_get_property_reply_t *prop = xcb_get_property_reply(m_conn, prop_cookie, nullptr);
-                std::string result;
-                if (prop) {
-                    result = std::string((char *)xcb_get_property_value(prop),
-                                         xcb_get_property_value_length(prop));
-                    free(prop);
-                }
-                free(ev);
-                return result;
-            }
-            free(ev);
-            break;
-        }
-        free(ev);
-    }
-    return "";
-}
-
 void X11Backend::set_clipboard_data(const std::string &data, const std::string &mime_type, bool primary) {
     ClipboardEntry &entry = primary ? m_primary_typed : m_clipboard_typed;
     entry.data = data;
@@ -592,54 +528,223 @@ void X11Backend::set_clipboard_data(const std::string &data, const std::string &
     xcb_flush(m_conn);
 }
 
+// Synchronous reads only work for selections we own. Waiting inline for
+// another client's reply would stall the whole event loop — including the
+// SelectionRequest handler that other clients are themselves waiting on —
+// so everything else goes through request_clipboard().
+std::string X11Backend::get_clipboard(bool primary) {
+    if (!owns_selection(primary ? (xcb_atom_t)XCB_ATOM_PRIMARY : m_atom_clipboard)) return {};
+    return primary ? m_primary_text : m_clipboard_text;
+}
+
 std::string X11Backend::get_clipboard_data(const std::string &mime_type, bool primary) {
-    if (mime_type.empty() || mime_type == "text/plain")
-        return get_clipboard(primary);
+    if (mime_type.empty() || mime_type == "text/plain") return get_clipboard(primary);
+    if (!owns_selection(primary ? (xcb_atom_t)XCB_ATOM_PRIMARY : m_atom_clipboard)) return {};
+    const ClipboardEntry &entry = primary ? m_primary_typed : m_clipboard_typed;
+    return (entry.mime_type == mime_type) ? entry.data : std::string{};
+}
 
+void X11Backend::request_clipboard(bool primary, ClipboardCallback cb) {
     xcb_atom_t selection = primary ? (xcb_atom_t)XCB_ATOM_PRIMARY : m_atom_clipboard;
-
-    // Check if we own it
-    xcb_get_selection_owner_cookie_t owner_cookie = xcb_get_selection_owner(m_conn, selection);
-    xcb_get_selection_owner_reply_t *owner = xcb_get_selection_owner_reply(m_conn, owner_cookie, nullptr);
-    if (owner && owner->owner == m_window) {
-        free(owner);
-        const ClipboardEntry &entry = primary ? m_primary_typed : m_clipboard_typed;
-        return (entry.mime_type == mime_type) ? entry.data : std::string{};
+    if (owns_selection(selection)) {
+        cb(primary ? m_primary_text : m_clipboard_text);
+        return;
     }
+    queue_paste(selection, m_atom_utf8_string, std::move(cb));
+}
+
+void X11Backend::request_clipboard_data(const std::string &mime_type, bool primary,
+                                        ClipboardCallback cb) {
+    if (mime_type.empty() || mime_type == "text/plain") {
+        request_clipboard(primary, std::move(cb));
+        return;
+    }
+    if (mime_type != "image/png") {  // only image/png supported for now
+        cb({});
+        return;
+    }
+    xcb_atom_t selection = primary ? (xcb_atom_t)XCB_ATOM_PRIMARY : m_atom_clipboard;
+    if (owns_selection(selection)) {
+        const ClipboardEntry &entry = primary ? m_primary_typed : m_clipboard_typed;
+        cb((entry.mime_type == mime_type) ? entry.data : std::string{});
+        return;
+    }
+    queue_paste(selection, m_atom_image_png, std::move(cb));
+}
+
+bool X11Backend::owns_selection(xcb_atom_t selection) {
+    xcb_get_selection_owner_reply_t *owner = xcb_get_selection_owner_reply(
+        m_conn, xcb_get_selection_owner(m_conn, selection), nullptr);
+    bool ours = owner && owner->owner == m_window;
     free(owner);
+    return ours;
+}
 
-    // Request from owner using the appropriate atom
-    xcb_atom_t target = m_atom_image_png;  // only image/png supported for now
-    if (mime_type != "image/png") return {};
+void X11Backend::queue_paste(xcb_atom_t selection, xcb_atom_t target, ClipboardCallback cb) {
+    PendingPaste p;
+    p.selection = selection;
+    p.target = target;
+    p.cb = std::move(cb);
+    m_pastes.push_back(std::move(p));
+    if (m_pastes.size() == 1) start_front_paste();
+}
 
-    xcb_convert_selection(m_conn, m_window, selection, target, m_atom_rivt_sel, XCB_CURRENT_TIME);
+void X11Backend::start_front_paste() {
+    PendingPaste &p = m_pastes.front();
+    p.started = true;
+    p.deadline = std::chrono::steady_clock::now() + kPasteTimeout;
+    // Drop leftovers so a stale value can't be mistaken for this reply.
+    xcb_delete_property(m_conn, m_window, m_atom_rivt_sel);
+    xcb_convert_selection(m_conn, m_window, p.selection, p.target,
+                          m_atom_rivt_sel, XCB_CURRENT_TIME);
+    xcb_flush(m_conn);
+}
+
+void X11Backend::finish_front_paste(std::string data) {
+    ClipboardCallback cb = std::move(m_pastes.front().cb);
+    m_pastes.pop_front();
+    // Requests share one property, so the next one can only start now.
+    if (!m_pastes.empty() && !m_pastes.front().started) start_front_paste();
+    // Last: cb writes to a PTY and may queue another paste.
+    if (cb) cb(data);
+}
+
+void X11Backend::expire_pastes() {
+    if (m_pastes.empty()) return;
+    if (std::chrono::steady_clock::now() < m_pastes.front().deadline) return;
+    dbg("clipboard: paste request timed out");
+    finish_front_paste({});
+}
+
+bool X11Backend::read_paste_property(std::string &out, xcb_atom_t &type) {
+    out.clear();
+    type = XCB_ATOM_NONE;
+    uint32_t offset = 0;  // in 32-bit units, as GetProperty wants
+    for (;;) {
+        xcb_get_property_reply_t *prop = xcb_get_property_reply(
+            m_conn, xcb_get_property(m_conn, 0, m_window, m_atom_rivt_sel,
+                                     XCB_ATOM_ANY, offset, 64 * 1024), nullptr);
+        if (!prop) return false;
+        type = prop->type;
+        int len = xcb_get_property_value_length(prop);
+        uint32_t bytes_after = prop->bytes_after;
+        if (out.size() + (size_t)len > kMaxPasteBytes) {
+            free(prop);
+            fprintf(stderr, "rivt: clipboard paste exceeds %zu bytes, truncating\n",
+                    kMaxPasteBytes);
+            return true;
+        }
+        out.append((const char *)xcb_get_property_value(prop), len);
+        free(prop);
+        if (bytes_after == 0 || len == 0) return true;
+        offset += (uint32_t)len / 4;
+    }
+}
+
+// Serve a selection we own to another client.
+void X11Backend::handle_selection_request(xcb_selection_request_event_t *sr) {
+    const std::string &text = (sr->selection == XCB_ATOM_PRIMARY) ? m_primary_text : m_clipboard_text;
+    const ClipboardEntry &typed = (sr->selection == XCB_ATOM_PRIMARY) ? m_primary_typed : m_clipboard_typed;
+
+    xcb_selection_notify_event_t notify{};
+    notify.response_type = XCB_SELECTION_NOTIFY;
+    notify.requestor = sr->requestor;
+    notify.selection = sr->selection;
+    notify.target = sr->target;
+    notify.time = sr->time;
+
+    if (sr->target == m_atom_image_png && typed.mime_type == "image/png") {
+        if (typed.data.size() <= 256 * 1024) {
+            xcb_change_property(m_conn, XCB_PROP_MODE_REPLACE,
+                                sr->requestor, sr->property,
+                                m_atom_image_png, 8,
+                                typed.data.size(), typed.data.data());
+            notify.property = sr->property;
+        } else {
+            // INCR send not implemented yet — reject oversized transfers
+            fprintf(stderr, "rivt: clipboard image too large for non-INCR transfer (%zu bytes)\n", typed.data.size());
+            notify.property = XCB_ATOM_NONE;
+        }
+    } else if (sr->target == m_atom_utf8_string || sr->target == XCB_ATOM_STRING) {
+        xcb_change_property(m_conn, XCB_PROP_MODE_REPLACE,
+                            sr->requestor, sr->property,
+                            m_atom_utf8_string, 8,
+                            text.size(), text.c_str());
+        notify.property = sr->property;
+    } else if (sr->target == m_atom_targets) {
+        std::vector<xcb_atom_t> targets = { m_atom_targets, m_atom_utf8_string, XCB_ATOM_STRING };
+        if (!typed.data.empty() && typed.mime_type == "image/png")
+            targets.push_back(m_atom_image_png);
+        xcb_change_property(m_conn, XCB_PROP_MODE_REPLACE,
+                            sr->requestor, sr->property,
+                            XCB_ATOM_ATOM, 32, targets.size(), targets.data());
+        notify.property = sr->property;
+    } else {
+        notify.property = XCB_ATOM_NONE;
+    }
+
+    // xcb_send_event always copies 32 bytes; the struct is 24.
+    char ev_buf[32] = {};
+    memcpy(ev_buf, &notify, sizeof(notify));
+    xcb_send_event(m_conn, false, sr->requestor, 0, ev_buf);
+    xcb_flush(m_conn);
+}
+
+void X11Backend::handle_selection_notify(xcb_selection_notify_event_t *sn) {
+    // Unsolicited or stale reply (e.g. from a request we already timed out).
+    if (m_pastes.empty() || m_pastes.front().selection != sn->selection) return;
+    if (sn->property == XCB_ATOM_NONE) {  // owner can't supply this target
+        finish_front_paste({});
+        return;
+    }
+
+    std::string data;
+    xcb_atom_t type = XCB_ATOM_NONE;
+    if (!read_paste_property(data, type)) {
+        finish_front_paste({});
+        return;
+    }
+
+    if (type == m_atom_incr) {
+        // Value is too big for one property: the owner streams it as a
+        // series of PropertyNotify chunks, each acknowledged by deleting
+        // the property. The value we just read is only a size hint.
+        PendingPaste &p = m_pastes.front();
+        p.incr = true;
+        p.data.clear();
+        p.deadline = std::chrono::steady_clock::now() + kPasteTimeout;
+        xcb_delete_property(m_conn, m_window, m_atom_rivt_sel);
+        xcb_flush(m_conn);
+        return;
+    }
+
+    xcb_delete_property(m_conn, m_window, m_atom_rivt_sel);
+    xcb_flush(m_conn);
+    finish_front_paste(std::move(data));
+}
+
+void X11Backend::handle_property_notify(xcb_property_notify_event_t *pn) {
+    if (pn->window != m_window || pn->atom != m_atom_rivt_sel) return;
+    if (pn->state != XCB_PROPERTY_NEW_VALUE) return;
+    if (m_pastes.empty() || !m_pastes.front().incr) return;
+
+    std::string chunk;
+    xcb_atom_t type = XCB_ATOM_NONE;
+    if (!read_paste_property(chunk, type)) {
+        finish_front_paste({});
+        return;
+    }
+    xcb_delete_property(m_conn, m_window, m_atom_rivt_sel);  // ask for the next chunk
     xcb_flush(m_conn);
 
-    for (int i = 0; i < 50; i++) {
-        xcb_generic_event_t *ev = xcb_wait_for_event(m_conn);
-        if (!ev) break;
-        uint8_t type = ev->response_type & ~0x80;
-        if (type == XCB_SELECTION_NOTIFY) {
-            auto *sn = (xcb_selection_notify_event_t *)ev;
-            if (sn->property != XCB_ATOM_NONE) {
-                xcb_get_property_cookie_t prop_cookie = xcb_get_property(
-                    m_conn, 1, m_window, m_atom_rivt_sel, XCB_ATOM_ANY, 0, 1 << 20);
-                xcb_get_property_reply_t *prop = xcb_get_property_reply(m_conn, prop_cookie, nullptr);
-                std::string result;
-                if (prop) {
-                    result = std::string((char *)xcb_get_property_value(prop),
-                                         xcb_get_property_value_length(prop));
-                    free(prop);
-                }
-                free(ev);
-                return result;
-            }
-            free(ev);
-            break;
-        }
-        free(ev);
+    if (chunk.empty()) {  // zero-length property terminates the transfer
+        finish_front_paste(std::move(m_pastes.front().data));
+        return;
     }
-    return {};
+
+    PendingPaste &p = m_pastes.front();
+    p.data += chunk;
+    p.deadline = std::chrono::steady_clock::now() + kPasteTimeout;
 }
 
 float X11Backend::get_dpi_scale() {

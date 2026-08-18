@@ -179,16 +179,20 @@ void Pane::setup_callbacks(Platform *platform, const Config &config) {
     m_screen.on_osc52_read = [this, platform, &config](const std::string &sel, const std::string &mime_type) {
         if (!config.osc52_read) return;
         bool primary = (sel.find('p') != std::string::npos);
-        std::string data;
-        std::string response;
-        if (!mime_type.empty() && mime_type != "text/plain") {
-            data = platform->get_clipboard_data(mime_type, primary);
-            response = "\033]52;" + sel + ";type=" + mime_type + ";" + base64_encode(data) + "\033\\";
-        } else {
-            data = platform->get_clipboard(primary);
-            response = "\033]52;" + sel + ";" + base64_encode(data) + "\033\\";
-        }
-        write(response);
+        bool typed = !mime_type.empty() && mime_type != "text/plain";
+        // The reply is asynchronous on X11 and can arrive after this pane
+        // is gone, so gate the response on the liveness token.
+        auto respond = [this, alive = alive_token(), sel, mime_type, typed](const std::string &data) {
+            if (alive.expired()) return;
+            if (typed)
+                write("\033]52;" + sel + ";type=" + mime_type + ";" + base64_encode(data) + "\033\\");
+            else
+                write("\033]52;" + sel + ";" + base64_encode(data) + "\033\\");
+        };
+        if (typed)
+            platform->request_clipboard_data(mime_type, primary, respond);
+        else
+            platform->request_clipboard(primary, respond);
     };
 }
 
