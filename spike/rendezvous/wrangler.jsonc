@@ -1,0 +1,10 @@
+{
+  "name": "rivt-rendezvous-spike",
+  "main": "src/index.js",
+  "compatibility_date": "2026-08-01",
+  "durable_objects": {
+    "bindings": [{ "name": "RENDEZVOUS", "class_name": "Rendezvous" }]
+  },
+  "migrations": [{ "tag": "v1", "new_sqlite_classes": ["Rendezvous"] }],
+  "observability": { "enabled": true }
+}
