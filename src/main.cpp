@@ -13,6 +13,16 @@
 
 using namespace rivt;
 
+// Known one-time leaks in system libraries, reported by LeakSanitizer in
+// Debug builds at clean exit. Baked in so no LSAN_OPTIONS env is needed
+// (lsan_suppressions.txt kept for ad-hoc additions).
+extern "C" const char *__lsan_default_suppressions() {
+    return "leak:libfontconfig\n"
+           "leak:libexpat\n"
+           "leak:libEGL_nvidia.so\n"
+           "leak:libnvidia-glsi.so\n";
+}
+
 static volatile sig_atomic_t got_sigchld = 0;
 
 static void sigchld_handler(int) {

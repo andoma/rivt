@@ -49,6 +49,16 @@ static void spawn_daemon(const std::string &socket_path) {
         if (grandchild != 0) _exit(0);
         setsid();
 
+        // Detach stdio: the daemon must not write into whichever
+        // terminal happened to spawn it. Its stderr goes to a log next
+        // to the socket.
+        std::string log = socket_path + ".log";
+        int devnull = open("/dev/null", O_RDWR);
+        int logfd = open(log.c_str(), O_WRONLY | O_CREAT | O_APPEND, 0600);
+        if (devnull >= 0) { dup2(devnull, 0); dup2(devnull, 1); }
+        if (logfd >= 0) dup2(logfd, 2);
+        else if (devnull >= 0) dup2(devnull, 2);
+
         char self[4096];
         ssize_t n = readlink("/proc/self/exe", self, sizeof(self) - 1);
         if (n > 0) {
