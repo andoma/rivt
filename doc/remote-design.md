@@ -139,6 +139,19 @@ daemon verifies independently:
   device). Daemons drop live connections from removed keys as soon as
   they see the op, and reject them at every handshake.
 
+Names are display labels; the pubkey is the identity. Rejoining under
+an old name is a new identity: it needs a fresh approval and leaves the
+old key as a dead member until removed.
+
+For fleet hygiene (many hosts, hosts that reinstall), `add` ops may
+carry an optional `expires` timestamp. An expired key counts as
+removed. A device added with expiry keeps itself alive by signing
+`extend` ops for its own key (heartbeat, e.g. weekly): a live device
+never expires, a dead or wiped one ages out with no human action, and
+a stolen key gains nothing it wouldn't have had with a non-expiring
+entry. Recommended for build machines; interactive devices are added
+without expiry.
+
 Accepted limitation: a malicious rendezvous can *withhold* new ops
 (freezing a daemon's view, e.g. hiding a removal from one daemon) or
 deny service. It cannot join, impersonate, or eavesdrop.
@@ -164,6 +177,11 @@ machines, never memorized):
 
 If a typeable short code is ever wanted, swap the HMAC binding for a
 PAKE (CPace/SPAKE2); the flow is otherwise unchanged.
+
+`pair` and `join` are daemon verbs, not UI verbs: a headless host
+enrolls with `rivtd join <code>` over its bootstrap ssh session, and
+the approval prompt appears on the inviting device. Any member can
+mint invites.
 
 Crypto dependency check: ECDSA P-256 (RFC 6979), HMAC-SHA-256, and
 X.509 self-signed certs are all in libcrypto, already linked.
@@ -196,6 +214,30 @@ label, so it cannot be replayed or repurposed.
 
 The spike's shared-secret token is exactly the placeholder this section
 replaces.
+
+### Auth flow by example
+
+One-time: deploy the rendezvous Worker + TURN key to a Cloudflare
+account. Then:
+
+```
+desktop$  rivt remote init --rendezvous https://rivt-rdv.example.workers.dev
+            # generates device key, signs + publishes the genesis op
+desktop$  rivt pair
+            # prints single-use invite: set id + invite id + 128-bit secret
+macbook$  rivt join rivt1:...        # generates key, sends pubkey HMAC-bound
+desktop:  Pair new device 'macbook' (e1d8-40b7)? [y/N] y
+            # signs add-op, returns HMAC-tagged membership log
+buildbox$ rivtd join rivt1:...       # headless: same flow, approval on desktop
+desktop$  rivt device remove macbook # stolen device: signs remove-op,
+            # all daemons drop that key immediately and at every handshake
+```
+
+Human interaction happens exactly twice in a device's life: the `y`
+at pairing and (at most) the removal. Attach, roaming, rendezvous
+reconnects, TURN credential rotation: all machine-to-machine, no
+passwords, no known_hosts/TOFU prompts. Losing every device loses the
+set (no recovery back door); re-init and re-pair.
 
 ### Threat model summary
 
@@ -421,9 +463,18 @@ DO with WebSocket hibernation):
   a connection held 5 min idle (pings only) stayed open, and the first
   real message after idling completed in **21 ms** including DO wake.
 
-Still to measure: QUIC handshake + migration through the relay (spike
-items 1b/2), TURN idle timeout behavior (item 3), cross-network punch
-rate (item 4).
+QUIC through the relay (`spike/turn_shim.c` + `run-quic-relay.sh`,
+item 1b): an unmodified picoquicdemo client completed a full TLS/h3
+handshake and a 1 MB transfer through the TURN path (client raw ->
+relay -> Send/Data shim -> server). 1 MB in 42 ms (~190 Mbps burst,
+above the documented 50-100 Mbps sustained throttle; fine for bursts).
+1400-byte QUIC packets traversed the wrapped leg (1400 + 36 = 1436,
+consistent with the measured ceiling). Design validated: the relay
+needs no QUIC awareness and the shim logic is what rivtd's relayed-path
+encapsulation will do.
+
+Still to measure: migration under address change (item 2), TURN idle
+timeout behavior (item 3), cross-network punch rate (item 4).
 
 ## Open questions
 
