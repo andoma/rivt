@@ -6,6 +6,8 @@
 
 namespace rivt {
 
+namespace proto { class Snapshot; }
+
 // CSI parameter with sub-parameter support (colon-separated)
 struct CsiParam {
     int value = -1;  // -1 = default/empty
@@ -41,6 +43,7 @@ public:
 };
 
 class VtParser {
+    friend class proto::Snapshot;
 public:
     explicit VtParser(VtHandler &handler);
 

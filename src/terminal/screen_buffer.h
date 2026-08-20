@@ -100,6 +100,7 @@ struct Selection {
 };
 
 class ScreenBuffer : public VtHandler {
+    friend class proto::Snapshot;
 public:
     ScreenBuffer(int cols, int rows, int scrollback_limit = 10000);
 

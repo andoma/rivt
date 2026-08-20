@@ -206,3 +206,27 @@ if(CMAKE_BUILD_TYPE STREQUAL "Debug")
     target_link_options(test_screen_buffer PRIVATE -fsanitize=address)
 endif()
 add_test(NAME screen_buffer COMMAND test_screen_buffer)
+
+add_executable(test_snapshot
+    tests/test_snapshot.cpp
+    src/proto/snapshot.cpp
+    src/terminal/vt_parser.cpp
+    src/terminal/screen_buffer.cpp
+    src/terminal/kitty_graphics.cpp
+    src/terminal/image_store.cpp
+    src/core/config.cpp
+    src/core/util.cpp
+)
+target_include_directories(test_snapshot PRIVATE src src/third_party)
+target_compile_options(test_snapshot PRIVATE -Wall -Wextra -Wpedantic)
+if(APPLE)
+    target_compile_definitions(test_snapshot PRIVATE GL_SILENCE_DEPRECATION)
+    target_link_libraries(test_snapshot PRIVATE ${OPENGL_FRAMEWORK})
+else()
+    target_link_libraries(test_snapshot PRIVATE OpenGL::GL)
+endif()
+if(CMAKE_BUILD_TYPE STREQUAL "Debug")
+    target_compile_options(test_snapshot PRIVATE -Og -ggdb -fsanitize=address)
+    target_link_options(test_snapshot PRIVATE -fsanitize=address)
+endif()
+add_test(NAME snapshot COMMAND test_snapshot)
