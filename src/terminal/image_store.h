@@ -8,6 +8,13 @@ namespace rivt {
 
 struct KittyGraphicsCommand;
 
+// GPU texture hooks, installed by the renderer at init. Headless
+// processes (rivtd, tests) leave them null: images keep CPU-side RGBA
+// only and the terminal library has no GL dependency.
+extern unsigned int (*g_image_texture_upload)(unsigned int existing_tex,
+                                              int w, int h, const uint8_t *rgba);
+extern void (*g_image_texture_delete)(unsigned int tex);
+
 struct StoredImage {
     uint32_t id = 0;
     int width = 0;

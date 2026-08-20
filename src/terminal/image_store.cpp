@@ -3,8 +3,6 @@
 #define STBI_NO_STDIO
 #include "third_party/stb_image.h"
 
-#include "render/gl.h"
-
 #include "terminal/image_store.h"
 #include "terminal/kitty_graphics.h"
 #include "core/util.h"
@@ -13,10 +11,13 @@
 
 namespace rivt {
 
+unsigned int (*g_image_texture_upload)(unsigned int, int, int, const uint8_t *) = nullptr;
+void (*g_image_texture_delete)(unsigned int) = nullptr;
+
 ImageStore::~ImageStore() {
     for (auto &[id, img] : m_images) {
         if (img.gl_texture)
-            glDeleteTextures(1, &img.gl_texture);
+            if (g_image_texture_delete) g_image_texture_delete(img.gl_texture);
     }
 }
 
@@ -74,7 +75,7 @@ void ImageStore::store_image(const KittyGraphicsCommand &cmd) {
     auto it = m_images.find(img.id);
     if (it != m_images.end()) {
         if (it->second.gl_texture)
-            glDeleteTextures(1, &it->second.gl_texture);
+            if (g_image_texture_delete) g_image_texture_delete(it->second.gl_texture);
         m_images.erase(it);
     }
 
@@ -115,7 +116,7 @@ KittyGraphicsCommand ImageStore::finish_transfer() {
         auto it = m_images.find(img.id);
         if (it != m_images.end()) {
             if (it->second.gl_texture)
-                glDeleteTextures(1, &it->second.gl_texture);
+                if (g_image_texture_delete) g_image_texture_delete(it->second.gl_texture);
             m_images.erase(it);
         }
         m_images.emplace(img.id, std::move(img));
@@ -157,7 +158,7 @@ void ImageStore::delete_images(const KittyGraphicsCommand &cmd) {
                 auto it = m_images.find(cmd.image_id);
                 if (it != m_images.end()) {
                     if (it->second.gl_texture)
-                        glDeleteTextures(1, &it->second.gl_texture);
+                        if (g_image_texture_delete) g_image_texture_delete(it->second.gl_texture);
                     m_images.erase(it);
                 }
             }
@@ -180,7 +181,7 @@ void ImageStore::remove_all() {
     m_placements.clear();
     for (auto &[id, img] : m_images) {
         if (img.gl_texture)
-            glDeleteTextures(1, &img.gl_texture);
+            if (g_image_texture_delete) g_image_texture_delete(img.gl_texture);
     }
     m_images.clear();
 }
@@ -204,7 +205,7 @@ void ImageStore::gc_placements(int min_abs_line) {
         auto it = m_images.find(id);
         if (it != m_images.end()) {
             if (it->second.gl_texture)
-                glDeleteTextures(1, &it->second.gl_texture);
+                if (g_image_texture_delete) g_image_texture_delete(it->second.gl_texture);
             m_images.erase(it);
         }
     }
@@ -213,19 +214,10 @@ void ImageStore::gc_placements(int min_abs_line) {
 void ImageStore::ensure_texture(StoredImage &img) {
     if (!img.texture_dirty) return;
     if (img.rgba_data.empty()) return;
+    if (!g_image_texture_upload) return;  // headless: no GPU
 
-    if (!img.gl_texture)
-        glGenTextures(1, &img.gl_texture);
-
-    glBindTexture(GL_TEXTURE_2D, img.gl_texture);
-    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
-    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
-    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
-    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
-    glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, img.width, img.height, 0,
-                 GL_RGBA, GL_UNSIGNED_BYTE, img.rgba_data.data());
-    glBindTexture(GL_TEXTURE_2D, 0);
-
+    img.gl_texture = g_image_texture_upload(img.gl_texture, img.width, img.height,
+                                            img.rgba_data.data());
     img.texture_dirty = false;
 }
 

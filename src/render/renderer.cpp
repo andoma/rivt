@@ -117,6 +117,20 @@ Renderer::~Renderer() {
 }
 
 bool Renderer::init(const Config &config) {
+    // Give the terminal library its GPU hooks (kitty graphics textures).
+    g_image_texture_upload = [](unsigned int tex, int w, int h, const uint8_t *rgba) -> unsigned int {
+        if (!tex) glGenTextures(1, &tex);
+        glBindTexture(GL_TEXTURE_2D, tex);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+        glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, w, h, 0, GL_RGBA, GL_UNSIGNED_BYTE, rgba);
+        glBindTexture(GL_TEXTURE_2D, 0);
+        return tex;
+    };
+    g_image_texture_delete = [](unsigned int tex) { glDeleteTextures(1, &tex); };
+
     if (!m_font.init(config.font_family, config.font_size))
         return false;
 
