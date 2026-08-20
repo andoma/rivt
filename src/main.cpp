@@ -24,9 +24,15 @@ int main(int argc, char *argv[]) {
     signal(SIGCHLD, sigchld_handler);
 
     // Parse global flags
+    bool remote = false;
+    std::string remote_socket;
     for (int i = 1; i < argc; i++) {
         if (strcmp(argv[i], "--debug") == 0 || strcmp(argv[i], "-d") == 0) {
             debug_enabled() = true;
+        } else if (strcmp(argv[i], "--remote") == 0) {
+            remote = true;
+        } else if (strcmp(argv[i], "--socket") == 0 && i + 1 < argc) {
+            remote_socket = argv[++i];
         }
     }
 
@@ -36,6 +42,7 @@ int main(int argc, char *argv[]) {
 
     std::function<void(Pane *)> create_tmux_window;
     std::function<void()> create_window;
+    std::function<void()> create_remote_window;
 
     create_tmux_window = [&](Pane *gateway) {
         auto win = std::make_unique<Window>(base_config, loop);
@@ -44,6 +51,19 @@ int main(int argc, char *argv[]) {
         loop.add_fd(raw->event_fd(), [raw](uint32_t) {
             raw->platform()->process_events();
         });
+        raw->on_close = [](Window *w) { w->mark_closing(); };
+        windows.push_back(std::move(win));
+    };
+
+    create_remote_window = [&]() {
+        auto win = std::make_unique<Window>(base_config, loop);
+        if (!win->init_remote(remote_socket)) return;
+        Window *raw = win.get();
+        loop.add_fd(raw->event_fd(), [raw](uint32_t) {
+            raw->platform()->process_events();
+        });
+        raw->on_new_window = create_window;
+        raw->on_new_tmux_window = create_tmux_window;
         raw->on_close = [](Window *w) { w->mark_closing(); };
         windows.push_back(std::move(win));
     };
@@ -61,7 +81,10 @@ int main(int argc, char *argv[]) {
         windows.push_back(std::move(win));
     };
 
-    create_window();
+    if (remote)
+        create_remote_window();
+    else
+        create_window();
     if (windows.empty()) return 1;
 
     // Process-wide handlers used by macOS for menu items and the dock

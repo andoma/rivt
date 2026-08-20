@@ -3,6 +3,8 @@
 #include "core/debug.h"
 #include "tmux/tmux_client.h"
 #include "tmux/tmux_controller.h"
+#include "remote/remote_client.h"
+#include "remote/remote_controller.h"
 
 #include "platform/keysym.h"
 #include <climits>
@@ -284,6 +286,51 @@ bool Window::init_tmux_pty(Pane *gateway_pane) {
     return true;
 }
 
+bool Window::init_remote(const std::string &socket_path) {
+    m_platform = Platform::create();
+    if (!m_platform) return false;
+    if (!m_platform->create_window(m_win_w, m_win_h, "rivt [rivtd]")) return false;
+    if (!m_platform->create_gl_context()) return false;
+    if (!m_renderer.init(m_config)) return false;
+
+    m_renderer.set_viewport(m_win_w, m_win_h);
+
+    m_tabs = std::make_unique<TabManager>(m_config, m_loop, m_platform.get());
+    m_tabs->on_needs_render = [this]() { m_needs_render = true; };
+    m_tabs->on_quit = [this]() {
+        if (on_close) on_close(this);
+    };
+
+    const auto &m = m_renderer.metrics();
+    m_tabs->set_cell_size(m.cell_width, m.cell_height);
+    m_win_w = m_config.initial_cols * m.cell_width;
+    m_win_h = m_config.initial_rows * m.cell_height + kBottomPad;
+    m_platform->resize_window(m_win_w, m_win_h);
+    m_renderer.set_viewport(m_win_w, m_win_h);
+
+    m_remote_client = std::make_unique<RemoteClient>(m_loop);
+    std::string path = socket_path.empty() ? RemoteClient::default_socket_path()
+                                           : socket_path;
+    if (!m_remote_client->connect(path, /*autostart=*/true)) {
+        fprintf(stderr, "rivt: cannot reach rivtd at %s\n", path.c_str());
+        return false;
+    }
+
+    m_remote_controller = std::make_unique<RemoteController>(*m_remote_client, *this, *m_tabs);
+    m_remote_controller->on_exit = [this]() {
+        if (on_close) on_close(this);
+    };
+
+    int bar_h = tab_bar_height();
+    int cols = m.cell_width > 0 ? m_win_w / m.cell_width : 80;
+    int rows = m.cell_height > 0 ? (m_win_h - bar_h - kBottomPad) / m.cell_height : 24;
+    m_remote_controller->initialize(cols, rows, m.cell_width, m.cell_height, 0, bar_h);
+
+    m_platform->show_window();
+    setup_callbacks();
+    return true;
+}
+
 void Window::stop_tmux_pty_mode() {
     if (!m_tmux_gateway_pane) return;
 
@@ -317,6 +364,13 @@ void Window::handle_resize(int w, int h) {
         int rows = m.cell_height > 0 ? (h - bar_h - kBottomPad) / m.cell_height : 24;
         dbg("window(%p): tmux resize -> %dx%d cells (bar_h=%d)", (void*)this, cols, rows, bar_h);
         m_tmux_controller->handle_resize(cols, rows, m.cell_width, m.cell_height, 0, bar_h);
+    }
+
+    if (m_remote_controller && m_remote_controller->is_active()) {
+        int bar_h = m_last_bar_h;
+        int cols = m.cell_width > 0 ? w / m.cell_width : 80;
+        int rows = m.cell_height > 0 ? (h - bar_h - kBottomPad) / m.cell_height : 24;
+        m_remote_controller->handle_resize(cols, rows, m.cell_width, m.cell_height, 0, bar_h);
     }
 
     recompute();

@@ -54,6 +54,9 @@ set(RIVT_SOURCES
     src/pty/pty.cpp
     src/tmux/tmux_client.cpp
     src/tmux/tmux_controller.cpp
+    src/remote/remote_client.cpp
+    src/remote/remote_controller.cpp
+    src/proto/snapshot.cpp
 )
 
 if(APPLE)

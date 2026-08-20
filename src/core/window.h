@@ -14,6 +14,8 @@ namespace rivt {
 class EventLoop;
 class TmuxClient;
 class TmuxController;
+class RemoteClient;
+class RemoteController;
 
 class Window {
 public:
@@ -22,6 +24,7 @@ public:
 
     bool init();
     bool init_tmux_pty(Pane *gateway_pane);
+    bool init_remote(const std::string &socket_path);  // daemon-backed window
     void render_if_needed();
     bool reap_dead_panes();
     void toggle_cursor_blink();
@@ -75,6 +78,8 @@ private:
 
     std::unique_ptr<TmuxClient> m_tmux_client;
     std::unique_ptr<TmuxController> m_tmux_controller;
+    std::unique_ptr<RemoteClient> m_remote_client;
+    std::unique_ptr<RemoteController> m_remote_controller;
     Pane *m_tmux_gateway_pane = nullptr;  // pane whose PTY carries tmux traffic
 
     // Deferred destruction — can't destroy while inside feed_data() call stack
