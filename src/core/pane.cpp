@@ -66,6 +66,7 @@ bool Pane::spawn_shell(EventLoop &loop, const std::string &start_cwd) {
                 }
 
                 m_parser.feed(buf, n);
+                if (on_output) on_output(buf, n);
                 if (!m_screen.synchronized_update()) {
                     if (on_needs_render) on_needs_render();
                 }

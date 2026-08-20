@@ -230,3 +230,31 @@ if(CMAKE_BUILD_TYPE STREQUAL "Debug")
     target_link_options(test_snapshot PRIVATE -fsanitize=address)
 endif()
 add_test(NAME snapshot COMMAND test_snapshot)
+
+if(NOT APPLE)
+add_executable(rivtd
+    src/daemon/rivtd.cpp
+    src/core/config.cpp
+    src/core/util.cpp
+    src/core/pane.cpp
+    src/core/event_loop.cpp
+    src/proto/snapshot.cpp
+    src/terminal/vt_parser.cpp
+    src/terminal/screen_buffer.cpp
+    src/terminal/kitty_graphics.cpp
+    src/terminal/image_store.cpp
+    src/pty/pty.cpp
+)
+target_include_directories(rivtd PRIVATE src src/third_party)
+target_compile_options(rivtd PRIVATE -Wall -Wextra -Wpedantic)
+target_link_libraries(rivtd PRIVATE OpenGL::GL util)
+if(CMAKE_BUILD_TYPE STREQUAL "Debug")
+    target_compile_options(rivtd PRIVATE -Og -ggdb -fsanitize=address)
+    target_link_options(rivtd PRIVATE -fsanitize=address)
+endif()
+install(TARGETS rivtd RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR})
+endif()
+
+if(NOT APPLE)
+add_test(NAME daemon COMMAND python3 ${CMAKE_SOURCE_DIR}/tests/test_daemon.py $<TARGET_FILE:rivtd>)
+endif()

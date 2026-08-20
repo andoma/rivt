@@ -67,6 +67,11 @@ public:
     // weak_ptr and bail out if it expired.
     std::weak_ptr<int> alive_token() const { return m_alive; }
 
+    // Callback: raw PTY output tap, invoked after the bytes have been
+    // fed to the local parser (daemon uses this to replicate output to
+    // attached clients in the same order it was applied locally).
+    std::function<void(const char *, size_t)> on_output;
+
     // Callback: request re-render
     std::function<void()> on_needs_render;
 
