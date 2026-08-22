@@ -566,6 +566,8 @@ void Window::handle_key(const KeyEvent &raw_key) {
             case XKB_KEY_t:
                 if (m_tmux_controller && m_tmux_controller->is_active())
                     m_tmux_client->send_command("new-window");
+                else if (m_remote_controller && m_remote_controller->is_active())
+                    m_remote_controller->new_window();
                 else
                     m_tabs->new_tab();
                 recompute();
@@ -673,7 +675,10 @@ void Window::handle_mouse(const MouseEvent &mouse) {
             // Check close button first
             int close_hit = m_renderer.tab_close_hit_test(*m_tabs, mouse.x, mouse.y, bar_h);
             if (close_hit >= 0 && mouse.button == MouseButton::Left) {
-                if (!m_tabs->close_tab(close_hit)) {
+                if (m_remote_controller && m_remote_controller->is_active() &&
+                    m_remote_controller->request_close_tab(m_tabs->tabs()[close_hit].get())) {
+                    // Teardown happens when WindowClosed arrives.
+                } else if (!m_tabs->close_tab(close_hit)) {
                     if (on_close) on_close(this);
                 }
                 m_hover_close_tab = -1;
@@ -687,7 +692,10 @@ void Window::handle_mouse(const MouseEvent &mouse) {
                 if (mouse.button == MouseButton::Left) {
                     m_tabs->activate_tab(hit);
                 } else if (mouse.button == MouseButton::Middle) {
-                    if (!m_tabs->close_tab(hit)) {
+                    if (m_remote_controller && m_remote_controller->is_active() &&
+                        m_remote_controller->request_close_tab(m_tabs->tabs()[hit].get())) {
+                        // Teardown happens when WindowClosed arrives.
+                    } else if (!m_tabs->close_tab(hit)) {
                         if (on_close) on_close(this);
                     }
                 }

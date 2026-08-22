@@ -44,6 +44,8 @@ public:
     void resize_session(int cols, int rows);
     void split(uint32_t pane_id, bool horizontal);  // false = side by side
     void close_pane(uint32_t pane_id);
+    void new_window();
+    void close_window(uint32_t window_id);
     void kill_session(uint32_t session_id);
     void send_input(uint32_t pane_id, const char *data, size_t len);
 
@@ -54,7 +56,9 @@ public:
     std::function<void(const std::vector<RemoteSessionInfo> &)> on_session_list;
     std::function<void(uint32_t sid, uint32_t pane_id, const std::string &error)> on_session_created;
     std::function<void(uint32_t sid)> on_attach_ok;
-    std::function<void(uint32_t sid, int cols, int rows,
+    std::function<void(uint32_t sid, uint32_t wid)> on_window_added;
+    std::function<void(uint32_t sid, uint32_t wid)> on_window_closed;
+    std::function<void(uint32_t sid, uint32_t wid, int cols, int rows,
                        const std::vector<RemotePaneGeom> &)> on_layout;
     std::function<void(uint32_t pane_id, const uint8_t *, size_t)> on_snapshot;
     std::function<void(uint32_t pane_id, const char *, size_t)> on_output;

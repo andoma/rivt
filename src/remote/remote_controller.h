@@ -29,16 +29,21 @@ public:
     bool is_active() const { return m_active; }
     void detach();
 
-    // User actions on the focused pane, routed to the daemon.
+    // User actions, routed to the daemon.
     void split(bool horizontal);
     void close_focused_pane();
+    void new_window();
+    // Returns true if the tab is remote-managed and its close was
+    // requested from the daemon (teardown happens on WindowClosed).
+    bool request_close_tab(Tab *tab);
 
     // Fired when the session ends or the daemon goes away.
     std::function<void()> on_exit;
 
 private:
     Pane *create_remote_pane(Tab *tab, uint32_t pane_id, int cols, int rows);
-    void apply_layout(int cols, int rows, const std::vector<RemotePaneGeom> &panes);
+    void apply_layout(uint32_t wid, int cols, int rows,
+                      const std::vector<RemotePaneGeom> &panes);
     uint32_t focused_pane_id() const;
     void exit();
 
@@ -46,10 +51,12 @@ private:
     Window &m_window;
     TabManager &m_tabs;
 
+    struct PaneEntry { Pane *pane; uint32_t wid; };
+
     bool m_active = false;
     uint32_t m_session_id = 0;
-    Tab *m_tab = nullptr;
-    std::unordered_map<uint32_t, Pane *> m_pane_map;
+    std::unordered_map<uint32_t, Tab *> m_windows;     // wid -> tab
+    std::unordered_map<uint32_t, PaneEntry> m_pane_map;
 
     int m_cols = 80, m_rows = 24;
     int m_cell_w = 0, m_cell_h = 0;

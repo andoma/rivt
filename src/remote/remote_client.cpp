@@ -182,8 +182,18 @@ void RemoteClient::dispatch_control(uint16_t type, const uint8_t *data, size_t l
         if (r.ok && on_attach_ok) on_attach_ok(sid);
         break;
     }
+    case MsgType::WindowAdded: {
+        uint32_t sid = r.u32(), wid = r.u32();
+        if (r.ok && on_window_added) on_window_added(sid, wid);
+        break;
+    }
+    case MsgType::WindowClosed: {
+        uint32_t sid = r.u32(), wid = r.u32();
+        if (r.ok && on_window_closed) on_window_closed(sid, wid);
+        break;
+    }
     case MsgType::LayoutUpdate: {
-        uint32_t sid = r.u32();
+        uint32_t sid = r.u32(), wid = r.u32();
         int cols = r.u16(), rows = r.u16();
         uint32_t n = r.u32();
         std::vector<RemotePaneGeom> panes;
@@ -196,7 +206,7 @@ void RemoteClient::dispatch_control(uint16_t type, const uint8_t *data, size_t l
             g.rows = r.u16();
             panes.push_back(g);
         }
-        if (r.ok && on_layout) on_layout(sid, cols, rows, panes);
+        if (r.ok && on_layout) on_layout(sid, wid, cols, rows, panes);
         break;
     }
     case MsgType::SessionClosed:
@@ -297,6 +307,16 @@ void RemoteClient::close_pane(uint32_t pane_id) {
     proto::Writer w;
     w.u32(pane_id);
     send_control((uint16_t)MsgType::ClosePane, w);
+}
+
+void RemoteClient::new_window() {
+    send_control((uint16_t)MsgType::NewWindow, {});
+}
+
+void RemoteClient::close_window(uint32_t window_id) {
+    proto::Writer w;
+    w.u32(window_id);
+    send_control((uint16_t)MsgType::CloseWindow, w);
 }
 
 void RemoteClient::kill_session(uint32_t sid) {

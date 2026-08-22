@@ -25,22 +25,27 @@ enum class MsgType : uint16_t {
     KillSession = 7,    // u32 session_id
     Split = 8,          // u32 pane_id, u8 dir (0 = vertical/right, 1 = horizontal/below)
     ClosePane = 9,      // u32 pane_id
+    NewWindow = 10,     // - (in the attached session)
+    CloseWindow = 11,   // u32 window_id
 
     // daemon -> client
     HelloOk = 64,        // u32 proto_version
     SessionList = 65,    // u32 n, n x { u32 id, str name, u32 npanes }
     SessionCreated = 66, // u32 session_id, u32 pane_id (0 = failed), str error
-    AttachOk = 67,       // u32 session_id — followed by LayoutUpdate,
-                         //   then one PANE_SNAPSHOT frame per pane
+    AttachOk = 67,       // u32 session_id — followed per window by
+                         //   WindowAdded + LayoutUpdate, then one
+                         //   PANE_SNAPSHOT frame per pane
     SessionClosed = 68,  // u32 session_id
     PaneExited = 69,     // u32 pane_id
     TitleChanged = 70,   // u32 pane_id, str title
     CwdChanged = 71,     // u32 pane_id, str cwd (raw OSC 7 uri)
     Bell = 72,           // u32 pane_id
     Error = 73,          // str message
-    LayoutUpdate = 74,   // u32 session_id, u16 cols, u16 rows,
+    LayoutUpdate = 74,   // u32 session_id, u32 window_id, u16 cols, u16 rows,
                          //   u32 n, n x { u32 pane_id, u16 x, u16 y, u16 cols, u16 rows }
                          //   (cell units; 1-cell gaps are divider space)
+    WindowAdded = 75,    // u32 session_id, u32 window_id
+    WindowClosed = 76,   // u32 session_id, u32 window_id
 };
 
 } // namespace rivt::proto

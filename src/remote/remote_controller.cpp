@@ -36,20 +36,45 @@ RemoteController::RemoteController(RemoteClient &client, Window &window, TabMana
     m_client.on_attach_ok = [this](uint32_t sid) {
         m_session_id = sid;
         m_active = true;
-        m_tab = m_tabs.new_empty_tab("rivtd");
-        m_tab->tmux_managed = true;  // pane rects are ours, not the layout engine's
     };
 
-    m_client.on_layout = [this](uint32_t sid, int cols, int rows,
+    m_client.on_window_added = [this](uint32_t sid, uint32_t wid) {
+        if (sid != m_session_id || m_windows.count(wid)) return;
+        Tab *tab = m_tabs.new_empty_tab("rivtd");
+        tab->tmux_managed = true;  // pane rects are ours, not the layout engine's
+        m_windows[wid] = tab;
+        if (m_tabs.on_needs_render) m_tabs.on_needs_render();
+    };
+
+    m_client.on_window_closed = [this](uint32_t sid, uint32_t wid) {
+        if (sid != m_session_id) return;
+        auto it = m_windows.find(wid);
+        if (it == m_windows.end()) return;
+        Tab *tab = it->second;
+        m_windows.erase(it);
+        for (auto pit = m_pane_map.begin(); pit != m_pane_map.end();) {
+            if (pit->second.wid == wid) {
+                m_tabs.remove_pane(tab, pit->second.pane);
+                pit = m_pane_map.erase(pit);
+            } else {
+                ++pit;
+            }
+        }
+        m_tabs.close_tab_ptr(tab);
+        // Last window: SessionClosed follows and drives exit().
+        if (m_tabs.on_needs_render) m_tabs.on_needs_render();
+    };
+
+    m_client.on_layout = [this](uint32_t sid, uint32_t wid, int cols, int rows,
                                 const std::vector<RemotePaneGeom> &panes) {
-        if (sid != m_session_id || !m_tab) return;
-        apply_layout(cols, rows, panes);
+        if (sid != m_session_id) return;
+        apply_layout(wid, cols, rows, panes);
     };
 
     m_client.on_snapshot = [this](uint32_t pane_id, const uint8_t *data, size_t len) {
         auto it = m_pane_map.find(pane_id);
         if (it == m_pane_map.end()) return;
-        Pane *p = it->second;
+        Pane *p = it->second.pane;
         int cols = p->screen().cols(), rows = p->screen().rows();
         if (!proto::Snapshot::deserialize(p->screen(), p->parser(), data, len)) {
             fprintf(stderr, "rivt: bad snapshot for pane %u\n", pane_id);
@@ -64,17 +89,18 @@ RemoteController::RemoteController(RemoteClient &client, Window &window, TabMana
 
     m_client.on_output = [this](uint32_t pane_id, const char *data, size_t len) {
         auto it = m_pane_map.find(pane_id);
-        if (it != m_pane_map.end()) it->second->feed_data(data, len);
+        if (it != m_pane_map.end()) it->second.pane->feed_data(data, len);
     };
 
     m_client.on_pane_exited = [this](uint32_t pane_id) {
         auto it = m_pane_map.find(pane_id);
         if (it == m_pane_map.end()) return;
-        Pane *pane = it->second;
+        Pane *pane = it->second.pane;
+        auto wit = m_windows.find(it->second.wid);
         m_pane_map.erase(it);
-        if (m_tab) m_tabs.remove_pane(m_tab, pane);
-        if (m_pane_map.empty()) exit();
-        else if (m_tabs.on_needs_render) m_tabs.on_needs_render();
+        if (wit != m_windows.end()) m_tabs.remove_pane(wit->second, pane);
+        // Window/session lifecycle is driven by WindowClosed/SessionClosed.
+        if (m_tabs.on_needs_render) m_tabs.on_needs_render();
     };
 
     m_client.on_session_closed = [this](uint32_t sid) {
@@ -116,8 +142,12 @@ void RemoteController::handle_resize(int cols, int rows, int cell_w, int cell_h,
     m_client.resize_session(cols, rows);
 }
 
-void RemoteController::apply_layout(int cols, int rows,
+void RemoteController::apply_layout(uint32_t wid, int cols, int rows,
                                     const std::vector<RemotePaneGeom> &panes) {
+    auto wit = m_windows.find(wid);
+    if (wit == m_windows.end()) return;
+    Tab *tab = wit->second;
+
     // Client grid wins: if the session is sized for someone else,
     // ask for ours (the reply converges in one round).
     if (cols != m_cols || rows != m_rows)
@@ -128,10 +158,11 @@ void RemoteController::apply_layout(int cols, int rows,
         Pane *p;
         auto it = m_pane_map.find(g.id);
         if (it == m_pane_map.end()) {
-            p = create_remote_pane(m_tab, g.id, g.cols, g.rows);
+            p = create_remote_pane(tab, g.id, g.cols, g.rows);
             if (!p) continue;
+            m_pane_map[g.id].wid = wid;
         } else {
-            p = it->second;
+            p = it->second.pane;
         }
         if (p->screen().cols() != g.cols || p->screen().rows() != g.rows)
             p->resize(g.cols, g.rows);
@@ -139,25 +170,40 @@ void RemoteController::apply_layout(int cols, int rows,
                    g.cols * m_cell_w, g.rows * m_cell_h};
     }
 
-    // Drop panes the daemon no longer has.
+    // Drop panes this window no longer has.
     for (auto it = m_pane_map.begin(); it != m_pane_map.end();) {
+        if (it->second.wid != wid) { ++it; continue; }
         bool present = false;
         for (const auto &g : panes)
             if (g.id == it->first) { present = true; break; }
         if (present) { ++it; continue; }
-        Pane *pane = it->second;
+        Pane *pane = it->second.pane;
         it = m_pane_map.erase(it);
-        m_tabs.remove_pane(m_tab, pane);
+        m_tabs.remove_pane(tab, pane);
     }
 
     if (m_tabs.on_needs_render) m_tabs.on_needs_render();
 }
 
 uint32_t RemoteController::focused_pane_id() const {
-    if (!m_tab || !m_tab->focused_pane) return 0;
-    for (const auto &[id, pane] : m_pane_map)
-        if (pane == m_tab->focused_pane) return id;
+    const Tab *tab = m_tabs.active_tab();
+    if (!tab || !tab->focused_pane) return 0;
+    for (const auto &[id, e] : m_pane_map)
+        if (e.pane == tab->focused_pane) return id;
     return 0;
+}
+
+void RemoteController::new_window() {
+    if (m_active) m_client.new_window();
+}
+
+bool RemoteController::request_close_tab(Tab *tab) {
+    for (const auto &[wid, t] : m_windows)
+        if (t == tab) {
+            m_client.close_window(wid);
+            return true;
+        }
+    return false;
 }
 
 void RemoteController::split(bool horizontal) {
@@ -182,7 +228,7 @@ Pane *RemoteController::create_remote_pane(Tab *tab, uint32_t pane_id, int cols,
     // would be answered twice.
     pane->screen().on_write_back = nullptr;
 
-    m_pane_map[pane_id] = pane;
+    m_pane_map[pane_id] = {pane, 0};  // wid filled by caller
     return pane;
 }
 
@@ -195,6 +241,7 @@ void RemoteController::detach() {
 void RemoteController::exit() {
     m_active = false;
     m_pane_map.clear();
+    m_windows.clear();
     if (on_exit) on_exit();
 }
 
