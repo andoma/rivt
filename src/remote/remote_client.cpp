@@ -72,6 +72,67 @@ static void spawn_daemon(const std::string &socket_path) {
     waitpid(pid, nullptr, 0);  // reap the intermediate child
 }
 
+bool RemoteClient::query_sessions(const std::string &path, bool autostart,
+                                  std::vector<RemoteSessionInfo> &out) {
+    int fd = try_connect(path);
+    if (fd < 0 && autostart) {
+        spawn_daemon(path);
+        for (int i = 0; i < 40 && fd < 0; i++) {
+            usleep(50000);
+            fd = try_connect(path);
+        }
+    }
+    if (fd < 0) return false;
+
+    struct timeval tv = {5, 0};
+    setsockopt(fd, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof tv);
+
+    auto send_msg = [fd](uint16_t type, const proto::Writer &w) {
+        uint8_t hdr[proto::FRAME_HEADER_SIZE];
+        proto::encode_frame_header(hdr, {(uint32_t)w.buf.size(), 0, type});
+        (void)!write(fd, hdr, sizeof hdr);
+        if (!w.buf.empty()) (void)!write(fd, w.buf.data(), w.buf.size());
+    };
+    proto::Writer hello;
+    hello.u32(proto::PROTO_VERSION);
+    send_msg((uint16_t)MsgType::Hello, hello);
+    send_msg((uint16_t)MsgType::ListSessions, {});
+
+    std::string buf;
+    bool ok = false;
+    while (!ok) {
+        char tmp[4096];
+        ssize_t n = read(fd, tmp, sizeof tmp);
+        if (n <= 0) break;
+        buf.append(tmp, n);
+        while (buf.size() >= proto::FRAME_HEADER_SIZE) {
+            proto::FrameHeader h;
+            if (!proto::decode_frame_header((const uint8_t *)buf.data(), h)) goto done;
+            if (buf.size() < proto::FRAME_HEADER_SIZE + h.len) break;
+            proto::Reader r((const uint8_t *)buf.data() + proto::FRAME_HEADER_SIZE, h.len);
+            if (h.channel == 0 && h.type == (uint16_t)MsgType::Error) {
+                fprintf(stderr, "rivt: rivtd: %s\n", r.str().c_str());
+                goto done;
+            }
+            if (h.channel == 0 && h.type == (uint16_t)MsgType::SessionList) {
+                uint32_t cnt = r.u32();
+                for (uint32_t i = 0; i < cnt && r.ok; i++) {
+                    RemoteSessionInfo si;
+                    si.id = r.u32();
+                    si.name = r.str();
+                    si.npanes = r.u32();
+                    out.push_back(std::move(si));
+                }
+                ok = r.ok;
+            }
+            buf.erase(0, proto::FRAME_HEADER_SIZE + h.len);
+        }
+    }
+done:
+    ::close(fd);
+    return ok;
+}
+
 bool RemoteClient::connect(const std::string &path, bool autostart) {
     m_fd = try_connect(path);
     if (m_fd < 0 && autostart) {

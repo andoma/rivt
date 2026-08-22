@@ -286,7 +286,7 @@ bool Window::init_tmux_pty(Pane *gateway_pane) {
     return true;
 }
 
-bool Window::init_remote(const std::string &socket_path) {
+bool Window::init_remote(const std::string &socket_path, uint32_t attach_sid) {
     m_platform = Platform::create();
     if (!m_platform) return false;
     if (!m_platform->create_window(m_win_w, m_win_h, "rivt [rivtd]")) return false;
@@ -324,7 +324,7 @@ bool Window::init_remote(const std::string &socket_path) {
     int bar_h = tab_bar_height();
     int cols = m.cell_width > 0 ? m_win_w / m.cell_width : 80;
     int rows = m.cell_height > 0 ? (m_win_h - bar_h - kBottomPad) / m.cell_height : 24;
-    m_remote_controller->initialize(cols, rows, m.cell_width, m.cell_height, 0, bar_h);
+    m_remote_controller->initialize(cols, rows, m.cell_width, m.cell_height, 0, bar_h, attach_sid);
 
     m_platform->show_window();
     setup_callbacks();

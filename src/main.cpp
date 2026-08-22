@@ -1,4 +1,5 @@
 #include "core/window.h"
+#include "remote/remote_client.h"
 #include "core/event_loop.h"
 #include "core/config.h"
 #include "core/debug.h"
@@ -52,7 +53,7 @@ int main(int argc, char *argv[]) {
 
     std::function<void(Pane *)> create_tmux_window;
     std::function<void()> create_window;
-    std::function<void()> create_remote_window;
+    std::function<void(uint32_t)> create_remote_window;
 
     create_tmux_window = [&](Pane *gateway) {
         auto win = std::make_unique<Window>(base_config, loop);
@@ -65,14 +66,15 @@ int main(int argc, char *argv[]) {
         windows.push_back(std::move(win));
     };
 
-    create_remote_window = [&]() {
+    create_remote_window = [&](uint32_t attach_sid) {
         auto win = std::make_unique<Window>(base_config, loop);
-        if (!win->init_remote(remote_socket)) return;
+        if (!win->init_remote(remote_socket, attach_sid)) return;
         Window *raw = win.get();
         loop.add_fd(raw->event_fd(), [raw](uint32_t) {
             raw->platform()->process_events();
         });
-        raw->on_new_window = create_window;
+        // New windows from a remote window are new daemon sessions.
+        raw->on_new_window = [&create_remote_window]() { create_remote_window(0); };
         raw->on_new_tmux_window = create_tmux_window;
         raw->on_close = [](Window *w) { w->mark_closing(); };
         windows.push_back(std::move(win));
@@ -91,10 +93,21 @@ int main(int argc, char *argv[]) {
         windows.push_back(std::move(win));
     };
 
-    if (remote)
-        create_remote_window();
-    else
+    if (remote) {
+        // One window per existing session, so a restart resumes all of
+        // them; a fresh session when the daemon holds none.
+        std::string path = remote_socket.empty() ? RemoteClient::default_socket_path()
+                                                 : remote_socket;
+        std::vector<RemoteSessionInfo> sessions;
+        RemoteClient::query_sessions(path, /*autostart=*/true, sessions);
+        if (sessions.empty()) {
+            create_remote_window(0);
+        } else {
+            for (const auto &si : sessions) create_remote_window(si.id);
+        }
+    } else {
         create_window();
+    }
     if (windows.empty()) return 1;
 
     // Process-wide handlers used by macOS for menu items and the dock

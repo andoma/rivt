@@ -24,7 +24,8 @@ public:
 
     bool init();
     bool init_tmux_pty(Pane *gateway_pane);
-    bool init_remote(const std::string &socket_path);  // daemon-backed window
+    // Daemon-backed window: attach to session attach_sid, or create one if 0.
+    bool init_remote(const std::string &socket_path, uint32_t attach_sid);
     void render_if_needed();
     bool reap_dead_panes();
     void toggle_cursor_blink();

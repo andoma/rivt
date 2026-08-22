@@ -29,6 +29,11 @@ public:
 
     static std::string default_socket_path();
 
+    // One-shot blocking roster query (used before any window exists).
+    // Spawns the daemon if autostart and nobody is listening.
+    static bool query_sessions(const std::string &path, bool autostart,
+                               std::vector<RemoteSessionInfo> &out);
+
     // Connect to rivtd; if autostart, spawn one (double-forked, detached)
     // when nobody is listening and retry briefly.
     bool connect(const std::string &path, bool autostart);

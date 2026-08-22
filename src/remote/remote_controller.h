@@ -19,10 +19,10 @@ class RemoteController {
 public:
     RemoteController(RemoteClient &client, Window &window, TabManager &tabs);
 
-    // Attach to the newest existing session, or create one if none.
-    // cols/rows: our window's grid; the daemon pane is resized to it.
+    // Attach to session target_sid, or create a fresh session if 0.
+    // cols/rows: our window's grid; the daemon layout is sized to it.
     void initialize(int cols, int rows, int cell_w, int cell_h,
-                    int content_x, int content_y);
+                    int content_x, int content_y, uint32_t target_sid);
     void handle_resize(int cols, int rows, int cell_w, int cell_h,
                        int content_x, int content_y);
 
@@ -55,6 +55,7 @@ private:
     struct PaneEntry { Pane *pane; uint32_t wid; };
 
     bool m_active = false;
+    uint32_t m_target_sid = 0;
     uint32_t m_session_id = 0;
     std::unordered_map<uint32_t, Tab *> m_windows;     // wid -> tab
     std::unordered_map<uint32_t, PaneEntry> m_pane_map;

@@ -10,17 +10,13 @@ namespace rivt {
 RemoteController::RemoteController(RemoteClient &client, Window &window, TabManager &tabs)
     : m_client(client), m_window(window), m_tabs(tabs) {
 
-    m_client.on_hello_ok = [this]() { m_client.list_sessions(); };
-
-    m_client.on_session_list = [this](const std::vector<RemoteSessionInfo> &list) {
-        if (m_active) return;  // roster refresh, not attach flow
-        if (list.empty()) {
-            dbg("remote: no sessions, creating one (%dx%d)", m_cols, m_rows);
-            m_client.create_session("", "", m_cols, m_rows);
+    m_client.on_hello_ok = [this]() {
+        if (m_target_sid) {
+            dbg("remote: attaching to session %u", m_target_sid);
+            m_client.attach(m_target_sid);
         } else {
-            uint32_t newest = list.back().id;
-            dbg("remote: attaching to session %u", newest);
-            m_client.attach(newest);
+            dbg("remote: creating session (%dx%d)", m_cols, m_rows);
+            m_client.create_session("", "", m_cols, m_rows);
         }
     };
 
@@ -120,7 +116,8 @@ RemoteController::RemoteController(RemoteClient &client, Window &window, TabMana
 }
 
 void RemoteController::initialize(int cols, int rows, int cell_w, int cell_h,
-                                  int content_x, int content_y) {
+                                  int content_x, int content_y, uint32_t target_sid) {
+    m_target_sid = target_sid;
     m_cols = cols;
     m_rows = rows;
     m_cell_w = cell_w;
