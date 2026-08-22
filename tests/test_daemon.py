@@ -5,7 +5,7 @@ Usage: test_daemon.py <path-to-rivtd>"""
 import os, socket, struct, subprocess, sys, tempfile, time
 
 RIVTD = sys.argv[1]
-PROTO_VERSION = 1
+PROTO_VERSION = 2
 # control message types
 HELLO, LIST, CREATE, ATTACH, DETACH, RESIZE, KILL = 1, 2, 3, 4, 5, 6, 7
 SPLIT, CLOSE_PANE, NEW_WINDOW, CLOSE_WINDOW = 8, 9, 10, 11
