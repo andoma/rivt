@@ -151,13 +151,19 @@ void RemoteClient::process() {
 void RemoteClient::dispatch_control(uint16_t type, const uint8_t *data, size_t len) {
     proto::Reader r(data, len);
     switch ((MsgType)type) {
-    case MsgType::HelloOk:
-        if (r.u32() == proto::PROTO_VERSION && r.ok) {
+    case MsgType::HelloOk: {
+        uint32_t ver = r.u32();
+        if (r.ok && ver == proto::PROTO_VERSION) {
             if (on_hello_ok) on_hello_ok();
         } else {
+            fprintf(stderr,
+                    "rivt: rivtd protocol version mismatch (daemon %u, client %u) — "
+                    "restart the daemon: pkill -x rivtd\n",
+                    ver, proto::PROTO_VERSION);
             fail();
         }
         break;
+    }
     case MsgType::SessionList: {
         uint32_t n = r.u32();
         std::vector<RemoteSessionInfo> list;

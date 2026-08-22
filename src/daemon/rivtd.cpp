@@ -251,7 +251,15 @@ private:
     void handle_control(Client *c, MsgType t, const uint8_t *data, size_t len) {
         proto::Reader r(data, len);
         if (!c->hello) {
-            if (t != MsgType::Hello || r.u32() != proto::PROTO_VERSION || !r.ok) {
+            uint32_t ver = (t == MsgType::Hello) ? r.u32() : 0;
+            if (t != MsgType::Hello || !r.ok || ver != proto::PROTO_VERSION) {
+                char msg[128];
+                snprintf(msg, sizeof msg,
+                         "protocol version mismatch (daemon %u, client %u) — "
+                         "if you upgraded rivt, restart the daemon: pkill -x rivtd",
+                         proto::PROTO_VERSION, ver);
+                send_error(c, msg);
+                flush_client(c);
                 kill_client(c);
                 return;
             }

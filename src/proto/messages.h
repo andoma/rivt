@@ -3,7 +3,10 @@
 
 namespace rivt::proto {
 
-constexpr uint32_t PROTO_VERSION = 1;
+// Bump on ANY wire-format change (messages, payloads, snapshot framing).
+// Daemon and client hard-reject mismatches with a clear error, so a
+// stale running daemon fails loudly instead of rendering nothing.
+constexpr uint32_t PROTO_VERSION = 2;
 
 // Frame types on pane channels (channel = pane id, > 0)
 enum PaneFrame : uint16_t {
