@@ -7,6 +7,7 @@
 // each poll iteration.
 #include "core/config.h"
 #include "core/event_loop.h"
+#include "core/layout.h"
 #include "core/pane.h"
 #include "proto/frame.h"
 #include "proto/messages.h"
@@ -52,6 +53,8 @@ struct Client {
 struct Session {
     uint32_t id;
     std::string name;
+    int cols = 80, rows = 24;   // session grid; layout partitions it
+    LayoutTree layout;          // cell units: cell 1x1, 1-cell dividers
     std::vector<std::pair<uint16_t, std::unique_ptr<Pane>>> panes;
 };
 
@@ -272,13 +275,8 @@ private:
             c->attached = sid;
             proto::Writer w;
             w.u32(sid);
-            w.u32((uint32_t)it->second.panes.size());
-            for (auto &[pid, pane] : it->second.panes) {
-                w.u32(pid);
-                w.u16((uint16_t)pane->screen().cols());
-                w.u16((uint16_t)pane->screen().rows());
-            }
             send_control(c, MsgType::AttachOk, w);
+            send_layout_to(c, it->second);
             for (auto &[pid, pane] : it->second.panes) {
                 auto blob = proto::Snapshot::serialize(pane->screen(), pane->parser(),
                                                        ATTACH_SCROLLBACK_LINES);
@@ -290,12 +288,37 @@ private:
             c->attached = 0;
             break;
         case MsgType::Resize: {
-            uint32_t pid = r.u32();
             int cols = r.u16(), rows = r.u16();
-            auto it = m_panes.find((uint16_t)pid);
-            if (!r.ok || it == m_panes.end() || it->second.first != c->attached) return;
+            auto it = m_sessions.find(c->attached);
+            if (!r.ok || it == m_sessions.end()) return;
             if (cols < 2 || rows < 2 || cols > 4096 || rows > 4096) return;
-            it->second.second->resize(cols, rows);
+            it->second.cols = cols;
+            it->second.rows = rows;
+            relayout(it->second);
+            break;
+        }
+        case MsgType::Split: {
+            uint32_t pid = r.u32();
+            uint8_t dir = r.u8();
+            auto pit = m_panes.find((uint16_t)pid);
+            if (!r.ok || pit == m_panes.end() || pit->second.first != c->attached) return;
+            split_pane(m_sessions.at(c->attached), pit->second.second,
+                       dir == 0 ? SplitDir::Vertical : SplitDir::Horizontal);
+            break;
+        }
+        case MsgType::ClosePane: {
+            uint32_t pid = r.u32();
+            auto pit = m_panes.find((uint16_t)pid);
+            if (!r.ok || pit == m_panes.end() || pit->second.first != c->attached) return;
+            // Explicit removal: closing our master fd delivers no HUP to
+            // us, so the pane-death path would never fire. We're inside a
+            // client callback (not the pane's), so immediate teardown is
+            // safe. Detach before close so the fd leaves the loop first.
+            Pane *pane = pit->second.second;
+            pane->detach(m_loop);
+            pane->pty().close();
+            m_panes.erase(pit);
+            remove_dead_pane((uint16_t)pid);
             break;
         }
         case MsgType::KillSession: {
@@ -345,9 +368,13 @@ private:
         Session s;
         s.id = sid;
         s.name = name.empty() ? ("session-" + std::to_string(sid)) : name;
+        s.cols = cols;
+        s.rows = rows;
+        s.layout.init(pane.get());
         s.panes.emplace_back(pid, std::move(pane));
         m_panes[pid] = {sid, s.panes.back().second.get()};
         m_sessions.emplace(sid, std::move(s));
+        relayout(m_sessions.at(sid));
 
         proto::Writer w;
         w.u32(sid);
@@ -382,6 +409,54 @@ private:
         // not wired in v1.
     }
 
+    // Recompute the session's cell-unit layout (this resizes panes and
+    // their PTYs to the computed rects) and broadcast it.
+    void relayout(Session &s) {
+        s.layout.compute_layout(0, 0, s.cols, s.rows, /*divider=*/1,
+                                /*cell_w=*/1, /*cell_h=*/1);
+        for (auto &c : m_clients)
+            if (!c->dead && c->attached == s.id) send_layout_to(c.get(), s);
+    }
+
+    void send_layout_to(Client *c, Session &s) {
+        proto::Writer w;
+        w.u32(s.id);
+        w.u16((uint16_t)s.cols);
+        w.u16((uint16_t)s.rows);
+        w.u32((uint32_t)s.panes.size());
+        for (auto &[pid, pane] : s.panes) {
+            w.u32(pid);
+            w.u16((uint16_t)pane->rect.x);
+            w.u16((uint16_t)pane->rect.y);
+            w.u16((uint16_t)pane->rect.w);
+            w.u16((uint16_t)pane->rect.h);
+        }
+        send_control(c, MsgType::LayoutUpdate, w);
+    }
+
+    static std::string osc7_path(const std::string &uri) {
+        const std::string prefix = "file://";
+        if (uri.rfind(prefix, 0) != 0) return uri;
+        auto slash = uri.find('/', prefix.size());
+        return slash == std::string::npos ? "" : uri.substr(slash);
+    }
+
+    void split_pane(Session &s, Pane *target, SplitDir dir) {
+        uint16_t pid = m_next_pane++;
+        auto pane = std::make_unique<Pane>(target->screen().cols(),
+                                           target->screen().rows(), m_config);
+        if (!pane->spawn_shell(m_loop, osc7_path(target->cwd))) return;
+        if (!s.layout.split(target, pane.get(), dir)) {
+            pane->detach(m_loop);
+            pane->pty().close();
+            return;
+        }
+        wire_pane(s.id, pid, pane.get());
+        s.panes.emplace_back(pid, std::move(pane));
+        m_panes[pid] = {s.id, s.panes.back().second.get()};
+        relayout(s);
+    }
+
     void broadcast_event(uint32_t sid, MsgType t, uint16_t pid, const std::string &str_arg) {
         proto::Writer w;
         w.u32(pid);
@@ -408,30 +483,36 @@ private:
 
     // ---------------- deferred cleanup ----------------
 
-    void sweep() {
-        for (uint16_t pid : m_dead_panes) {
-            for (auto it = m_sessions.begin(); it != m_sessions.end();) {
-                Session &s = it->second;
-                auto pit = std::find_if(s.panes.begin(), s.panes.end(),
-                                        [pid](auto &p) { return p.first == pid; });
-                if (pit == s.panes.end()) { ++it; continue; }
+    // Remove a pane whose PTY is already dead/closed: notify clients,
+    // collapse the layout, and end the session when it was the last one.
+    void remove_dead_pane(uint16_t pid) {
+        for (auto it = m_sessions.begin(); it != m_sessions.end(); ++it) {
+            Session &s = it->second;
+            auto pit = std::find_if(s.panes.begin(), s.panes.end(),
+                                    [pid](auto &p) { return p.first == pid; });
+            if (pit == s.panes.end()) continue;
 
-                proto::Writer w;
-                w.u32(pid);
-                for (auto &c : m_clients)
-                    if (!c->dead && c->attached == s.id)
-                        send_control(c.get(), MsgType::PaneExited, w);
+            proto::Writer w;
+            w.u32(pid);
+            for (auto &c : m_clients)
+                if (!c->dead && c->attached == s.id)
+                    send_control(c.get(), MsgType::PaneExited, w);
 
-                pit->second->detach(m_loop);
-                s.panes.erase(pit);
-                if (s.panes.empty()) {
-                    close_session(s);
-                    it = m_sessions.erase(it);
-                } else {
-                    ++it;
-                }
+            s.layout.remove(pit->second.get());
+            pit->second->detach(m_loop);
+            s.panes.erase(pit);
+            if (s.panes.empty()) {
+                close_session(s);
+                m_sessions.erase(it);
+            } else {
+                relayout(s);
             }
+            return;
         }
+    }
+
+    void sweep() {
+        for (uint16_t pid : m_dead_panes) remove_dead_pane(pid);
         m_dead_panes.clear();
 
         if (m_sweep_clients) {

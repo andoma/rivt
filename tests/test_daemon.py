@@ -8,8 +8,9 @@ RIVTD = sys.argv[1]
 PROTO_VERSION = 1
 # control message types
 HELLO, LIST, CREATE, ATTACH, DETACH, RESIZE, KILL = 1, 2, 3, 4, 5, 6, 7
+SPLIT, CLOSE_PANE = 8, 9
 HELLO_OK, SESSION_LIST, SESSION_CREATED, ATTACH_OK = 64, 65, 66, 67
-SESSION_CLOSED, PANE_EXITED = 68, 69
+SESSION_CLOSED, PANE_EXITED, LAYOUT = 68, 69, 74
 PANE_OUT, PANE_IN, PANE_SNAPSHOT = 0, 1, 2
 
 def fail(msg):
@@ -65,6 +66,13 @@ class Conn:
                     return out
         fail(f"timeout waiting for {needle!r} in pane output")
 
+def parse_layout(payload):
+    sid, cols, rows, n = struct.unpack("<IHHI", payload[:12])
+    panes = []
+    for i in range(n):
+        panes.append(struct.unpack("<IHHHH", payload[12 + i*12: 24 + i*12]))
+    return sid, cols, rows, panes  # pane = (id, x, y, cols, rows)
+
 def snapshot_text(blob):
     """Decode GRID_MAIN rows from a snapshot blob into a text string."""
     magic, ver = struct.unpack("<IB", blob[:5])
@@ -109,8 +117,11 @@ def main():
 
         a.frame(0, ATTACH, struct.pack("<I", sid))
         p = a.expect_control(ATTACH_OK)
-        rsid, npanes = struct.unpack("<II", p[:8])
-        assert rsid == sid and npanes == 1
+        (rsid,) = struct.unpack("<I", p[:4])
+        assert rsid == sid
+        _, lcols, lrows, lpanes = parse_layout(a.expect_control(LAYOUT))
+        assert (lcols, lrows) == (80, 24) and len(lpanes) == 1
+        assert lpanes[0][0] == pane and lpanes[0][3] == 80 and lpanes[0][4] == 24
         ch, ty, snap = a.recv_frame()
         assert ch == pane and ty == PANE_SNAPSHOT and len(snap) > 100
         print(f"attach ok: session {sid} pane {pane}, snapshot {len(snap)} bytes")
@@ -119,11 +130,42 @@ def main():
         a.collect_output(pane, b"OUT:rivt_marker_123")
         print("echo roundtrip ok")
 
-        # --- resize reaches the PTY ---
-        a.frame(0, RESIZE, struct.pack("<IHH", pane, 100, 30))
+        # --- session resize relayouts and reaches the PTY ---
+        a.frame(0, RESIZE, struct.pack("<HH", 100, 30))
+        _, lcols, lrows, lpanes = parse_layout(a.expect_control(LAYOUT))
+        assert (lcols, lrows) == (100, 30) and lpanes[0][3:] == (100, 30)
         a.frame(pane, PANE_IN, b"stty size\n")
         a.collect_output(pane, b"30 100")
         print("resize ok (stty reports 30 100)")
+
+        # --- split: two panes side by side, both usable ---
+        a.frame(0, SPLIT, struct.pack("<IB", pane, 0))
+        _, _, _, lpanes = parse_layout(a.expect_control(LAYOUT))
+        assert len(lpanes) == 2, f"expected 2 panes, got {lpanes}"
+        pane2 = [g[0] for g in lpanes if g[0] != pane][0]
+        widths = sorted(g[3] for g in lpanes)
+        assert sum(widths) + 1 == 100, f"widths {widths} + divider != 100"
+        a.frame(pane2, PANE_IN, b"printf 'P2:%s\\n' works\n")
+        a.collect_output(pane2, b"P2:works")
+        # first pane sees the narrower grid
+        a.frame(pane, PANE_IN, b"stty size\n")
+        a.collect_output(pane, str(lpanes[0][4]).encode() + b" " + str(lpanes[0][3]).encode())
+        print(f"split ok: panes {pane},{pane2} widths {widths}")
+
+        # --- close the split pane: layout collapses back ---
+        a.frame(0, CLOSE_PANE, struct.pack("<I", pane2))
+        got_exit, got_layout = False, False
+        deadline = time.time() + 10
+        while not (got_exit and got_layout) and time.time() < deadline:
+            ch, ty, payload = a.recv_frame()
+            if ch == 0 and ty == PANE_EXITED:
+                got_exit = True
+            if ch == 0 and ty == LAYOUT:
+                _, _, _, lp = parse_layout(payload)
+                if len(lp) == 1 and lp[0][3:] == (100, 30):
+                    got_layout = True
+        assert got_exit and got_layout
+        print("close-pane ok: layout collapsed to full grid")
 
         # --- persistence: reconnect, snapshot must contain earlier output ---
         a.s.close()
@@ -137,6 +179,7 @@ def main():
 
         b.frame(0, ATTACH, struct.pack("<I", sid))
         b.expect_control(ATTACH_OK)
+        b.expect_control(LAYOUT)
         ch, ty, snap = b.recv_frame()
         assert ty == PANE_SNAPSHOT
         text = snapshot_text(snap)

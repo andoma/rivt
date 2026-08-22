@@ -293,7 +293,28 @@ void TabManager::navigate_pane(NavDir dir) {
     Tab *tab = active_tab();
     if (!tab || !tab->focused_pane) return;
 
-    Pane *target = tab->layout.navigate(tab->focused_pane, dir);
+    Pane *target = nullptr;
+    if (!tab->layout.empty()) {
+        target = tab->layout.navigate(tab->focused_pane, dir);
+    } else {
+        // Manager-positioned tabs (tmux, rivtd) have no local layout
+        // tree; navigate geometrically over pane rects.
+        const PaneRect &f = tab->focused_pane->rect;
+        int fx = f.x + f.w / 2, fy = f.y + f.h / 2;
+        int best = INT_MAX;
+        for (auto &p : tab->panes) {
+            if (p.get() == tab->focused_pane) continue;
+            const PaneRect &r = p->rect;
+            int cx = r.x + r.w / 2, cy = r.y + r.h / 2;
+            bool ok = (dir == NavDir::Left && cx < fx) ||
+                      (dir == NavDir::Right && cx > fx) ||
+                      (dir == NavDir::Up && cy < fy) ||
+                      (dir == NavDir::Down && cy > fy);
+            if (!ok) continue;
+            int d = abs(cx - fx) + abs(cy - fy);
+            if (d < best) { best = d; target = p.get(); }
+        }
+    }
     if (target && target != tab->focused_pane) {
         tab->focused_pane = target;
         target->has_activity = false;

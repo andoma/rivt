@@ -29,12 +29,17 @@ public:
     bool is_active() const { return m_active; }
     void detach();
 
+    // User actions on the focused pane, routed to the daemon.
+    void split(bool horizontal);
+    void close_focused_pane();
+
     // Fired when the session ends or the daemon goes away.
     std::function<void()> on_exit;
 
 private:
     Pane *create_remote_pane(Tab *tab, uint32_t pane_id, int cols, int rows);
-    void position_pane(Pane *pane);
+    void apply_layout(int cols, int rows, const std::vector<RemotePaneGeom> &panes);
+    uint32_t focused_pane_id() const;
     void exit();
 
     RemoteClient &m_client;

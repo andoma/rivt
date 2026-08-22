@@ -227,6 +227,7 @@ add_executable(rivtd
     src/daemon/rivtd.cpp
     src/core/config.cpp
     src/core/util.cpp
+    src/core/layout.cpp
     src/core/pane.cpp
     src/core/event_loop.cpp
     src/proto/snapshot.cpp

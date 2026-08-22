@@ -178,16 +178,25 @@ void RemoteClient::dispatch_control(uint16_t type, const uint8_t *data, size_t l
         break;
     }
     case MsgType::AttachOk: {
-        uint32_t sid = r.u32(), n = r.u32();
-        std::vector<RemotePaneInfo> panes;
+        uint32_t sid = r.u32();
+        if (r.ok && on_attach_ok) on_attach_ok(sid);
+        break;
+    }
+    case MsgType::LayoutUpdate: {
+        uint32_t sid = r.u32();
+        int cols = r.u16(), rows = r.u16();
+        uint32_t n = r.u32();
+        std::vector<RemotePaneGeom> panes;
         for (uint32_t i = 0; i < n && r.ok; i++) {
-            RemotePaneInfo p;
-            p.id = r.u32();
-            p.cols = r.u16();
-            p.rows = r.u16();
-            panes.push_back(p);
+            RemotePaneGeom g;
+            g.id = r.u32();
+            g.x = r.u16();
+            g.y = r.u16();
+            g.cols = r.u16();
+            g.rows = r.u16();
+            panes.push_back(g);
         }
-        if (r.ok && on_attach_ok) on_attach_ok(sid, panes);
+        if (r.ok && on_layout) on_layout(sid, cols, rows, panes);
         break;
     }
     case MsgType::SessionClosed:
@@ -270,12 +279,24 @@ void RemoteClient::detach() {
     send_control((uint16_t)MsgType::Detach, {});
 }
 
-void RemoteClient::resize(uint32_t pane_id, int cols, int rows) {
+void RemoteClient::resize_session(int cols, int rows) {
     proto::Writer w;
-    w.u32(pane_id);
     w.u16((uint16_t)cols);
     w.u16((uint16_t)rows);
     send_control((uint16_t)MsgType::Resize, w);
+}
+
+void RemoteClient::split(uint32_t pane_id, bool horizontal) {
+    proto::Writer w;
+    w.u32(pane_id);
+    w.u8(horizontal ? 1 : 0);
+    send_control((uint16_t)MsgType::Split, w);
+}
+
+void RemoteClient::close_pane(uint32_t pane_id) {
+    proto::Writer w;
+    w.u32(pane_id);
+    send_control((uint16_t)MsgType::ClosePane, w);
 }
 
 void RemoteClient::kill_session(uint32_t sid) {

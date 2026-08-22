@@ -33,35 +33,32 @@ RemoteController::RemoteController(RemoteClient &client, Window &window, TabMana
         m_client.attach(sid);
     };
 
-    m_client.on_attach_ok = [this](uint32_t sid, const std::vector<RemotePaneInfo> &panes) {
+    m_client.on_attach_ok = [this](uint32_t sid) {
         m_session_id = sid;
         m_active = true;
         m_tab = m_tabs.new_empty_tab("rivtd");
         m_tab->tmux_managed = true;  // pane rects are ours, not the layout engine's
+    };
 
-        for (const auto &pi : panes) {
-            Pane *p = create_remote_pane(m_tab, pi.id, pi.cols, pi.rows);
-            // Client size wins (design): bring the daemon pane to our grid.
-            if (pi.cols != m_cols || pi.rows != m_rows) {
-                p->resize(m_cols, m_rows);
-                m_client.resize(pi.id, m_cols, m_rows);
-            }
-            position_pane(p);
-        }
-        if (m_tabs.on_needs_render) m_tabs.on_needs_render();
+    m_client.on_layout = [this](uint32_t sid, int cols, int rows,
+                                const std::vector<RemotePaneGeom> &panes) {
+        if (sid != m_session_id || !m_tab) return;
+        apply_layout(cols, rows, panes);
     };
 
     m_client.on_snapshot = [this](uint32_t pane_id, const uint8_t *data, size_t len) {
         auto it = m_pane_map.find(pane_id);
         if (it == m_pane_map.end()) return;
         Pane *p = it->second;
+        int cols = p->screen().cols(), rows = p->screen().rows();
         if (!proto::Snapshot::deserialize(p->screen(), p->parser(), data, len)) {
             fprintf(stderr, "rivt: bad snapshot for pane %u\n", pane_id);
             return;
         }
-        // The snapshot may carry the session's previous size; our grid wins.
-        if (p->screen().cols() != m_cols || p->screen().rows() != m_rows)
-            p->resize(m_cols, m_rows);
+        // The snapshot may predate the layout we already applied; the
+        // layout geometry wins.
+        if (p->screen().cols() != cols || p->screen().rows() != rows)
+            p->resize(cols, rows);
         if (p->on_needs_render) p->on_needs_render();
     };
 
@@ -73,8 +70,11 @@ RemoteController::RemoteController(RemoteClient &client, Window &window, TabMana
     m_client.on_pane_exited = [this](uint32_t pane_id) {
         auto it = m_pane_map.find(pane_id);
         if (it == m_pane_map.end()) return;
+        Pane *pane = it->second;
         m_pane_map.erase(it);
+        if (m_tab) m_tabs.remove_pane(m_tab, pane);
         if (m_pane_map.empty()) exit();
+        else if (m_tabs.on_needs_render) m_tabs.on_needs_render();
     };
 
     m_client.on_session_closed = [this](uint32_t sid) {
@@ -111,12 +111,63 @@ void RemoteController::handle_resize(int cols, int rows, int cell_w, int cell_h,
     m_content_x = content_x;
     m_content_y = content_y;
     if (!m_active) return;
-    for (auto &[id, pane] : m_pane_map) {
-        // Apply locally (deterministic reflow) and tell the daemon.
-        pane->resize(cols, rows);
-        m_client.resize(id, cols, rows);
-        position_pane(pane);
+    // The daemon owns the layout: send our new grid; it relayouts and
+    // answers with a LayoutUpdate carrying every pane's rect.
+    m_client.resize_session(cols, rows);
+}
+
+void RemoteController::apply_layout(int cols, int rows,
+                                    const std::vector<RemotePaneGeom> &panes) {
+    // Client grid wins: if the session is sized for someone else,
+    // ask for ours (the reply converges in one round).
+    if (cols != m_cols || rows != m_rows)
+        m_client.resize_session(m_cols, m_rows);
+
+    // Create/update panes present in the layout.
+    for (const auto &g : panes) {
+        Pane *p;
+        auto it = m_pane_map.find(g.id);
+        if (it == m_pane_map.end()) {
+            p = create_remote_pane(m_tab, g.id, g.cols, g.rows);
+            if (!p) continue;
+        } else {
+            p = it->second;
+        }
+        if (p->screen().cols() != g.cols || p->screen().rows() != g.rows)
+            p->resize(g.cols, g.rows);
+        p->rect = {m_content_x + g.x * m_cell_w, m_content_y + g.y * m_cell_h,
+                   g.cols * m_cell_w, g.rows * m_cell_h};
     }
+
+    // Drop panes the daemon no longer has.
+    for (auto it = m_pane_map.begin(); it != m_pane_map.end();) {
+        bool present = false;
+        for (const auto &g : panes)
+            if (g.id == it->first) { present = true; break; }
+        if (present) { ++it; continue; }
+        Pane *pane = it->second;
+        it = m_pane_map.erase(it);
+        m_tabs.remove_pane(m_tab, pane);
+    }
+
+    if (m_tabs.on_needs_render) m_tabs.on_needs_render();
+}
+
+uint32_t RemoteController::focused_pane_id() const {
+    if (!m_tab || !m_tab->focused_pane) return 0;
+    for (const auto &[id, pane] : m_pane_map)
+        if (pane == m_tab->focused_pane) return id;
+    return 0;
+}
+
+void RemoteController::split(bool horizontal) {
+    uint32_t id = focused_pane_id();
+    if (id) m_client.split(id, horizontal);
+}
+
+void RemoteController::close_focused_pane() {
+    uint32_t id = focused_pane_id();
+    if (id) m_client.close_pane(id);
 }
 
 Pane *RemoteController::create_remote_pane(Tab *tab, uint32_t pane_id, int cols, int rows) {
@@ -133,10 +184,6 @@ Pane *RemoteController::create_remote_pane(Tab *tab, uint32_t pane_id, int cols,
 
     m_pane_map[pane_id] = pane;
     return pane;
-}
-
-void RemoteController::position_pane(Pane *pane) {
-    pane->rect = {m_content_x, m_content_y, m_cols * m_cell_w, m_rows * m_cell_h};
 }
 
 void RemoteController::detach() {

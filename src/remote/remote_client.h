@@ -14,9 +14,9 @@ struct RemoteSessionInfo {
     uint32_t npanes;
 };
 
-struct RemotePaneInfo {
+struct RemotePaneGeom {
     uint32_t id;
-    int cols, rows;
+    int x, y, cols, rows;  // cell units within the session grid
 };
 
 // Client side of the rivtd attach protocol: framing, command encoding,
@@ -41,7 +41,9 @@ public:
     void create_session(const std::string &name, const std::string &cwd, int cols, int rows);
     void attach(uint32_t session_id);
     void detach();
-    void resize(uint32_t pane_id, int cols, int rows);
+    void resize_session(int cols, int rows);
+    void split(uint32_t pane_id, bool horizontal);  // false = side by side
+    void close_pane(uint32_t pane_id);
     void kill_session(uint32_t session_id);
     void send_input(uint32_t pane_id, const char *data, size_t len);
 
@@ -51,7 +53,9 @@ public:
     std::function<void()> on_hello_ok;
     std::function<void(const std::vector<RemoteSessionInfo> &)> on_session_list;
     std::function<void(uint32_t sid, uint32_t pane_id, const std::string &error)> on_session_created;
-    std::function<void(uint32_t sid, const std::vector<RemotePaneInfo> &)> on_attach_ok;
+    std::function<void(uint32_t sid)> on_attach_ok;
+    std::function<void(uint32_t sid, int cols, int rows,
+                       const std::vector<RemotePaneGeom> &)> on_layout;
     std::function<void(uint32_t pane_id, const uint8_t *, size_t)> on_snapshot;
     std::function<void(uint32_t pane_id, const char *, size_t)> on_output;
     std::function<void(uint32_t pane_id)> on_pane_exited;

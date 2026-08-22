@@ -519,6 +519,8 @@ void Window::handle_key(const KeyEvent &raw_key) {
             case XKB_KEY_d:
                 if (m_tmux_controller && m_tmux_controller->is_active())
                     m_tmux_client->send_command("split-window -h");
+                else if (m_remote_controller && m_remote_controller->is_active())
+                    m_remote_controller->split(false);
                 else
                     m_tabs->split_pane(SplitDir::Vertical);
                 m_needs_render = true;
@@ -527,6 +529,8 @@ void Window::handle_key(const KeyEvent &raw_key) {
             case XKB_KEY_e:
                 if (m_tmux_controller && m_tmux_controller->is_active())
                     m_tmux_client->send_command("split-window -v");
+                else if (m_remote_controller && m_remote_controller->is_active())
+                    m_remote_controller->split(true);
                 else
                     m_tabs->split_pane(SplitDir::Horizontal);
                 m_needs_render = true;
@@ -535,6 +539,8 @@ void Window::handle_key(const KeyEvent &raw_key) {
             case XKB_KEY_w:
                 if (m_tmux_controller && m_tmux_controller->is_active()) {
                     m_tmux_client->send_command("kill-pane");
+                } else if (m_remote_controller && m_remote_controller->is_active()) {
+                    m_remote_controller->close_focused_pane();
                 } else {
                     if (!m_tabs->close_focused_pane()) {
                         if (on_close) on_close(this);
