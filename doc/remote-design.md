@@ -403,6 +403,108 @@ config involved.
 - The stream open frame is generic (`forward {kind: ssh-agent}`), so
   gpg-agent or other unix-socket forwards reuse the mechanism later.
 
+## Daemon/UI split (phase 1 design)
+
+The tmux integration already forced the right shape onto the codebase;
+the split mostly reuses it.
+
+### What today's code already gives us
+
+- `Pane` has both hooks a network-backed pane needs: `feed_data()`
+  (output injected from elsewhere) and `m_write_callback` (input routed
+  elsewhere). A remote pane on the client is a `Pane` with no spawned
+  shell, fed from the network, writing to the network: exactly how
+  tmux panes are wired today.
+- `Pane` is renderer-free (ScreenBuffer + VtParser + Pty + EventLoop
+  only; `setup_callbacks(Platform*)` is its single platform
+  touchpoint), so the server reuses it headless, unchanged.
+- `TmuxController` is the blueprint for the client side: map remote
+  ids to local Tab/Pane, apply layout geometry, route input. The rivt
+  protocol gets a sibling `RemoteController` with a binary protocol
+  instead of tmux's escaping.
+
+### Process and module layout
+
+- `src/proto/` — framing, control-message encode/decode, ScreenBuffer
+  snapshot serialize/deserialize. Depends only on `terminal/`; unit
+  tested like the parser (`test_snapshot` roundtrip).
+- `src/daemon/` — `rivtd` main: EventLoop + SessionManager + attach
+  listener. Links `terminal/`, `pty/`, `core/` (event_loop, layout,
+  config), `proto/`. No render/, no platform/.
+- UI side — `RemoteController` (sibling of TmuxController) + a socket
+  client. Window/Renderer/TabManager untouched.
+
+Server object model: `Session { name, windows: [{ id, title,
+LayoutTree, panes }] }`, reusing `LayoutTree` and headless `Pane`s.
+SIGCHLD reaping moves into rivtd; pane death becomes a protocol event.
+
+### Channel layer
+
+One connection = one control channel + one channel per attached pane.
+Over the v1 unix socket, channels are frames: `{u32 len, u16 channel,
+u16 type}`; channel 0 carries control messages, channel N carries pane
+N's raw bytes (VT output down, input bytes up). This maps 1:1 onto
+QUIC streams in phase 2; only the channel layer is swapped.
+
+Control messages: `attach(session)`, `create/kill-session`,
+`list-sessions`, `new-window`, `split(dir)`, `close-pane`,
+`resize(cols, rows)`, `focus(pane)`, `layout(window, rects)` (server
+-> client, explicit rects, no tmux checksum strings),
+`snapshot(pane, blob)`, `scrollback(pane, from, lines)` request/reply,
+`grid-hash(pane, h)`, events `title/cwd/bell/exited`, and OSC 52
+clipboard in both directions.
+
+### Attach and snapshot
+
+On `attach`, per pane: server sends a snapshot blob, then switches the
+pane channel to live raw output. Snapshot contents (CBOR-tagged
+sections, zstd): grid rows as RLE cells, alt screen, scrollback tail
+(last ~1000 lines) plus the total scrollback count for lazy fetch,
+cursor + saved cursor, current SGR state, modes, charsets, kitty
+keyboard stacks, hyperlink table, title, cwd — and the VtParser's
+transient state (state enum + partial-sequence buffers), so a snapshot
+is valid at any byte boundary, not just at sequence boundaries.
+Kitty graphics `ImageStore` is excluded from v1 snapshots (images
+reappear when the app redraws); revisit if it stings.
+
+Client-side ScreenBuffer additions: load-from-snapshot,
+`prepend_scrollback()` for lazily fetched history, and a "server has N
+more lines" marker so the viewport clamps and fetches on demand.
+
+Two replication subtleties, both decided:
+
+- Parser queries (DA, DSR, kitty probes) are answered once,
+  server-side, where the authoritative state lives. The client
+  replica's `on_write_back` is discarded.
+- Resize: the client applies the resize to its replica locally (same
+  deterministic `reflow()` code) and sends it to the server. The
+  server's periodic `grid-hash` catches any divergence and triggers a
+  silent re-snapshot; same mechanism doubles as the multi-client
+  resync and as a test oracle.
+
+### UI attachment model
+
+v1: one OS window attaches to one session (exactly the tmux -CC
+shape, so TabManager semantics carry over: one tab per server
+window). Mixing sessions in one window is a later UI feature, not a
+protocol feature; the protocol is per-pane already.
+
+Local terminals become daemon-backed too: the UI autostarts rivtd
+(`$XDG_RUNTIME_DIR/rivt/daemon.sock`, 0700 dir) and attaches over the
+unix socket, so local sessions survive UI restarts. The current
+in-process path remains behind `--no-daemon` during the transition.
+tmux -CC mode is untouched throughout.
+
+### Implementation order (each step compiles, tests, and ships)
+
+1. `src/proto/`: framing + snapshot roundtrip with unit tests.
+2. `rivtd`: sessions, single-client attach over the unix socket.
+3. UI `RemoteController` + attach; local persistence works end to end.
+4. Local shells default to daemon-backed (`--no-daemon` fallback).
+5. Multi-client: active-client-wins sizing, bounded per-client buffers
+   with snapshot-resync, grid-hash verification, OSC 52 / agent
+   routing to the most-recently-active client.
+
 ## Costs and limits
 
 Everything fits free tiers at personal scale: TURN egress well under
