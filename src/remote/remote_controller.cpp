@@ -43,6 +43,7 @@ RemoteController::RemoteController(RemoteClient &client, Window &window, TabMana
         Tab *tab = m_tabs.new_empty_tab("rivtd");
         tab->tmux_managed = true;  // pane rects are ours, not the layout engine's
         m_windows[wid] = tab;
+        reposition_for_tab_bar();
         if (m_tabs.on_needs_render) m_tabs.on_needs_render();
     };
 
@@ -62,6 +63,7 @@ RemoteController::RemoteController(RemoteClient &client, Window &window, TabMana
         }
         m_tabs.close_tab_ptr(tab);
         // Last window: SessionClosed follows and drives exit().
+        reposition_for_tab_bar();
         if (m_tabs.on_needs_render) m_tabs.on_needs_render();
     };
 
@@ -236,6 +238,19 @@ void RemoteController::detach() {
     if (!m_active) return;
     m_active = false;
     m_client.detach();
+}
+
+// The tab bar appears at 2 tabs and disappears at 1. Grow/shrink the
+// window so the terminal grid is unchanged, and shift existing pane
+// rects by the content-origin delta (same dance as TmuxController).
+void RemoteController::reposition_for_tab_bar() {
+    int new_y = m_window.tab_bar_height();
+    if (new_y == m_content_y) return;
+    int delta = new_y - m_content_y;
+    m_content_y = new_y;
+    m_window.adjust_tab_bar_height();
+    for (auto &[id, e] : m_pane_map)
+        e.pane->rect.y += delta;
 }
 
 void RemoteController::exit() {

@@ -45,6 +45,7 @@ private:
     void apply_layout(uint32_t wid, int cols, int rows,
                       const std::vector<RemotePaneGeom> &panes);
     uint32_t focused_pane_id() const;
+    void reposition_for_tab_bar();
     void exit();
 
     RemoteClient &m_client;
