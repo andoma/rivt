@@ -74,6 +74,15 @@ private:
     std::unordered_set<uint32_t> m_fetching;      // scrollback fetch in flight
     std::unordered_set<uint32_t> m_fetch_done;    // daemon has no more history
 
+    // Resize coalescing: interactive drags emit hundreds of resize
+    // events; send at most one in flight per debounce window, and never
+    // re-send dimensions already requested (stale LayoutUpdates would
+    // otherwise echo into a resize storm).
+    void maybe_send_resize();
+    int m_resize_timer = -1;
+    bool m_resize_pending = false;
+    int m_sent_cols = 0, m_sent_rows = 0;
+
     // Reconnect after daemon restart/upgrade (sessions survive an exec).
     void begin_reconnect();
     void schedule_reconnect_attempt();

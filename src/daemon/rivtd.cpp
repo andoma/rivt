@@ -45,6 +45,9 @@ static constexpr int ATTACH_SCROLLBACK_LINES = 2000;
 struct Client {
     int fd = -1;                          // unix transport, or...
     net::QuicEngine::Conn *quic = nullptr;  // ...QUIC transport
+    // Resize coalescing: bursts apply once, after the batch drains.
+    bool resize_pending = false;
+    int resize_cols = 0, resize_rows = 0;
     std::string in;
     std::string out;
     size_t out_off = 0;
@@ -247,6 +250,16 @@ private:
                 handle_pane_input(c, h.channel, payload, h.len);
             c->in.erase(0, total);
         }
+        if (!c->dead && c->resize_pending) {
+            c->resize_pending = false;
+            auto it = m_sessions.find(c->attached);
+            if (it != m_sessions.end() &&
+                (it->second.cols != c->resize_cols || it->second.rows != c->resize_rows)) {
+                it->second.cols = c->resize_cols;
+                it->second.rows = c->resize_rows;
+                for (auto &win : it->second.windows) relayout(it->second, win);
+            }
+        }
     }
 
     void send_frame(Client *c, uint16_t channel, uint16_t type,
@@ -386,12 +399,13 @@ private:
             break;
         case MsgType::Resize: {
             int cols = r.u16(), rows = r.u16();
-            auto it = m_sessions.find(c->attached);
-            if (!r.ok || it == m_sessions.end()) return;
-            if (cols < 2 || rows < 2 || cols > 4096 || rows > 4096) return;
-            it->second.cols = cols;
-            it->second.rows = rows;
-            for (auto &win : it->second.windows) relayout(it->second, win);
+            if (!r.ok || cols < 2 || rows < 2 || cols > 4096 || rows > 4096) return;
+            // Deferred: a drag can deliver dozens of resizes in one read
+            // batch, and each apply reflows every pane's scrollback.
+            // Only the last one matters.
+            c->resize_pending = true;
+            c->resize_cols = cols;
+            c->resize_rows = rows;
             break;
         }
         case MsgType::Split: {

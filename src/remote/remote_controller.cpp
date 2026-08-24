@@ -43,6 +43,7 @@ RemoteController::RemoteController(RemoteClient &client, Window &window, TabMana
     m_client.on_attach_ok = [this](uint32_t sid) {
         m_session_id = sid;
         m_active = true;
+        m_sent_cols = m_sent_rows = 0;  // new attach: size not negotiated yet
         if (m_reconnecting) {
             fprintf(stderr, "rivt: re-attached to session %u\n", sid);
             m_reconnecting = false;
@@ -205,7 +206,27 @@ void RemoteController::handle_resize(int cols, int rows, int cell_w, int cell_h,
     if (!m_active) return;
     // The daemon owns the layout: send our new grid; it relayouts and
     // answers with a LayoutUpdate carrying every pane's rect.
-    m_client.resize_session(cols, rows);
+    maybe_send_resize();
+}
+
+void RemoteController::maybe_send_resize() {
+    if (!m_active) return;
+    if (m_cols == m_sent_cols && m_rows == m_sent_rows) return;
+    if (m_resize_timer >= 0) {
+        m_resize_pending = true;  // trailing send when the window closes
+        return;
+    }
+    m_sent_cols = m_cols;
+    m_sent_rows = m_rows;
+    m_client.resize_session(m_cols, m_rows);
+    m_resize_timer = m_client.loop().add_timer(150, [this]() {
+        m_client.loop().remove_timer(m_resize_timer);
+        m_resize_timer = -1;
+        if (m_resize_pending) {
+            m_resize_pending = false;
+            maybe_send_resize();
+        }
+    }, true);
 }
 
 void RemoteController::apply_layout(uint32_t wid, int cols, int rows,
@@ -214,10 +235,11 @@ void RemoteController::apply_layout(uint32_t wid, int cols, int rows,
     if (wit == m_windows.end()) return;
     Tab *tab = wit->second;
 
-    // Client grid wins: if the session is sized for someone else,
-    // ask for ours (the reply converges in one round).
+    // Client grid wins: if the session is sized for someone else, ask
+    // for ours. maybe_send_resize() is a no-op when the current want
+    // was already requested, so stale layout updates can't echo.
     if (cols != m_cols || rows != m_rows)
-        m_client.resize_session(m_cols, m_rows);
+        maybe_send_resize();
 
     // Create/update panes present in the layout.
     for (const auto &g : panes) {

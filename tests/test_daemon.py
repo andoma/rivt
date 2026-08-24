@@ -159,6 +159,17 @@ def main():
         a.collect_output(pane, b"30 100")
         print("resize ok (stty reports 30 100)")
 
+        # --- resize storm: a drag's worth of events must coalesce ---
+        t0 = time.time()
+        for i in range(200):
+            a.frame(0, RESIZE, struct.pack("<HH", 80 + (i % 40), 20 + (i % 15)))
+        a.frame(0, RESIZE, struct.pack("<HH", 100, 30))
+        a.frame(pane, PANE_IN, b"stty size\n")
+        a.collect_output(pane, b"30 100")
+        elapsed = time.time() - t0
+        assert elapsed < 5, f"resize storm took {elapsed:.1f}s"
+        print(f"resize storm ok: 201 resizes settled in {elapsed:.2f}s")
+
         # --- split: two panes side by side, both usable ---
         a.frame(0, SPLIT, struct.pack("<IB", pane, 0))
         _, _, _, _, lpanes = parse_layout(a.expect_control(LAYOUT))
