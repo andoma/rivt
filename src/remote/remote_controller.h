@@ -71,6 +71,12 @@ private:
     std::unordered_set<uint32_t> m_fetching;      // scrollback fetch in flight
     std::unordered_set<uint32_t> m_fetch_done;    // daemon has no more history
 
+    // Reconnect after daemon restart/upgrade (sessions survive an exec).
+    void begin_reconnect();
+    bool m_reconnecting = false;
+    int m_reconnect_timer = -1;
+    int m_reconnect_attempts = 0;
+
     int m_cols = 80, m_rows = 24;
     int m_cell_w = 0, m_cell_h = 0;
     int m_content_x = 0, m_content_y = 0;

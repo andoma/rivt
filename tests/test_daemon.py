@@ -5,10 +5,10 @@ Usage: test_daemon.py <path-to-rivtd>"""
 import os, socket, struct, subprocess, sys, tempfile, time
 
 RIVTD = sys.argv[1]
-PROTO_VERSION = 3
+PROTO_VERSION = 4
 # control message types
 HELLO, LIST, CREATE, ATTACH, DETACH, RESIZE, KILL = 1, 2, 3, 4, 5, 6, 7
-SPLIT, CLOSE_PANE, NEW_WINDOW, CLOSE_WINDOW, FETCH_SCROLLBACK = 8, 9, 10, 11, 12
+SPLIT, CLOSE_PANE, NEW_WINDOW, CLOSE_WINDOW, FETCH_SCROLLBACK, UPGRADE = 8, 9, 10, 11, 12, 13
 HELLO_OK, SESSION_LIST, SESSION_CREATED, ATTACH_OK = 64, 65, 66, 67
 SESSION_CLOSED, PANE_EXITED, LAYOUT = 68, 69, 74
 WINDOW_ADDED, WINDOW_CLOSED = 75, 76
@@ -230,25 +230,65 @@ def main():
         print(f"persistence ok: snapshot holds {len(sb)} lines, {omitted} older on daemon")
 
         # --- lazy fetch: walk history backward until the marker appears ---
-        end = omitted
-        found = False
-        for _ in range(20):
-            b.frame(0, FETCH_SCROLLBACK, struct.pack("<III", pane, end, 500))
-            while True:
-                ch, ty, payload = b.recv_frame()
-                if ch == pane and ty == PANE_SCROLLBACK:
-                    break
-            start, n = struct.unpack("<II", payload[:8])
-            texts, _ = parse_lines(payload, 8, n)
-            assert start + n == end, f"gap: start={start} n={n} end={end}"
-            if any("OUT:rivt_marker_123" in t for t in texts):
-                found = True
-                break
-            if n == 0 or start == 0:
-                break
-            end = start
-        assert found, "marker not found in fetched history"
-        print(f"lazy fetch ok: marker recovered from history at abs<{end}")
+        def fetch_until_marker(conn, pane_id, end):
+            for _ in range(20):
+                conn.frame(0, FETCH_SCROLLBACK, struct.pack("<III", pane_id, end, 500))
+                while True:
+                    ch, ty, payload = conn.recv_frame()
+                    if ch == pane_id and ty == PANE_SCROLLBACK:
+                        break
+                start, n = struct.unpack("<II", payload[:8])
+                texts, _ = parse_lines(payload, 8, n)
+                assert start + n == end, f"gap: start={start} n={n} end={end}"
+                if any("OUT:rivt_marker_123" in t for t in texts):
+                    return True
+                if n == 0 or start == 0:
+                    return False
+                end = start
+            return False
+
+        assert fetch_until_marker(b, pane, omitted), "marker not found in fetched history"
+        print("lazy fetch ok: marker recovered from history")
+
+        # --- upgrade: daemon re-execs, same pid, sessions + fds survive ---
+        pid_before = daemon.pid
+        b.frame(0, UPGRADE, b"")
+        b.s.close()
+        time.sleep(1.0)
+        assert daemon.poll() is None, "daemon died during upgrade"
+        assert daemon.pid == pid_before
+
+        c = Conn(sock)
+        c.hello()
+        c.frame(0, LIST, b"")
+        p = c.expect_control(SESSION_LIST)
+        (n,) = struct.unpack("<I", p[:4])
+        assert n == 1, f"expected 1 session after upgrade, got {n}"
+        c.frame(0, ATTACH, struct.pack("<I", sid))
+        c.expect_control(ATTACH_OK)
+        wsid, wid = struct.unpack("<II", c.expect_control(WINDOW_ADDED)[:8])
+        assert wid == wid1, "window id changed across upgrade"
+        _, _, lcols, lrows, lpanes = parse_layout(c.expect_control(LAYOUT))
+        assert (lcols, lrows) == (100, 30) and lpanes[0][0] == pane
+        ch, ty, snap = c.recv_frame()
+        assert ty == PANE_SNAPSHOT
+        _, _, omitted2 = parse_snapshot(snap)
+        assert omitted2 > 0
+        # The shell is the same process on the same PTY: still interactive.
+        c.frame(pane, PANE_IN, b"printf 'ALIVE:%s\\n' yes\n")
+        c.collect_output(pane, b"ALIVE:yes")
+        # Full history survived the exec: the deep marker is still there.
+        assert fetch_until_marker(c, pane, omitted2), "history lost across upgrade"
+        c.s.close()
+        print(f"upgrade ok: pid {pid_before} unchanged, shell alive, history intact")
+
+        b = Conn(sock)
+        b.hello()
+        b.frame(0, ATTACH, struct.pack("<I", sid))
+        b.expect_control(ATTACH_OK)
+        b.expect_control(WINDOW_ADDED)
+        b.expect_control(LAYOUT)
+        b.recv_frame()
 
         # --- shell exit closes pane and session ---
         b.frame(pane, PANE_IN, b"exit\n")

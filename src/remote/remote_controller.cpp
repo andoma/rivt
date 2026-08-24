@@ -32,6 +32,12 @@ RemoteController::RemoteController(RemoteClient &client, Window &window, TabMana
     m_client.on_attach_ok = [this](uint32_t sid) {
         m_session_id = sid;
         m_active = true;
+        if (m_reconnecting) {
+            fprintf(stderr, "rivt: re-attached to session %u\n", sid);
+            m_reconnecting = false;
+        }
+        m_fetching.clear();
+        m_fetch_done.clear();
     };
 
     m_client.on_window_added = [this](uint32_t sid, uint32_t wid) {
@@ -138,12 +144,22 @@ RemoteController::RemoteController(RemoteClient &client, Window &window, TabMana
     };
 
     m_client.on_disconnect = [this]() {
-        fprintf(stderr, "rivt: lost connection to rivtd\n");
-        exit();
+        if (m_active && m_session_id) {
+            // A daemon upgrade (exec) drops all sockets but keeps the
+            // sessions. Try to reconnect and re-attach before giving up.
+            fprintf(stderr, "rivt: rivtd connection lost, reconnecting...\n");
+            begin_reconnect();
+        } else if (!m_reconnecting) {
+            fprintf(stderr, "rivt: lost connection to rivtd\n");
+            exit();
+        }
     };
 
-    m_client.on_error = [](const std::string &e) {
+    m_client.on_error = [this](const std::string &e) {
         fprintf(stderr, "rivt: rivtd error: %s\n", e.c_str());
+        // During a reconnect, "no such session" means the daemon came
+        // back without our state — nothing to re-attach to.
+        if (m_reconnecting) exit();
     };
 }
 
@@ -188,6 +204,7 @@ void RemoteController::apply_layout(uint32_t wid, int cols, int rows,
 
     // Create/update panes present in the layout.
     for (const auto &g : panes) {
+        if (g.cols < 2 || g.rows < 2) continue;  // degenerate geometry
         Pane *p;
         auto it = m_pane_map.find(g.id);
         if (it == m_pane_map.end()) {
@@ -288,6 +305,33 @@ void RemoteController::detach() {
 // The tab bar appears at 2 tabs and disappears at 1. Grow/shrink the
 // window so the terminal grid is unchanged, and shift existing pane
 // rects by the content-origin delta (same dance as TmuxController).
+void RemoteController::begin_reconnect() {
+    m_active = false;
+    m_target_sid = m_session_id;  // hello_ok re-attaches to the same session
+    m_reconnecting = true;
+    m_reconnect_attempts = 0;
+    EventLoop &loop = m_client.loop();
+    m_reconnect_timer = loop.add_timer(300, [this]() {
+        if (!m_reconnecting) return;
+        m_reconnect_attempts++;
+        // No autostart while the daemon execs — a race would spawn a
+        // fresh empty daemon over the upgrading one.
+        if (m_client.connect(m_client.path(), /*autostart=*/false)) {
+            m_client.loop().remove_timer(m_reconnect_timer);
+            m_reconnect_timer = -1;
+            m_client.hello();
+            return;
+        }
+        if (m_reconnect_attempts >= 15) {  // ~4.5 s
+            m_client.loop().remove_timer(m_reconnect_timer);
+            m_reconnect_timer = -1;
+            m_reconnecting = false;
+            fprintf(stderr, "rivt: rivtd did not come back\n");
+            exit();
+        }
+    }, true);
+}
+
 void RemoteController::request_scrollback(uint32_t pane_id) {
     if (!m_active || m_fetching.count(pane_id) || m_fetch_done.count(pane_id)) return;
     auto it = m_pane_map.find(pane_id);

@@ -55,6 +55,9 @@ public:
 
     // Get root node (for inspection)
     LayoutNode *root() { return m_root.get(); }
+
+    // Replace the whole tree (daemon handover reconstructs it directly).
+    void set_root(std::unique_ptr<LayoutNode> r) { m_root = std::move(r); }
     const LayoutNode *root() const { return m_root.get(); }
 
     bool empty() const { return !m_root; }

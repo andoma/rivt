@@ -31,6 +31,7 @@
 #include <sys/un.h>
 #include <sys/wait.h>
 #include <unistd.h>
+#include <fcntl.h>
 
 namespace rivt {
 
@@ -77,11 +78,19 @@ struct PaneRef {
     Pane *pane;
 };
 
+static constexpr uint32_t HANDOVER_VERSION = 1;
+
 class Daemon {
 public:
-    Daemon(std::string socket_path) : m_path(std::move(socket_path)) {}
+    Daemon(std::string socket_path, std::string handover_path)
+        : m_path(std::move(socket_path)), m_handover_in(std::move(handover_path)) {
+        char exe[4096];
+        ssize_t n = readlink("/proc/self/exe", exe, sizeof(exe) - 1);
+        if (n > 0) { exe[n] = 0; m_exe = exe; }
+    }
 
     bool init() {
+        if (!m_handover_in.empty()) restore_handover(m_handover_in);
         // Signals via signalfd: SIGCHLD for reaping, SIGTERM/SIGINT to quit.
         sigset_t mask;
         sigemptyset(&mask);
@@ -89,6 +98,7 @@ public:
         sigaddset(&mask, SIGTERM);
         sigaddset(&mask, SIGINT);
         sigaddset(&mask, SIGPIPE);
+        sigaddset(&mask, SIGUSR1);  // upgrade: re-exec with sessions kept
         sigprocmask(SIG_BLOCK, &mask, nullptr);
         m_sig_fd = signalfd(-1, &mask, SFD_NONBLOCK | SFD_CLOEXEC);
         if (m_sig_fd < 0) { perror("signalfd"); return false; }
@@ -143,6 +153,8 @@ private:
         while (read(m_sig_fd, &si, sizeof si) == sizeof si) {
             if (si.ssi_signo == SIGTERM || si.ssi_signo == SIGINT)
                 m_loop.request_quit();
+            if (si.ssi_signo == SIGUSR1)
+                upgrade();
             if (si.ssi_signo == SIGCHLD)
                 while (waitpid(-1, nullptr, WNOHANG) > 0) {}
         }
@@ -254,6 +266,10 @@ private:
 
     void handle_control(Client *c, MsgType t, const uint8_t *data, size_t len) {
         proto::Reader r(data, len);
+        if (t == MsgType::UpgradeDaemon) {
+            upgrade();
+            return;
+        }
         if (!c->hello) {
             uint32_t ver = (t == MsgType::Hello) ? r.u32() : 0;
             if (t != MsgType::Hello || !r.ok || ver != proto::PROTO_VERSION) {
@@ -652,7 +668,171 @@ private:
         }
     }
 
+    // ---------------- upgrade / handover ----------------
+
+    static void encode_layout_node(proto::Writer &w, const LayoutNode *n,
+                                   const std::vector<std::pair<uint16_t, std::unique_ptr<Pane>>> &panes) {
+        if (n->is_leaf()) {
+            uint16_t pid = 0;
+            for (auto &[id, p] : panes)
+                if (p.get() == n->pane) pid = id;
+            w.u8(0);
+            w.u16(pid);
+        } else {
+            w.u8(1);
+            w.u8(n->split_dir == SplitDir::Vertical ? 0 : 1);
+            w.u32((uint32_t)(n->ratio * 1000000.0f));
+            encode_layout_node(w, n->first.get(), panes);
+            encode_layout_node(w, n->second.get(), panes);
+        }
+    }
+
+    static std::unique_ptr<LayoutNode> decode_layout_node(
+        proto::Reader &r, const std::unordered_map<uint16_t, Pane *> &by_id) {
+        auto n = std::make_unique<LayoutNode>();
+        uint8_t type = r.u8();
+        if (!r.ok) return nullptr;
+        if (type == 0) {
+            auto it = by_id.find(r.u16());
+            if (it == by_id.end()) return nullptr;
+            n->pane = it->second;
+        } else {
+            n->split_dir = r.u8() == 0 ? SplitDir::Vertical : SplitDir::Horizontal;
+            n->ratio = (float)r.u32() / 1000000.0f;
+            n->first = decode_layout_node(r, by_id);
+            n->second = decode_layout_node(r, by_id);
+            if (!n->first || !n->second) return nullptr;
+        }
+        return n;
+    }
+
+    void upgrade() {
+        if (m_exe.empty()) {
+            fprintf(stderr, "rivtd: upgrade: /proc/self/exe unknown\n");
+            return;
+        }
+        proto::Writer w;
+        w.u32(0x444E4852);  // "RHND"
+        w.u32(HANDOVER_VERSION);
+        w.u32(m_next_sid);
+        w.u32(m_next_wid);
+        w.u16(m_next_pane);
+        w.u32((uint32_t)m_sessions.size());
+        for (auto &[sid, sess] : m_sessions) {
+            w.u32(sid);
+            w.str(sess.name);
+            w.u16((uint16_t)sess.cols);
+            w.u16((uint16_t)sess.rows);
+            w.u32((uint32_t)sess.windows.size());
+            for (auto &win : sess.windows) {
+                w.u32(win.id);
+                w.u32((uint32_t)win.panes.size());
+                for (auto &[pid, pane] : win.panes) {
+                    w.u16(pid);
+                    w.i32(pane->pty().fd());
+                    w.i32((int32_t)pane->pty().child_pid());
+                    w.str(pane->cwd);
+                    auto blob = proto::Snapshot::serialize(pane->screen(), pane->parser(), -1);
+                    w.u32((uint32_t)blob.size());
+                    w.bytes(blob.data(), blob.size());
+                    // The master fd must survive the exec.
+                    fcntl(pane->pty().fd(), F_SETFD, 0);
+                }
+                encode_layout_node(w, win.layout.root(), win.panes);
+            }
+        }
+
+        std::string file = m_path + ".handover";
+        int fd = open(file.c_str(), O_WRONLY | O_CREAT | O_TRUNC, 0600);
+        if (fd < 0 || ::write(fd, w.buf.data(), w.buf.size()) != (ssize_t)w.buf.size()) {
+            fprintf(stderr, "rivtd: upgrade: cannot write %s\n", file.c_str());
+            if (fd >= 0) close(fd);
+            return;
+        }
+        close(fd);
+
+        fprintf(stderr, "rivtd: upgrading via exec (%zu sessions)\n", m_sessions.size());
+        execl(m_exe.c_str(), "rivtd", "--socket", m_path.c_str(),
+              "--handover", file.c_str(), (char *)nullptr);
+        // exec failed: nothing was torn down (fds/CLOEXEC aside), keep serving.
+        perror("rivtd: upgrade: exec");
+        unlink(file.c_str());
+    }
+
+    void restore_handover(const std::string &file) {
+        std::vector<uint8_t> data;
+        int fd = open(file.c_str(), O_RDONLY);
+        if (fd < 0) return;
+        char buf[65536];
+        ssize_t n;
+        while ((n = ::read(fd, buf, sizeof buf)) > 0) data.insert(data.end(), buf, buf + n);
+        close(fd);
+        unlink(file.c_str());
+
+        proto::Reader r(data.data(), data.size());
+        if (r.u32() != 0x444E4852 || r.u32() != HANDOVER_VERSION || !r.ok) {
+            fprintf(stderr, "rivtd: incompatible handover file, starting fresh\n");
+            return;
+        }
+        m_next_sid = r.u32();
+        m_next_wid = r.u32();
+        m_next_pane = r.u16();
+        uint32_t nsess = r.u32();
+        for (uint32_t i = 0; i < nsess && r.ok; i++) {
+            Session sess;
+            sess.id = r.u32();
+            sess.name = r.str();
+            sess.cols = r.u16();
+            sess.rows = r.u16();
+            uint32_t nwin = r.u32();
+            for (uint32_t j = 0; j < nwin && r.ok; j++) {
+                SrvWindow win;
+                win.id = r.u32();
+                uint32_t npanes = r.u32();
+                std::unordered_map<uint16_t, Pane *> by_id;
+                for (uint32_t k = 0; k < npanes && r.ok; k++) {
+                    uint16_t pid = r.u16();
+                    int pfd = r.i32();
+                    pid_t child = (pid_t)r.i32();
+                    std::string cwd = r.str();
+                    uint32_t bl = r.u32();
+                    if (!r.ok || r.remaining() < bl) { r.ok = false; break; }
+
+                    auto pane = std::make_unique<Pane>(sess.cols, sess.rows, m_config);
+                    if (!proto::Snapshot::deserialize(pane->screen(), pane->parser(),
+                                                      r.p, bl)) {
+                        fprintf(stderr, "rivtd: handover: bad snapshot for pane %u\n", pid);
+                        close(pfd);
+                        r.skip(bl);
+                        continue;
+                    }
+                    r.skip(bl);
+                    fcntl(pfd, F_SETFD, FD_CLOEXEC);  // re-arm for the next exec
+                    pane->adopt_shell(m_loop, pfd, child);
+                    pane->cwd = cwd;
+                    wire_pane(sess.id, pid, pane.get());
+                    win.panes.emplace_back(pid, std::move(pane));
+                    by_id[pid] = win.panes.back().second.get();
+                    m_panes[pid] = {sess.id, win.id, win.panes.back().second.get()};
+                }
+                auto root = decode_layout_node(r, by_id);
+                if (root) win.layout.set_root(std::move(root));
+                else if (!win.panes.empty()) win.layout.init(win.panes[0].second.get());
+                if (!win.panes.empty()) {
+                    // Rects are not part of the handover; recompute them
+                    // (this also re-syncs pane/PTY sizes to the layout).
+                    win.layout.compute_layout(0, 0, sess.cols, sess.rows, 1, 1, 1);
+                    sess.windows.push_back(std::move(win));
+                }
+            }
+            if (!sess.windows.empty()) m_sessions.emplace(sess.id, std::move(sess));
+        }
+        fprintf(stderr, "rivtd: handover restored %zu session(s)\n", m_sessions.size());
+    }
+
     std::string m_path;
+    std::string m_handover_in;
+    std::string m_exe;
     Config m_config;
     EventLoop m_loop;
     int m_listen_fd = -1;
@@ -677,14 +857,37 @@ static std::string default_socket_path() {
     return dir + "/daemon.sock";
 }
 
+// Ask a running daemon to upgrade itself (works across protocol versions).
+static int request_upgrade(const std::string &path) {
+    struct sockaddr_un addr {};
+    addr.sun_family = AF_UNIX;
+    if (path.size() >= sizeof(addr.sun_path)) return 1;
+    strcpy(addr.sun_path, path.c_str());
+    int fd = socket(AF_UNIX, SOCK_STREAM, 0);
+    if (connect(fd, (struct sockaddr *)&addr, sizeof(addr)) < 0) {
+        fprintf(stderr, "rivtd: no daemon at %s\n", path.c_str());
+        return 1;
+    }
+    uint8_t hdr[rivt::proto::FRAME_HEADER_SIZE];
+    rivt::proto::encode_frame_header(hdr, {0, 0, (uint16_t)rivt::proto::MsgType::UpgradeDaemon});
+    (void)!write(fd, hdr, sizeof hdr);
+    close(fd);
+    printf("rivtd: upgrade requested\n");
+    return 0;
+}
+
 int main(int argc, char **argv) {
-    std::string path;
+    std::string path, handover;
+    bool upgrade = false;
     for (int i = 1; i < argc; i++) {
         if (!strcmp(argv[i], "--socket") && i + 1 < argc) path = argv[++i];
+        else if (!strcmp(argv[i], "--handover") && i + 1 < argc) handover = argv[++i];
+        else if (!strcmp(argv[i], "--upgrade")) upgrade = true;
     }
     if (path.empty()) path = default_socket_path();
+    if (upgrade) return request_upgrade(path);
 
-    rivt::Daemon d(path);
+    rivt::Daemon d(path, handover);
     if (!d.init()) return 1;
     fprintf(stderr, "rivtd: listening on %s\n", path.c_str());
     return d.run();

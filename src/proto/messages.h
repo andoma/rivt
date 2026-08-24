@@ -6,7 +6,7 @@ namespace rivt::proto {
 // Bump on ANY wire-format change (messages, payloads, snapshot framing).
 // Daemon and client hard-reject mismatches with a clear error, so a
 // stale running daemon fails loudly instead of rendering nothing.
-constexpr uint32_t PROTO_VERSION = 3;
+constexpr uint32_t PROTO_VERSION = 4;
 
 // Frame types on pane channels (channel = pane id, > 0)
 enum PaneFrame : uint16_t {
@@ -35,6 +35,10 @@ enum class MsgType : uint16_t {
     FetchScrollback = 12, // u32 pane_id, u32 end_abs (exclusive), u32 count
                           //   — absolute line indices; reply is a
                           //   PANE_SCROLLBACK frame, possibly clamped
+    UpgradeDaemon = 13,   // - ; accepted even before Hello and across
+                          //   protocol versions (it exists to upgrade
+                          //   mismatched daemons): re-exec with sessions
+                          //   preserved
 
     // daemon -> client
     HelloOk = 64,        // u32 proto_version

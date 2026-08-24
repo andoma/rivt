@@ -39,6 +39,8 @@ public:
     bool connect(const std::string &path, bool autostart);
     void close();
     bool connected() const { return m_fd >= 0; }
+    const std::string &path() const { return m_path; }
+    EventLoop &loop() { return m_loop; }
 
     // Commands
     void hello();
@@ -86,6 +88,7 @@ private:
     void fail();
 
     EventLoop &m_loop;
+    std::string m_path;
     int m_fd = -1;
     std::string m_in, m_out;
     size_t m_out_off = 0;

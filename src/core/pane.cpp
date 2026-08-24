@@ -18,7 +18,16 @@ bool Pane::spawn_shell(EventLoop &loop, const std::string &start_cwd) {
     dbg("spawn_shell: cwd='%s'", start_cwd.c_str());
     if (!m_pty.spawn(m_screen.cols(), m_screen.rows(), "", start_cwd))
         return false;
+    register_pty(loop);
+    return true;
+}
 
+void Pane::adopt_shell(EventLoop &loop, int master_fd, pid_t child_pid) {
+    m_pty.adopt(master_fd, child_pid);
+    register_pty(loop);
+}
+
+void Pane::register_pty(EventLoop &loop) {
     m_loop = &loop;
     m_pty_fd_registered = m_pty.fd();
     loop.add_fd(m_pty.fd(), [this](uint32_t events) {
@@ -90,8 +99,6 @@ bool Pane::spawn_shell(EventLoop &loop, const std::string &start_cwd) {
             if (on_dead) on_dead(this);
         }
     });
-
-    return true;
 }
 
 void Pane::detach(EventLoop &loop) {

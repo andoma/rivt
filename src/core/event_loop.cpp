@@ -74,18 +74,21 @@ bool EventLoop::poll(int timeout_ms) {
     for (int i = 0; i < n; i++) {
         int fd = events[i].data.fd;
 
-        // Check timers first
+        // Check timers first. Copy id/repeating/cb before invoking: the
+        // callback may call remove_timer (even on itself), invalidating
+        // the reference into m_timers.
         bool is_timer = false;
         for (auto &t : m_timers) {
             if (t.fd == fd) {
+                is_timer = true;
                 uint64_t expirations;
                 if (read(t.fd, &expirations, sizeof(expirations)) == sizeof(expirations)) {
-                    t.cb();
-                    if (!t.repeating) {
-                        remove_timer(t.id);
-                    }
+                    int id = t.id;
+                    bool repeating = t.repeating;
+                    auto cb = t.cb;
+                    cb();
+                    if (!repeating) remove_timer(id);
                 }
-                is_timer = true;
                 break;
             }
         }

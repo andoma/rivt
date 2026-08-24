@@ -12,6 +12,12 @@ public:
     // Spawn a shell process, returns true on success
     bool spawn(int cols, int rows, const std::string &shell = "", const std::string &cwd = "");
 
+    // Adopt an already-open PTY master (daemon handover across exec).
+    void adopt(int master_fd, pid_t child_pid) {
+        m_master_fd = master_fd;
+        m_child_pid = child_pid;
+    }
+
     // Read from PTY master, returns bytes read (0 = would block, -1 = error/closed)
     int read(char *buf, int max_len);
 

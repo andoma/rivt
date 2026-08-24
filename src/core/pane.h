@@ -25,6 +25,9 @@ public:
     // Spawn shell and register PTY fd with event loop
     bool spawn_shell(EventLoop &loop, const std::string &start_cwd = "");
 
+    // Adopt an existing PTY (daemon handover): register fd, no fork.
+    void adopt_shell(EventLoop &loop, int master_fd, pid_t child_pid);
+
     // Remove PTY fd from event loop (called before destruction)
     void detach(EventLoop &loop);
 
@@ -97,6 +100,9 @@ private:
     // Arm or disarm EV_WRITE interest on the PTY fd to match whether the
     // PTY has queued bytes waiting to be flushed.
     void update_pty_write_interest();
+
+    // Shared between spawn_shell and adopt_shell.
+    void register_pty(EventLoop &loop);
 
     ScreenBuffer m_screen;
     VtParser m_parser;

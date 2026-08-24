@@ -134,6 +134,7 @@ done:
 }
 
 bool RemoteClient::connect(const std::string &path, bool autostart) {
+    m_path = path;
     m_fd = try_connect(path);
     if (m_fd < 0 && autostart) {
         dbg("remote: no daemon at %s, spawning rivtd", path.c_str());
