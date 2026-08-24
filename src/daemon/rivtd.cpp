@@ -140,7 +140,16 @@ public:
             };
             m_quic->on_closed = [this](net::QuicEngine::Conn *conn) {
                 Client *c = (Client *)conn->user;
-                if (c) { conn->user = nullptr; c->quic = nullptr; kill_client(c); }
+                if (c) {
+                    conn->user = nullptr;
+                    c->quic = nullptr;
+                    resume_session_panes(c->attached);  // never leave panes paused
+                    kill_client(c);
+                }
+            };
+            m_quic->on_drained = [this](net::QuicEngine::Conn *conn) {
+                Client *c = (Client *)conn->user;
+                if (c) resume_session_panes(c->attached);
             };
         }
         return true;
@@ -575,10 +584,17 @@ private:
     }
 
     void wire_pane(uint32_t sid, uint16_t pid, Pane *pane) {
-        pane->on_output = [this, sid, pid](const char *d, size_t n) {
-            for (auto &c : m_clients)
-                if (!c->dead && c->attached == sid)
-                    send_frame(c.get(), pid, proto::PANE_OUT, d, n);
+        pane->on_output = [this, sid, pid, pane](const char *d, size_t n) {
+            for (auto &c : m_clients) {
+                if (c->dead || c->attached != sid) continue;
+                send_frame(c.get(), pid, proto::PANE_OUT, d, n);
+                // Backpressure: a QUIC peer slower than the PTY pauses
+                // the producer; the shell blocks on the full PTY buffer.
+                // (Shared-pane caveat: one slow client stalls the pane
+                // for all — bounded-buffer resync is the step-5 answer.)
+                if (c->quic && c->quic->queued() > net::QuicEngine::SEND_HIGH_WATER)
+                    pane->set_read_paused(true);
+            }
         };
         pane->on_dead = [this, pid](Pane *) {
             if (m_panes.erase(pid))
@@ -650,6 +666,19 @@ private:
         wit->panes.emplace_back(pid, std::move(pane));
         m_panes[pid] = {s.id, wid, wit->panes.back().second.get()};
         relayout(s, *wit);
+    }
+
+    void resume_session_panes(uint32_t sid) {
+        auto it = m_sessions.find(sid);
+        if (it == m_sessions.end()) return;
+        // Only resume if no other attached client is still above water.
+        for (auto &c : m_clients)
+            if (!c->dead && c->attached == sid && c->quic &&
+                c->quic->queued() > net::QuicEngine::SEND_LOW_WATER)
+                return;
+        for (auto &win : it->second.windows)
+            for (auto &[pid, pane] : win.panes)
+                pane->set_read_paused(false);
     }
 
     void broadcast_event(uint32_t sid, MsgType t, uint16_t pid, const std::string &str_arg) {

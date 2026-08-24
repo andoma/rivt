@@ -115,7 +115,16 @@ void Pane::update_pty_write_interest() {
     bool want = m_pty.has_pending();
     if (want == m_pty_write_armed) return;  // avoid redundant epoll_ctl
     m_pty_write_armed = want;
-    m_loop->modify_fd(m_pty_fd_registered, want ? (EV_READ | EV_WRITE) : EV_READ);
+    uint32_t mask = (m_read_paused ? 0 : EV_READ) | (want ? EV_WRITE : 0);
+    m_loop->modify_fd(m_pty_fd_registered, mask);
+}
+
+void Pane::set_read_paused(bool paused) {
+    if (paused == m_read_paused) return;
+    m_read_paused = paused;
+    if (!m_loop || m_pty_fd_registered < 0) return;
+    uint32_t mask = (m_read_paused ? 0 : EV_READ) | (m_pty_write_armed ? EV_WRITE : 0);
+    m_loop->modify_fd(m_pty_fd_registered, mask);
 }
 
 void Pane::write(const std::string &data) {

@@ -27,6 +27,11 @@ public:
         bool established = false;
         bool dead = false;
         void *user = nullptr;  // owner's per-connection state
+        // Outbound bytes the stack hasn't pulled yet (active-stream
+        // API: picoquic asks for data when it can actually send).
+        std::string out;
+        size_t out_off = 0;
+        size_t queued() const { return out.size() - out_off; }
     };
 
     // Mutual authentication in both modes: our cert/key from identity,
@@ -42,6 +47,11 @@ public:
     std::function<void(Conn *)> on_connected;   // handshake complete
     std::function<void(Conn *)> on_closed;      // any teardown, fires once
     std::function<void(Conn *, const uint8_t *, size_t)> on_data;
+    // Send queue fell below the low-water mark: resume paused producers.
+    std::function<void(Conn *)> on_drained;
+
+    static constexpr size_t SEND_HIGH_WATER = 3 << 20;
+    static constexpr size_t SEND_LOW_WATER = 512 << 10;
 
     void send(Conn *c, const void *data, size_t len);
     void close_conn(Conn *c);
@@ -65,6 +75,7 @@ private:
     int m_fd = -1;
     int m_timer = -1;
     struct sockaddr_storage m_local {};
+    bool m_want_write = false;
     std::vector<std::unique_ptr<Conn>> m_conns;
     Conn *m_client_conn = nullptr;
 };

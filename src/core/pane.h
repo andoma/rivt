@@ -31,6 +31,10 @@ public:
     // Remove PTY fd from event loop (called before destruction)
     void detach(EventLoop &loop);
 
+    // Flow control: stop/resume consuming PTY output (the shell blocks
+    // on a full PTY buffer, which is exactly the backpressure we want).
+    void set_read_paused(bool paused);
+
     // Write data to the PTY (or write_callback if set)
     void write(const std::string &data);
     void write(const char *data, size_t len);
@@ -110,6 +114,7 @@ private:
     EventLoop *m_loop = nullptr;
     int m_pty_fd_registered = -1;
     bool m_pty_write_armed = false;
+    bool m_read_paused = false;
     std::shared_ptr<int> m_alive = std::make_shared<int>(0);
 };
 

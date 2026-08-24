@@ -117,9 +117,14 @@ bool QuicEngine::init(uint16_t bind_port, const Identity &id, const std::string 
     picoquic_set_default_handshake_timeout(m_quic, 5ull * 1000000);
 
     m_fd = socket(AF_INET6, SOCK_DGRAM | SOCK_NONBLOCK | SOCK_CLOEXEC, 0);
+    if (m_fd < 0) return false;
     int off = 0;
     setsockopt(m_fd, IPPROTO_IPV6, IPV6_V6ONLY, &off, sizeof off);  // dual stack
-    if (m_fd < 0) return false;
+    // Bulk terminal output is bursty; default UDP buffers overflow and
+    // silently drop, which QUIC pays for in loss recovery.
+    int bufsz = 4 << 20;
+    setsockopt(m_fd, SOL_SOCKET, SO_SNDBUF, &bufsz, sizeof bufsz);
+    setsockopt(m_fd, SOL_SOCKET, SO_RCVBUF, &bufsz, sizeof bufsz);
     struct sockaddr_in6 sa {};
     sa.sin6_family = AF_INET6;
     sa.sin6_port = htons(bind_port);
@@ -166,6 +171,26 @@ int QuicEngine::handle_event(picoquic_cnx_t *cnx, Conn *conn, uint64_t stream_id
         conn->established = true;
         if (on_connected) on_connected(conn);
         break;
+    case picoquic_callback_prepare_to_send: {
+        // The stack can send on our stream: feed it from conn->out.
+        // 'bytes' is the opaque buffer context, 'length' the max size.
+        size_t avail = conn->queued();
+        size_t chunk = avail < length ? avail : length;
+        bool before_high = conn->queued() >= SEND_LOW_WATER;
+        uint8_t *dst = picoquic_provide_stream_data_buffer(bytes, chunk, 0,
+                                                           chunk < avail);
+        if (dst && chunk > 0) {
+            memcpy(dst, conn->out.data() + conn->out_off, chunk);
+            conn->out_off += chunk;
+            if (conn->out_off == conn->out.size()) {
+                conn->out.clear();
+                conn->out_off = 0;
+            }
+        }
+        if (before_high && conn->queued() < SEND_LOW_WATER && on_drained && !conn->dead)
+            on_drained(conn);
+        break;
+    }
     case picoquic_callback_stream_data:
     case picoquic_callback_stream_fin:
         if (stream_id == STREAM_ID && length > 0 && on_data && !conn->dead)
@@ -186,7 +211,8 @@ int QuicEngine::handle_event(picoquic_cnx_t *cnx, Conn *conn, uint64_t stream_id
 
 void QuicEngine::send(Conn *c, const void *data, size_t len) {
     if (!c || c->dead) return;
-    picoquic_add_to_stream(c->cnx, STREAM_ID, (const uint8_t *)data, len, 0);
+    c->out.append((const char *)data, len);
+    picoquic_mark_active_stream(c->cnx, STREAM_ID, 1, nullptr);
     pump();
 }
 
@@ -197,6 +223,11 @@ void QuicEngine::close_conn(Conn *c) {
 }
 
 void QuicEngine::on_socket(uint32_t events) {
+    if (events & EV_WRITE) {
+        m_want_write = false;
+        m_loop.modify_fd(m_fd, EV_READ);
+        pump();
+    }
     if (!(events & EV_READ)) return;
     uint8_t buf[65536];
     for (;;) {
@@ -229,6 +260,15 @@ void QuicEngine::pump() {
                                        : sizeof(struct sockaddr_in6));
         if (qdbg()) fprintf(stderr, "quic[%p] tx %zu -> %zd (fam %d)\n",
                             (void *)this, send_len, sent, to.ss_family);
+        if (sent < 0 && (errno == EAGAIN || errno == EWOULDBLOCK)) {
+            // Kernel buffer full: this packet is lost to us (QUIC will
+            // retransmit), stop bursting and resume when writable.
+            if (!m_want_write) {
+                m_want_write = true;
+                m_loop.modify_fd(m_fd, EV_READ | EV_WRITE);
+            }
+            break;
+        }
     }
     int64_t delay_us = picoquic_get_next_wake_delay(m_quic, picoquic_current_time(),
                                                     60ll * 1000000);

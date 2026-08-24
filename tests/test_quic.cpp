@@ -111,4 +111,59 @@ TEST(quic_rejects_unauthorized_peer) {
     ASSERT_STR_EQ(leaked, "");          // and no data may cross
 }
 
+TEST(quic_bulk_throughput_with_backpressure) {
+    std::string da = tmpd("t1"), db = tmpd("t2");
+    auto ida = Identity::load_or_create(da);
+    auto idb = Identity::load_or_create(db);
+    std::string bundle_a = da + "/authorized.pem", bundle_b = db + "/authorized.pem";
+    append_file(bundle_a, idb->cert_pem());
+    append_file(bundle_b, ida->cert_pem());
+
+    EventLoop loop;
+    uint16_t port = 47833;
+    auto server = QuicEngine::listen(loop, port, *ida, bundle_a);
+    QuicEngine::Conn *sconn = nullptr;
+    size_t received = 0;
+    uint8_t expect = 0;
+    bool corrupt = false;
+    server->on_data = [&](QuicEngine::Conn *c, const uint8_t *d, size_t n) {
+        sconn = c;
+        for (size_t i = 0; i < n; i++)
+            if (d[i] != (uint8_t)(received + i)) corrupt = true;
+        received += n;
+        (void)expect;
+    };
+
+    auto client = QuicEngine::connect(loop, "127.0.0.1", port, *idb, bundle_b);
+    bool connected = false;
+    client->on_connected = [&](QuicEngine::Conn *) { connected = true; };
+    ASSERT_TRUE(pump_until(loop, [&] { return connected; }));
+
+    // Producer honoring the watermarks, as the daemon does with PTYs.
+    constexpr size_t TOTAL = 20 << 20;
+    size_t produced = 0;
+    bool paused = false;
+    client->on_drained = [&](QuicEngine::Conn *) { paused = false; };
+    auto produce = [&]() {
+        while (!paused && produced < TOTAL) {
+            uint8_t chunk[65536];
+            size_t n = TOTAL - produced < sizeof chunk ? TOTAL - produced : sizeof chunk;
+            for (size_t i = 0; i < n; i++) chunk[i] = (uint8_t)(produced + i);
+            client->send(client->client_conn(), chunk, n);
+            produced += n;
+            if (client->client_conn()->queued() > QuicEngine::SEND_HIGH_WATER)
+                paused = true;
+        }
+    };
+
+    bool ok = pump_until(loop, [&] {
+        produce();
+        return received >= TOTAL;
+    }, 30000);
+    ASSERT_TRUE(ok);
+    ASSERT_EQ(received, TOTAL);
+    ASSERT_FALSE(corrupt);
+    ASSERT_TRUE(sconn != nullptr);
+}
+
 int main() { return run_tests(); }
