@@ -180,6 +180,8 @@ bool RemoteClient::query_sessions(const std::string &path, bool autostart,
 bool RemoteClient::connect(const RemoteEndpoint &ep, bool autostart) {
     if (!ep.is_quic()) return connect(ep.unix_path, autostart);
     m_endpoint = ep;
+    if (m_quic) close();
+    m_stale_quic.reset();  // fresh stack: safe to dispose a parked engine
 
     if (!m_identity) {
         m_identity = net::Identity::load_or_create();
@@ -197,7 +199,7 @@ bool RemoteClient::connect(const RemoteEndpoint &ep, bool autostart) {
         process();
     };
     m_quic->on_closed = [this](net::QuicEngine::Conn *) {
-        m_quic_conn = nullptr;
+        // fail() must see connected()==true to run; close() clears the conn.
         fail();
     };
     return true;
@@ -224,7 +226,9 @@ bool RemoteClient::connect(const std::string &path, bool autostart) {
 void RemoteClient::close() {
     if (m_quic) {
         m_quic_conn = nullptr;
-        m_quic.reset();
+        // Never destroy the engine here — we may be on its own callback
+        // stack. Park it; disposed at the next connect or in ~RemoteClient.
+        m_stale_quic = std::move(m_quic);
     }
     if (m_fd >= 0) {
         m_loop.remove_fd(m_fd);

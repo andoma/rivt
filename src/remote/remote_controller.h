@@ -76,6 +76,7 @@ private:
 
     // Reconnect after daemon restart/upgrade (sessions survive an exec).
     void begin_reconnect();
+    void schedule_reconnect_attempt();
     bool m_reconnecting = false;
     int m_reconnect_timer = -1;
     int m_reconnect_attempts = 0;

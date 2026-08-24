@@ -155,12 +155,18 @@ RemoteController::RemoteController(RemoteClient &client, Window &window, TabMana
     };
 
     m_client.on_disconnect = [this]() {
+        if (m_reconnecting) {
+            // A reconnect attempt's handshake failed asynchronously
+            // (QUIC connects resolve after connect() returns) — retry.
+            schedule_reconnect_attempt();
+            return;
+        }
         if (m_active && m_session_id) {
             // A daemon upgrade (exec) drops all sockets but keeps the
             // sessions. Try to reconnect and re-attach before giving up.
             fprintf(stderr, "rivt: rivtd connection lost, reconnecting...\n");
             begin_reconnect();
-        } else if (!m_reconnecting) {
+        } else {
             fprintf(stderr, "rivt: lost connection to rivtd\n");
             exit();
         }
@@ -321,25 +327,30 @@ void RemoteController::begin_reconnect() {
     m_target_sid = m_session_id;  // hello_ok re-attaches to the same session
     m_reconnecting = true;
     m_reconnect_attempts = 0;
-    EventLoop &loop = m_client.loop();
-    m_reconnect_timer = loop.add_timer(300, [this]() {
+    schedule_reconnect_attempt();
+}
+
+void RemoteController::schedule_reconnect_attempt() {
+    if (m_reconnect_timer >= 0) return;  // one pending attempt at a time
+    if (m_reconnect_attempts >= 10) {    // ~1 min worst case with 5 s handshakes
+        m_reconnecting = false;
+        fprintf(stderr, "rivt: rivtd did not come back\n");
+        exit();
+        return;
+    }
+    m_reconnect_timer = m_client.loop().add_timer(500, [this]() {
+        m_client.loop().remove_timer(m_reconnect_timer);
+        m_reconnect_timer = -1;
         if (!m_reconnecting) return;
         m_reconnect_attempts++;
         // No autostart while the daemon execs — a race would spawn a
-        // fresh empty daemon over the upgrading one.
-        if (m_client.reconnect()) {
-            m_client.loop().remove_timer(m_reconnect_timer);
-            m_reconnect_timer = -1;
+        // fresh empty daemon over the upgrading one. For QUIC, a true
+        // return only means the handshake started; failures arrive via
+        // on_disconnect, which re-schedules.
+        if (m_client.reconnect())
             m_client.hello();
-            return;
-        }
-        if (m_reconnect_attempts >= 15) {  // ~4.5 s
-            m_client.loop().remove_timer(m_reconnect_timer);
-            m_reconnect_timer = -1;
-            m_reconnecting = false;
-            fprintf(stderr, "rivt: rivtd did not come back\n");
-            exit();
-        }
+        else
+            schedule_reconnect_attempt();
     }, true);
 }
 

@@ -79,6 +79,12 @@ std::unique_ptr<QuicEngine> QuicEngine::connect(EventLoop &loop, const std::stri
 }
 
 QuicEngine::~QuicEngine() {
+    // picoquic_free tears down connections, which emits close events;
+    // during destruction the owner is (partially) gone, so no user
+    // callbacks may fire.
+    on_connected = nullptr;
+    on_closed = nullptr;
+    on_data = nullptr;
     if (m_timer >= 0) m_loop.remove_timer(m_timer);
     if (m_fd >= 0) {
         m_loop.remove_fd(m_fd);
@@ -101,6 +107,14 @@ bool QuicEngine::init(uint16_t bind_port, const Identity &id, const std::string 
     // authorized bundle (self-signed peer certs are their own roots).
     picoquic_set_client_authentication(m_quic, 1);
     picoquic_disable_port_blocking(m_quic, 1);
+    // Terminal sessions idle for long stretches; keep-alives (enabled
+    // per connection, defaulting to idle/2) must fit inside this.
+    uint64_t idle_ms = 60000;
+    if (const char *e = getenv("RIVT_QUIC_IDLE_MS")) idle_ms = strtoull(e, nullptr, 10);
+    picoquic_set_default_idle_timeout(m_quic, idle_ms);
+    // Fail unreachable peers quickly (reconnect loops depend on this;
+    // picoquic's default is ~30 s).
+    picoquic_set_default_handshake_timeout(m_quic, 5ull * 1000000);
 
     m_fd = socket(AF_INET6, SOCK_DGRAM | SOCK_NONBLOCK | SOCK_CLOEXEC, 0);
     int off = 0;
@@ -129,6 +143,7 @@ QuicEngine::Conn *QuicEngine::adopt(picoquic_cnx_t *cnx) {
     Conn *raw = conn.get();
     m_conns.push_back(std::move(conn));
     picoquic_set_callback(cnx, engine_stream_cb, raw);
+    picoquic_enable_keep_alive(cnx, 0);  // idle_timeout / 2
     return raw;
 }
 

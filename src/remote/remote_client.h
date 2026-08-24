@@ -105,6 +105,10 @@ private:
     RemoteEndpoint m_endpoint;
     std::unique_ptr<net::Identity> m_identity;
     std::unique_ptr<net::QuicEngine> m_quic;
+    // close() can run inside m_quic's own callback (on_closed -> fail);
+    // the engine is parked here and disposed on a fresh stack (next
+    // connect, or our destructor).
+    std::unique_ptr<net::QuicEngine> m_stale_quic;
     net::QuicEngine::Conn *m_quic_conn = nullptr;
     int m_fd = -1;
     std::string m_in, m_out;

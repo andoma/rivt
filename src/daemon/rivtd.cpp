@@ -798,6 +798,13 @@ private:
         }
         close(fd);
 
+        // QUIC sockets die silently across exec; close connections
+        // properly so clients reconnect immediately instead of waiting
+        // out the idle timeout. (Unix clients see EOF on their own.)
+        if (m_quic)
+            for (auto &c : m_clients)
+                if (c->quic) m_quic->close_conn(c->quic);
+
         fprintf(stderr, "rivtd: upgrading via exec (%zu sessions)\n", m_sessions.size());
         std::string port = std::to_string(m_listen_port);
         if (m_listen_port > 0)
@@ -886,10 +893,12 @@ private:
     std::string m_handover_in;
     std::string m_exe;
     int m_listen_port = 0;
-    std::unique_ptr<net::Identity> m_identity;
-    std::unique_ptr<net::QuicEngine> m_quic;
     Config m_config;
     EventLoop m_loop;
+    // Declared after m_loop: the engine unregisters its fd/timer from
+    // the loop in its destructor, so it must be destroyed first.
+    std::unique_ptr<net::Identity> m_identity;
+    std::unique_ptr<net::QuicEngine> m_quic;
     int m_listen_fd = -1;
     int m_sig_fd = -1;
     std::vector<std::unique_ptr<Client>> m_clients;
