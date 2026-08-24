@@ -126,11 +126,16 @@ int main(int argc, char *argv[]) {
     } else if (no_daemon) {
         create_window();
     } else {
-        // Default: daemon-backed throwaway session. Clean close kills it;
-        // a crash leaves it recoverable via rivt --remote. Fall back to
-        // the in-process terminal if the daemon can't be reached.
-        if (!create_remote_window(0, false)) {
-            fprintf(stderr, "rivt: daemon unreachable, running in-process\n");
+        // Default: daemon-backed throwaway session. Verify the daemon
+        // synchronously first (spawning or upgrading it as needed): a
+        // WM-launched terminal must always produce a window, so any
+        // failure falls back to the in-process terminal.
+        std::string path = remote_socket.empty() ? RemoteClient::default_socket_path()
+                                                 : remote_socket;
+        std::vector<RemoteSessionInfo> ignored;
+        bool daemon_ok = RemoteClient::query_sessions(path, /*autostart=*/true, ignored);
+        if (!daemon_ok || !create_remote_window(0, false)) {
+            fprintf(stderr, "rivt: daemon unavailable, running in-process\n");
             create_window();
         }
     }

@@ -72,17 +72,13 @@ static void spawn_daemon(const std::string &socket_path) {
     waitpid(pid, nullptr, 0);  // reap the intermediate child
 }
 
-bool RemoteClient::query_sessions(const std::string &path, bool autostart,
-                                  std::vector<RemoteSessionInfo> &out) {
+enum class QueryResult { Ok, NoDaemon, Mismatch };
+
+// One blocking hello+list roundtrip. Sets mismatch when the daemon
+// rejects our protocol version.
+static QueryResult query_once(const std::string &path, std::vector<RemoteSessionInfo> &out) {
     int fd = try_connect(path);
-    if (fd < 0 && autostart) {
-        spawn_daemon(path);
-        for (int i = 0; i < 40 && fd < 0; i++) {
-            usleep(50000);
-            fd = try_connect(path);
-        }
-    }
-    if (fd < 0) return false;
+    if (fd < 0) return QueryResult::NoDaemon;
 
     struct timeval tv = {5, 0};
     setsockopt(fd, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof tv);
@@ -99,22 +95,26 @@ bool RemoteClient::query_sessions(const std::string &path, bool autostart,
     send_msg((uint16_t)MsgType::ListSessions, {});
 
     std::string buf;
-    bool ok = false;
-    while (!ok) {
+    QueryResult res = QueryResult::NoDaemon;
+    bool done = false;
+    while (!done) {
         char tmp[4096];
         ssize_t n = read(fd, tmp, sizeof tmp);
         if (n <= 0) break;
         buf.append(tmp, n);
-        while (buf.size() >= proto::FRAME_HEADER_SIZE) {
+        while (!done && buf.size() >= proto::FRAME_HEADER_SIZE) {
             proto::FrameHeader h;
-            if (!proto::decode_frame_header((const uint8_t *)buf.data(), h)) goto done;
+            if (!proto::decode_frame_header((const uint8_t *)buf.data(), h)) { done = true; break; }
             if (buf.size() < proto::FRAME_HEADER_SIZE + h.len) break;
             proto::Reader r((const uint8_t *)buf.data() + proto::FRAME_HEADER_SIZE, h.len);
             if (h.channel == 0 && h.type == (uint16_t)MsgType::Error) {
-                fprintf(stderr, "rivt: rivtd: %s\n", r.str().c_str());
-                goto done;
-            }
-            if (h.channel == 0 && h.type == (uint16_t)MsgType::SessionList) {
+                std::string e = r.str();
+                if (e.rfind("protocol version mismatch", 0) == 0)
+                    res = QueryResult::Mismatch;
+                else
+                    fprintf(stderr, "rivt: rivtd: %s\n", e.c_str());
+                done = true;
+            } else if (h.channel == 0 && h.type == (uint16_t)MsgType::SessionList) {
                 uint32_t cnt = r.u32();
                 for (uint32_t i = 0; i < cnt && r.ok; i++) {
                     RemoteSessionInfo si;
@@ -123,14 +123,57 @@ bool RemoteClient::query_sessions(const std::string &path, bool autostart,
                     si.npanes = r.u32();
                     out.push_back(std::move(si));
                 }
-                ok = r.ok;
+                res = r.ok ? QueryResult::Ok : QueryResult::NoDaemon;
+                done = true;
             }
             buf.erase(0, proto::FRAME_HEADER_SIZE + h.len);
         }
     }
-done:
     ::close(fd);
-    return ok;
+    return res;
+}
+
+// Fire-and-forget UpgradeDaemon (accepted pre-Hello, version-agnostic).
+static void request_daemon_upgrade(const std::string &path) {
+    int fd = try_connect(path);
+    if (fd < 0) return;
+    uint8_t hdr[proto::FRAME_HEADER_SIZE];
+    proto::encode_frame_header(hdr, {0, 0, (uint16_t)MsgType::UpgradeDaemon});
+    (void)!write(fd, hdr, sizeof hdr);
+    ::close(fd);
+}
+
+bool RemoteClient::query_sessions(const std::string &path, bool autostart,
+                                  std::vector<RemoteSessionInfo> &out) {
+    QueryResult q = query_once(path, out);
+
+    if (q == QueryResult::NoDaemon && autostart) {
+        dbg("remote: no daemon at %s, spawning rivtd", path.c_str());
+        spawn_daemon(path);
+        for (int i = 0; i < 40 && q == QueryResult::NoDaemon; i++) {
+            usleep(50000);
+            out.clear();
+            q = query_once(path, out);
+        }
+    }
+
+    if (q == QueryResult::Mismatch) {
+        // An older daemon is running. Ask it to upgrade itself in place
+        // (sessions survive the exec) and retry. Daemons older than the
+        // upgrade mechanism ignore this; they must be killed by hand.
+        fprintf(stderr, "rivt: rivtd runs an older protocol, upgrading it in place...\n");
+        request_daemon_upgrade(path);
+        for (int i = 0; i < 40; i++) {
+            usleep(100000);
+            out.clear();
+            q = query_once(path, out);
+            if (q == QueryResult::Ok) return true;
+        }
+        fprintf(stderr,
+                "rivt: daemon did not upgrade (too old?) — kill it by pid: pgrep -a rivtd\n");
+        return false;
+    }
+    return q == QueryResult::Ok;
 }
 
 bool RemoteClient::connect(const std::string &path, bool autostart) {
