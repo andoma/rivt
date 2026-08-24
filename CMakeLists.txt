@@ -74,6 +74,8 @@ set(RIVT_SOURCES
     src/remote/remote_client.cpp
     src/remote/remote_controller.cpp
     src/proto/snapshot.cpp
+    src/net/identity.cpp
+    src/net/quic_engine.cpp
 )
 
 if(APPLE)
@@ -93,6 +95,7 @@ add_executable(rivt ${RIVT_SOURCES})
 target_include_directories(rivt PRIVATE
     src
     src/third_party
+    build/_deps/picoquic-src/picoquic
     ${FREETYPE_INCLUDE_DIRS}
     ${HARFBUZZ_INCLUDE_DIRS}
 )
@@ -123,6 +126,8 @@ endif()
 target_link_libraries(rivt PRIVATE
     ${FREETYPE_LIBRARIES}
     ${HARFBUZZ_LIBRARIES}
+    picoquic-core
+    OpenSSL::Crypto
 )
 
 target_link_directories(rivt PRIVATE
@@ -253,10 +258,12 @@ add_executable(rivtd
     src/terminal/kitty_graphics.cpp
     src/terminal/image_store.cpp
     src/pty/pty.cpp
+    src/net/identity.cpp
+    src/net/quic_engine.cpp
 )
-target_include_directories(rivtd PRIVATE src src/third_party)
+target_include_directories(rivtd PRIVATE src src/third_party build/_deps/picoquic-src/picoquic)
 target_compile_options(rivtd PRIVATE -Wall -Wextra -Wpedantic)
-target_link_libraries(rivtd PRIVATE util)
+target_link_libraries(rivtd PRIVATE util picoquic-core OpenSSL::Crypto)
 if(CMAKE_BUILD_TYPE STREQUAL "Debug")
     target_compile_options(rivtd PRIVATE -Og -ggdb -fsanitize=address)
     target_link_options(rivtd PRIVATE -fsanitize=address)

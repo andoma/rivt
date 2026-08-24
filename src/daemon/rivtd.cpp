@@ -9,6 +9,8 @@
 #include "core/event_loop.h"
 #include "core/layout.h"
 #include "core/pane.h"
+#include "net/identity.h"
+#include "net/quic_engine.h"
 #include "proto/frame.h"
 #include "proto/messages.h"
 #include "proto/snapshot.h"
@@ -41,7 +43,8 @@ static constexpr size_t CLIENT_OUT_MAX = 8 << 20;  // kill client past this
 static constexpr int ATTACH_SCROLLBACK_LINES = 2000;
 
 struct Client {
-    int fd = -1;
+    int fd = -1;                          // unix transport, or...
+    net::QuicEngine::Conn *quic = nullptr;  // ...QUIC transport
     std::string in;
     std::string out;
     size_t out_off = 0;
@@ -82,8 +85,9 @@ static constexpr uint32_t HANDOVER_VERSION = 1;
 
 class Daemon {
 public:
-    Daemon(std::string socket_path, std::string handover_path)
-        : m_path(std::move(socket_path)), m_handover_in(std::move(handover_path)) {
+    Daemon(std::string socket_path, std::string handover_path, int listen_port)
+        : m_path(std::move(socket_path)), m_handover_in(std::move(handover_path)),
+          m_listen_port(listen_port) {
         char exe[4096];
         ssize_t n = readlink("/proc/self/exe", exe, sizeof(exe) - 1);
         if (n > 0) { exe[n] = 0; m_exe = exe; }
@@ -106,6 +110,36 @@ public:
 
         if (!setup_socket()) return false;
         m_loop.add_fd(m_listen_fd, [this](uint32_t) { on_accept(); });
+
+        if (m_listen_port > 0) {
+            m_identity = net::Identity::load_or_create();
+            if (!m_identity) { fprintf(stderr, "rivtd: cannot create identity\n"); return false; }
+            std::string bundle = net::Identity::authorized_bundle_path();
+            m_quic = net::QuicEngine::listen(m_loop, (uint16_t)m_listen_port,
+                                             *m_identity, bundle);
+            if (!m_quic) return false;
+            fprintf(stderr,
+                    "rivtd: QUIC on udp/%d\n"
+                    "rivtd: fingerprint %s\n"
+                    "rivtd: authorized peers: %s\n",
+                    m_listen_port, m_identity->fingerprint().c_str(), bundle.c_str());
+            m_quic->on_connected = [this](net::QuicEngine::Conn *conn) {
+                auto c = std::make_unique<Client>();
+                c->quic = conn;
+                conn->user = c.get();
+                m_clients.push_back(std::move(c));
+            };
+            m_quic->on_data = [this](net::QuicEngine::Conn *conn, const uint8_t *d, size_t n) {
+                Client *c = (Client *)conn->user;
+                if (!c || c->dead) return;
+                c->in.append((const char *)d, n);
+                process_client(c);
+            };
+            m_quic->on_closed = [this](net::QuicEngine::Conn *conn) {
+                Client *c = (Client *)conn->user;
+                if (c) { conn->user = nullptr; c->quic = nullptr; kill_client(c); }
+            };
+        }
         return true;
     }
 
@@ -218,6 +252,13 @@ private:
     void send_frame(Client *c, uint16_t channel, uint16_t type,
                     const void *data, size_t len) {
         if (c->dead) return;
+        if (c->quic) {
+            uint8_t hdr[proto::FRAME_HEADER_SIZE];
+            proto::encode_frame_header(hdr, {(uint32_t)len, channel, type});
+            m_quic->send(c->quic, hdr, sizeof hdr);
+            m_quic->send(c->quic, data, len);
+            return;
+        }
         if (c->out.size() - c->out_off + len > CLIENT_OUT_MAX) {
             // Slow/stuck client. Design says snapshot-resync; v1 policy
             // is disconnect (the client reconnects and re-attaches).
@@ -236,6 +277,7 @@ private:
     }
 
     void flush_client(Client *c) {
+        if (c->quic) return;  // picoquic buffers internally
         while (c->out_off < c->out.size()) {
             ssize_t n = send(c->fd, c->out.data() + c->out_off,
                              c->out.size() - c->out_off, MSG_NOSIGNAL);
@@ -661,8 +703,13 @@ private:
             m_sweep_clients = false;
             for (auto &c : m_clients)
                 if (c->dead) {
-                    m_loop.remove_fd(c->fd);
-                    close(c->fd);
+                    if (c->quic) {
+                        c->quic->user = nullptr;
+                        m_quic->close_conn(c->quic);
+                    } else {
+                        m_loop.remove_fd(c->fd);
+                        close(c->fd);
+                    }
                 }
             std::erase_if(m_clients, [](auto &c) { return c->dead; });
         }
@@ -752,8 +799,13 @@ private:
         close(fd);
 
         fprintf(stderr, "rivtd: upgrading via exec (%zu sessions)\n", m_sessions.size());
-        execl(m_exe.c_str(), "rivtd", "--socket", m_path.c_str(),
-              "--handover", file.c_str(), (char *)nullptr);
+        std::string port = std::to_string(m_listen_port);
+        if (m_listen_port > 0)
+            execl(m_exe.c_str(), "rivtd", "--socket", m_path.c_str(),
+                  "--handover", file.c_str(), "--listen", port.c_str(), (char *)nullptr);
+        else
+            execl(m_exe.c_str(), "rivtd", "--socket", m_path.c_str(),
+                  "--handover", file.c_str(), (char *)nullptr);
         // exec failed: nothing was torn down (fds/CLOEXEC aside), keep serving.
         perror("rivtd: upgrade: exec");
         unlink(file.c_str());
@@ -833,6 +885,9 @@ private:
     std::string m_path;
     std::string m_handover_in;
     std::string m_exe;
+    int m_listen_port = 0;
+    std::unique_ptr<net::Identity> m_identity;
+    std::unique_ptr<net::QuicEngine> m_quic;
     Config m_config;
     EventLoop m_loop;
     int m_listen_fd = -1;
@@ -879,15 +934,27 @@ static int request_upgrade(const std::string &path) {
 int main(int argc, char **argv) {
     std::string path, handover;
     bool upgrade = false;
+    int listen_port = 0;
     for (int i = 1; i < argc; i++) {
         if (!strcmp(argv[i], "--socket") && i + 1 < argc) path = argv[++i];
         else if (!strcmp(argv[i], "--handover") && i + 1 < argc) handover = argv[++i];
         else if (!strcmp(argv[i], "--upgrade")) upgrade = true;
+        else if (!strcmp(argv[i], "--listen")) {
+            listen_port = 7433;
+            if (i + 1 < argc && atoi(argv[i + 1]) > 0) listen_port = atoi(argv[++i]);
+        } else if (!strcmp(argv[i], "--fingerprint")) {
+            auto id = rivt::net::Identity::load_or_create();
+            if (!id) return 1;
+            printf("fingerprint: %s\ncert: %s\nauthorized peers: %s\n",
+                   id->fingerprint().c_str(), id->cert_path().c_str(),
+                   rivt::net::Identity::authorized_bundle_path().c_str());
+            return 0;
+        }
     }
     if (path.empty()) path = default_socket_path();
     if (upgrade) return request_upgrade(path);
 
-    rivt::Daemon d(path, handover);
+    rivt::Daemon d(path, handover, listen_port);
     if (!d.init()) return 1;
     fprintf(stderr, "rivtd: listening on %s\n", path.c_str());
     return d.run();

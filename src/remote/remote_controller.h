@@ -20,7 +20,10 @@ class RemoteController {
 public:
     RemoteController(RemoteClient &client, Window &window, TabManager &tabs);
 
-    // Attach to session target_sid, or create a fresh session if 0.
+    static constexpr uint32_t ATTACH_NEWEST = 0xffffffff;
+
+    // Attach to session target_sid, a fresh session if 0, or the newest
+    // existing session (creating one if none) with ATTACH_NEWEST.
     // cols/rows: our window's grid; the daemon layout is sized to it.
     // kill_on_close: throwaway session — a clean window close kills it
     // (plain rivt semantics). A crash sends nothing, so it survives.

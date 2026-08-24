@@ -2,6 +2,7 @@
 #include "core/debug.h"
 #include "proto/frame.h"
 #include "proto/messages.h"
+#include "net/identity.h"
 
 #include <cstring>
 #include <errno.h>
@@ -176,8 +177,34 @@ bool RemoteClient::query_sessions(const std::string &path, bool autostart,
     return q == QueryResult::Ok;
 }
 
+bool RemoteClient::connect(const RemoteEndpoint &ep, bool autostart) {
+    if (!ep.is_quic()) return connect(ep.unix_path, autostart);
+    m_endpoint = ep;
+
+    if (!m_identity) {
+        m_identity = net::Identity::load_or_create();
+        if (!m_identity) {
+            fprintf(stderr, "rivt: cannot create device identity\n");
+            return false;
+        }
+    }
+    m_quic = net::QuicEngine::connect(m_loop, ep.host, ep.port, *m_identity,
+                                      net::Identity::authorized_bundle_path());
+    if (!m_quic) return false;
+    m_quic_conn = m_quic->client_conn();
+    m_quic->on_data = [this](net::QuicEngine::Conn *, const uint8_t *d, size_t n) {
+        m_in.append((const char *)d, n);
+        process();
+    };
+    m_quic->on_closed = [this](net::QuicEngine::Conn *) {
+        m_quic_conn = nullptr;
+        fail();
+    };
+    return true;
+}
+
 bool RemoteClient::connect(const std::string &path, bool autostart) {
-    m_path = path;
+    m_endpoint = RemoteEndpoint{path, "", 0};
     m_fd = try_connect(path);
     if (m_fd < 0 && autostart) {
         dbg("remote: no daemon at %s, spawning rivtd", path.c_str());
@@ -195,10 +222,15 @@ bool RemoteClient::connect(const std::string &path, bool autostart) {
 }
 
 void RemoteClient::close() {
-    if (m_fd < 0) return;
-    m_loop.remove_fd(m_fd);
-    ::close(m_fd);
-    m_fd = -1;
+    if (m_quic) {
+        m_quic_conn = nullptr;
+        m_quic.reset();
+    }
+    if (m_fd >= 0) {
+        m_loop.remove_fd(m_fd);
+        ::close(m_fd);
+        m_fd = -1;
+    }
     m_in.clear();
     m_out.clear();
     m_out_off = 0;
@@ -206,7 +238,7 @@ void RemoteClient::close() {
 }
 
 void RemoteClient::fail() {
-    if (m_failing || m_fd < 0) return;
+    if (m_failing || !connected()) return;
     m_failing = true;
     close();
     if (on_disconnect) on_disconnect();
@@ -235,7 +267,7 @@ void RemoteClient::on_event(uint32_t ev) {
 }
 
 void RemoteClient::process() {
-    while (m_fd >= 0 && m_in.size() >= proto::FRAME_HEADER_SIZE) {
+    while (connected() && m_in.size() >= proto::FRAME_HEADER_SIZE) {
         proto::FrameHeader h;
         if (!proto::decode_frame_header((const uint8_t *)m_in.data(), h)) {
             fail();
@@ -346,9 +378,14 @@ void RemoteClient::dispatch_control(uint16_t type, const uint8_t *data, size_t l
 }
 
 void RemoteClient::send_frame(uint16_t channel, uint16_t type, const void *data, size_t len) {
-    if (m_fd < 0) return;
     uint8_t hdr[proto::FRAME_HEADER_SIZE];
     proto::encode_frame_header(hdr, {(uint32_t)len, channel, type});
+    if (m_quic_conn) {
+        m_quic->send(m_quic_conn, hdr, sizeof hdr);
+        if (len) m_quic->send(m_quic_conn, data, len);
+        return;
+    }
+    if (m_fd < 0) return;
     m_out.append((const char *)hdr, sizeof hdr);
     m_out.append((const char *)data, len);
     flush();

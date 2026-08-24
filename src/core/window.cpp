@@ -339,6 +339,56 @@ void Window::mark_closing() {
     m_closing = true;
 }
 
+bool Window::init_remote_quic(const std::string &host, uint16_t port) {
+    m_platform = Platform::create();
+    if (!m_platform) return false;
+    std::string title = "rivt [" + host + "]";
+    if (!m_platform->create_window(m_win_w, m_win_h, title.c_str())) return false;
+    if (!m_platform->create_gl_context()) return false;
+    if (!m_renderer.init(m_config)) return false;
+
+    m_renderer.set_viewport(m_win_w, m_win_h);
+
+    m_tabs = std::make_unique<TabManager>(m_config, m_loop, m_platform.get());
+    m_tabs->on_needs_render = [this]() { m_needs_render = true; };
+    m_tabs->on_quit = [this]() {
+        if (on_close) on_close(this);
+    };
+
+    const auto &m = m_renderer.metrics();
+    m_tabs->set_cell_size(m.cell_width, m.cell_height);
+    m_win_w = m_config.initial_cols * m.cell_width;
+    m_win_h = m_config.initial_rows * m.cell_height + kBottomPad;
+    m_platform->resize_window(m_win_w, m_win_h);
+    m_renderer.set_viewport(m_win_w, m_win_h);
+
+    m_remote_client = std::make_unique<RemoteClient>(m_loop);
+    RemoteEndpoint ep;
+    ep.host = host;
+    ep.port = port;
+    if (!m_remote_client->connect(ep, false)) {
+        fprintf(stderr, "rivt: cannot reach %s:%u\n", host.c_str(), port);
+        return false;
+    }
+
+    m_remote_controller = std::make_unique<RemoteController>(*m_remote_client, *this, *m_tabs);
+    m_remote_controller->on_exit = [this]() {
+        if (on_close) on_close(this);
+    };
+
+    int bar_h = tab_bar_height();
+    int cols = m.cell_width > 0 ? m_win_w / m.cell_width : 80;
+    int rows = m.cell_height > 0 ? (m_win_h - bar_h - kBottomPad) / m.cell_height : 24;
+    m_remote_controller->initialize(cols, rows, m.cell_width, m.cell_height, 0, bar_h,
+                                    RemoteController::ATTACH_NEWEST,
+                                    /*kill_on_close=*/false);
+
+    m_platform->show_window();
+    setup_callbacks();
+    return true;
+}
+
+
 void Window::stop_tmux_pty_mode() {
     if (!m_tmux_gateway_pane) return;
 

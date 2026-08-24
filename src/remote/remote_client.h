@@ -1,12 +1,23 @@
 #pragma once
 #include "core/event_loop.h"
+#include "net/identity.h"
+#include "net/quic_engine.h"
 #include "proto/wire.h"
 #include <cstdint>
 #include <functional>
+#include <memory>
 #include <string>
 #include <vector>
 
 namespace rivt {
+
+// Where a daemon lives: a local unix socket, or a QUIC host:port.
+struct RemoteEndpoint {
+    std::string unix_path;
+    std::string host;
+    uint16_t port = 0;
+    bool is_quic() const { return !host.empty(); }
+};
 
 struct RemoteSessionInfo {
     uint32_t id;
@@ -35,11 +46,14 @@ public:
                                std::vector<RemoteSessionInfo> &out);
 
     // Connect to rivtd; if autostart, spawn one (double-forked, detached)
-    // when nobody is listening and retry briefly.
+    // when nobody is listening and retry briefly. (Unix transport only;
+    // QUIC daemons are started on their own machine.)
     bool connect(const std::string &path, bool autostart);
+    bool connect(const RemoteEndpoint &ep, bool autostart);
+    // Redo the last connect (daemon upgrade/restart, roaming).
+    bool reconnect() { return connect(m_endpoint, false); }
     void close();
-    bool connected() const { return m_fd >= 0; }
-    const std::string &path() const { return m_path; }
+    bool connected() const { return m_fd >= 0 || m_quic_conn != nullptr; }
     EventLoop &loop() { return m_loop; }
 
     // Commands
@@ -88,7 +102,10 @@ private:
     void fail();
 
     EventLoop &m_loop;
-    std::string m_path;
+    RemoteEndpoint m_endpoint;
+    std::unique_ptr<net::Identity> m_identity;
+    std::unique_ptr<net::QuicEngine> m_quic;
+    net::QuicEngine::Conn *m_quic_conn = nullptr;
     int m_fd = -1;
     std::string m_in, m_out;
     size_t m_out_off = 0;

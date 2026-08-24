@@ -48,9 +48,9 @@ static std::string read_file(const std::string &path) {
 }
 
 std::unique_ptr<Identity> Identity::load_or_create(const std::string &state_dir) {
-    std::string dir = state_dir.empty()
-                          ? home_subdir("XDG_STATE_HOME", ".local/state", nullptr)
-                          : state_dir;
+    std::string dir = state_dir;
+    if (dir.empty() && getenv("RIVT_STATE_DIR")) dir = getenv("RIVT_STATE_DIR");
+    if (dir.empty()) dir = home_subdir("XDG_STATE_HOME", ".local/state", nullptr);
     mkdir(dir.c_str(), 0700);
 
     auto id = std::make_unique<Identity>();
@@ -138,6 +138,8 @@ std::unique_ptr<Identity> Identity::load_or_create(const std::string &state_dir)
 }
 
 std::string Identity::authorized_bundle_path(const std::string &config_dir) {
+    if (config_dir.empty() && getenv("RIVT_AUTHORIZED_CERTS"))
+        return getenv("RIVT_AUTHORIZED_CERTS");
     std::string dir = config_dir.empty()
                           ? home_subdir("XDG_CONFIG_HOME", ".config", nullptr)
                           : config_dir;

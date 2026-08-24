@@ -48,6 +48,8 @@ int main(int argc, char *argv[]) {
     bool remote = false;      // persistent sessions + resume all
     bool no_daemon = false;   // classic in-process terminal
     std::string remote_socket;
+    std::string connect_host; // QUIC daemon on another machine
+    uint16_t connect_port = 7433;
     for (int i = 1; i < argc; i++) {
         if (strcmp(argv[i], "--debug") == 0 || strcmp(argv[i], "-d") == 0) {
             debug_enabled() = true;
@@ -57,6 +59,13 @@ int main(int argc, char *argv[]) {
             no_daemon = true;
         } else if (strcmp(argv[i], "--socket") == 0 && i + 1 < argc) {
             remote_socket = argv[++i];
+        } else if (strcmp(argv[i], "--connect") == 0 && i + 1 < argc) {
+            connect_host = argv[++i];
+            auto colon = connect_host.rfind(':');
+            if (colon != std::string::npos) {
+                connect_port = (uint16_t)atoi(connect_host.c_str() + colon + 1);
+                connect_host.resize(colon);
+            }
         }
     }
 
@@ -111,7 +120,16 @@ int main(int argc, char *argv[]) {
         windows.push_back(std::move(win));
     };
 
-    if (remote) {
+    if (!connect_host.empty()) {
+        auto win = std::make_unique<Window>(base_config, loop);
+        if (!win->init_remote_quic(connect_host, connect_port)) return 1;
+        Window *raw = win.get();
+        loop.add_fd(raw->event_fd(), [raw](uint32_t) {
+            raw->platform()->process_events();
+        });
+        raw->on_close = [](Window *w) { w->mark_closing(); };
+        windows.push_back(std::move(win));
+    } else if (remote) {
         // One window per existing session, so a restart resumes all of
         // them; a fresh session when the daemon holds none.
         std::string path = remote_socket.empty() ? RemoteClient::default_socket_path()

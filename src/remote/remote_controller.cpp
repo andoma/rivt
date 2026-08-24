@@ -11,12 +11,23 @@ RemoteController::RemoteController(RemoteClient &client, Window &window, TabMana
     : m_client(client), m_window(window), m_tabs(tabs) {
 
     m_client.on_hello_ok = [this]() {
-        if (m_target_sid) {
+        if (m_target_sid == ATTACH_NEWEST) {
+            m_client.list_sessions();
+        } else if (m_target_sid) {
             dbg("remote: attaching to session %u", m_target_sid);
             m_client.attach(m_target_sid);
         } else {
             dbg("remote: creating session (%dx%d)", m_cols, m_rows);
             m_client.create_session("", "", m_cols, m_rows);
+        }
+    };
+
+    m_client.on_session_list = [this](const std::vector<RemoteSessionInfo> &list) {
+        if (m_active || m_target_sid != ATTACH_NEWEST) return;
+        if (list.empty()) {
+            m_client.create_session("", "", m_cols, m_rows);
+        } else {
+            m_client.attach(list.back().id);
         }
     };
 
@@ -316,7 +327,7 @@ void RemoteController::begin_reconnect() {
         m_reconnect_attempts++;
         // No autostart while the daemon execs — a race would spawn a
         // fresh empty daemon over the upgrading one.
-        if (m_client.connect(m_client.path(), /*autostart=*/false)) {
+        if (m_client.reconnect()) {
             m_client.loop().remove_timer(m_reconnect_timer);
             m_reconnect_timer = -1;
             m_client.hello();
