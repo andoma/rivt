@@ -41,6 +41,9 @@ public:
     int add_timer(int interval_ms, TimerCallback cb, bool repeating = true);
     void remove_timer(int timer_id);
 
+    // Re-arm a repeating timer's next expiry (QUIC wake scheduling).
+    void reset_timer(int timer_id, int delay_ms);
+
 private:
     int m_backend_fd;  // epoll fd on Linux, kqueue fd on macOS
     bool m_quit = false;

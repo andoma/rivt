@@ -125,6 +125,19 @@ int EventLoop::add_timer(int interval_ms, TimerCallback cb, bool repeating) {
     return id;
 }
 
+void EventLoop::reset_timer(int timer_id, int delay_ms) {
+    if (delay_ms < 1) delay_ms = 1;
+    for (auto &t : m_timers) {
+        if (t.id != timer_id) continue;
+        struct itimerspec ts {};
+        ts.it_value.tv_sec = delay_ms / 1000;
+        ts.it_value.tv_nsec = (delay_ms % 1000) * 1000000L;
+        if (t.repeating) ts.it_interval = ts.it_value;
+        timerfd_settime(t.fd, 0, &ts, nullptr);
+        return;
+    }
+}
+
 void EventLoop::remove_timer(int timer_id) {
     auto it = std::find_if(m_timers.begin(), m_timers.end(),
         [timer_id](const TimerEntry &e) { return e.id == timer_id; });

@@ -7,6 +7,23 @@ set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 
 find_package(PkgConfig REQUIRED)
 
+# QUIC transport (rivtd <-> rivt across machines). Fetches pinned
+# picoquic + picotls at configure time; needs OpenSSL.
+option(RIVT_QUIC "Build QUIC remote transport" ON)
+if(RIVT_QUIC AND NOT APPLE)
+    include(FetchContent)
+    set(PICOQUIC_FETCH_PTLS Y CACHE BOOL "" FORCE)
+    set(PICOQUIC_BUILD_DEMOS OFF CACHE BOOL "" FORCE)
+    set(BUILD_TESTING OFF CACHE BOOL "" FORCE)
+    FetchContent_Declare(picoquic
+        GIT_REPOSITORY https://github.com/private-octopus/picoquic.git
+        GIT_TAG d199d45be8690dfa8653e214733243524112e3c0
+        EXCLUDE_FROM_ALL
+    )
+    FetchContent_MakeAvailable(picoquic)
+    find_package(OpenSSL REQUIRED)
+endif()
+
 pkg_check_modules(FREETYPE REQUIRED freetype2)
 pkg_check_modules(HARFBUZZ REQUIRED harfbuzz)
 
@@ -249,4 +266,21 @@ endif()
 
 if(NOT APPLE)
 add_test(NAME daemon COMMAND python3 ${CMAKE_SOURCE_DIR}/tests/test_daemon.py $<TARGET_FILE:rivtd>)
+endif()
+
+if(RIVT_QUIC AND NOT APPLE)
+add_executable(test_quic
+    tests/test_quic.cpp
+    src/net/identity.cpp
+    src/net/quic_engine.cpp
+    src/core/event_loop.cpp
+)
+target_include_directories(test_quic PRIVATE src build/_deps/picoquic-src/picoquic)
+target_compile_options(test_quic PRIVATE -Wall -Wextra -Wpedantic)
+target_link_libraries(test_quic PRIVATE picoquic-core OpenSSL::Crypto)
+if(CMAKE_BUILD_TYPE STREQUAL "Debug")
+    target_compile_options(test_quic PRIVATE -Og -ggdb -fsanitize=address)
+    target_link_options(test_quic PRIVATE -fsanitize=address)
+endif()
+add_test(NAME quic COMMAND test_quic)
 endif()
