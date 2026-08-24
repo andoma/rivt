@@ -7,6 +7,10 @@ set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 
 find_package(PkgConfig REQUIRED)
 
+# Headless machines (build/dev servers) need only rivtd: configure with
+# -DRIVT_UI=OFF and no graphics libraries are required at all.
+option(RIVT_UI "Build the rivt UI (requires freetype/xcb/GL...)" ON)
+
 # QUIC transport (rivtd <-> rivt across machines). Fetches pinned
 # picoquic + picotls at configure time; needs OpenSSL.
 option(RIVT_QUIC "Build QUIC remote transport" ON)
@@ -24,6 +28,7 @@ if(RIVT_QUIC AND NOT APPLE)
     find_package(OpenSSL REQUIRED)
 endif()
 
+if(RIVT_UI)
 pkg_check_modules(FREETYPE REQUIRED freetype2)
 pkg_check_modules(HARFBUZZ REQUIRED harfbuzz)
 
@@ -50,7 +55,9 @@ else()
     pkg_check_modules(GLESV2 REQUIRED glesv2)
     find_package(OpenGL REQUIRED)
 endif()
+endif() # RIVT_UI
 
+if(RIVT_UI)
 set(RIVT_SOURCES
     src/main.cpp
     src/core/config.cpp
@@ -95,7 +102,7 @@ add_executable(rivt ${RIVT_SOURCES})
 target_include_directories(rivt PRIVATE
     src
     src/third_party
-    build/_deps/picoquic-src/picoquic
+    ${picoquic_SOURCE_DIR}/picoquic
     ${FREETYPE_INCLUDE_DIRS}
     ${HARFBUZZ_INCLUDE_DIRS}
 )
@@ -172,8 +179,9 @@ endif()
 if(CMAKE_BUILD_TYPE STREQUAL "RelWithDebInfo")
     target_compile_options(rivt PRIVATE -O2 -g -fno-omit-frame-pointer)
 endif()
+endif() # RIVT_UI
 
-if(APPLE)
+if(RIVT_UI AND APPLE)
     set_target_properties(rivt PROPERTIES
         MACOSX_BUNDLE TRUE
         MACOSX_BUNDLE_INFO_PLIST "${CMAKE_SOURCE_DIR}/data/Info.plist.in"
@@ -186,12 +194,14 @@ endif()
 
 # Install
 include(GNUInstallDirs)
-if(APPLE)
-    install(TARGETS rivt BUNDLE DESTINATION .)
-else()
-    install(TARGETS rivt RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR})
-    install(FILES data/rivt.desktop DESTINATION ${CMAKE_INSTALL_DATADIR}/applications)
-    install(FILES data/rivt.svg DESTINATION ${CMAKE_INSTALL_DATADIR}/icons/hicolor/scalable/apps)
+if(RIVT_UI)
+    if(APPLE)
+        install(TARGETS rivt BUNDLE DESTINATION .)
+    else()
+        install(TARGETS rivt RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR})
+        install(FILES data/rivt.desktop DESTINATION ${CMAKE_INSTALL_DATADIR}/applications)
+        install(FILES data/rivt.svg DESTINATION ${CMAKE_INSTALL_DATADIR}/icons/hicolor/scalable/apps)
+    endif()
 endif()
 
 # Tests
@@ -261,7 +271,7 @@ add_executable(rivtd
     src/net/identity.cpp
     src/net/quic_engine.cpp
 )
-target_include_directories(rivtd PRIVATE src src/third_party build/_deps/picoquic-src/picoquic)
+target_include_directories(rivtd PRIVATE src src/third_party ${picoquic_SOURCE_DIR}/picoquic)
 target_compile_options(rivtd PRIVATE -Wall -Wextra -Wpedantic)
 target_link_libraries(rivtd PRIVATE util picoquic-core OpenSSL::Crypto)
 if(CMAKE_BUILD_TYPE STREQUAL "Debug")
@@ -282,7 +292,7 @@ add_executable(test_quic
     src/net/quic_engine.cpp
     src/core/event_loop.cpp
 )
-target_include_directories(test_quic PRIVATE src build/_deps/picoquic-src/picoquic)
+target_include_directories(test_quic PRIVATE src ${picoquic_SOURCE_DIR}/picoquic)
 target_compile_options(test_quic PRIVATE -Wall -Wextra -Wpedantic)
 target_link_libraries(test_quic PRIVATE picoquic-core OpenSSL::Crypto)
 if(CMAKE_BUILD_TYPE STREQUAL "Debug")
