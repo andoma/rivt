@@ -1,0 +1,206 @@
+#include "net/rendezvous.h"
+#include "net/identity.h"
+
+#include <openssl/ssl.h>
+
+#include <cstdio>
+#include <cstring>
+#include <ctime>
+#include <ifaddrs.h>
+#include <netdb.h>
+#include <arpa/inet.h>
+#include <unistd.h>
+
+namespace rivt::net {
+
+std::string rendezvous_url() {
+    if (const char *e = getenv("RIVT_RENDEZVOUS")) return e;
+    const char *cfg = getenv("XDG_CONFIG_HOME");
+    std::string path = cfg && *cfg ? std::string(cfg) + "/rivt/rendezvous"
+                                   : std::string(getenv("HOME") ? getenv("HOME") : ".") +
+                                         "/.config/rivt/rendezvous";
+    FILE *f = fopen(path.c_str(), "r");
+    if (!f) return {};
+    char line[512] = {0};
+    if (!fgets(line, sizeof line, f)) { fclose(f); return {}; }
+    fclose(f);
+    std::string url = line;
+    while (!url.empty() && (url.back() == '\n' || url.back() == '\r' || url.back() == '/'))
+        url.pop_back();
+    return url;
+}
+
+// Minimal blocking HTTPS/1.1 request. host from url ("https://host[/...]").
+static bool https_request(const std::string &url, const std::string &path,
+                          const std::string &method, const std::string &body,
+                          std::string &response_body) {
+    std::string host = url;
+    if (host.rfind("https://", 0) == 0) host = host.substr(8);
+    auto slash = host.find('/');
+    if (slash != std::string::npos) host.resize(slash);
+
+    SSL_CTX *ctx = SSL_CTX_new(TLS_client_method());
+    if (!ctx) return false;
+    SSL_CTX_set_default_verify_paths(ctx);
+    SSL_CTX_set_verify(ctx, SSL_VERIFY_PEER, nullptr);
+
+    BIO *bio = BIO_new_ssl_connect(ctx);
+    SSL *ssl = nullptr;
+    BIO_get_ssl(bio, &ssl);
+    SSL_set_mode(ssl, SSL_MODE_AUTO_RETRY);
+    SSL_set_tlsext_host_name(ssl, host.c_str());
+    SSL_set1_host(ssl, host.c_str());
+    BIO_set_conn_hostname(bio, (host + ":443").c_str());
+
+    bool ok = false;
+    std::string out;
+    if (BIO_do_connect(bio) == 1 && BIO_do_handshake(bio) == 1) {
+        char req[1024];
+        int n = snprintf(req, sizeof req,
+                         "%s %s HTTP/1.1\r\n"
+                         "Host: %s\r\n"
+                         "User-Agent: rivt/1\r\n"
+                         "Content-Type: application/json\r\n"
+                         "Content-Length: %zu\r\n"
+                         "Connection: close\r\n\r\n",
+                         method.c_str(), path.c_str(), host.c_str(), body.size());
+        if (n > 0 && BIO_write(bio, req, n) == n &&
+            (body.empty() || BIO_write(bio, body.data(), (int)body.size()) == (int)body.size())) {
+            char buf[4096];
+            int r;
+            while ((r = BIO_read(bio, buf, sizeof buf)) > 0) out.append(buf, r);
+            ok = true;
+        }
+    }
+    BIO_free_all(bio);
+    SSL_CTX_free(ctx);
+    if (!ok) return false;
+
+    // Split headers/body; tolerate chunked (single-chunk responses from
+    // the worker are typical; strip chunk framing crudely).
+    auto hdr_end = out.find("\r\n\r\n");
+    if (hdr_end == std::string::npos) return false;
+    bool status_ok = out.compare(0, 12, "HTTP/1.1 200") == 0;
+    std::string b = out.substr(hdr_end + 4);
+    if (out.find("Transfer-Encoding: chunked") != std::string::npos ||
+        out.find("transfer-encoding: chunked") != std::string::npos) {
+        std::string un;
+        size_t p = 0;
+        while (p < b.size()) {
+            size_t eol = b.find("\r\n", p);
+            if (eol == std::string::npos) break;
+            long len = strtol(b.c_str() + p, nullptr, 16);
+            if (len <= 0) break;
+            un.append(b, eol + 2, len);
+            p = eol + 2 + len + 2;
+        }
+        b = un;
+    }
+    response_body = b;
+    return status_ok;
+}
+
+static std::string json_escape(const std::string &s) {
+    std::string out;
+    for (char c : s) {
+        if (c == '"' || c == '\\') out += '\\';
+        out += c;
+    }
+    return out;
+}
+
+// Tiny extractors for the directory's flat JSON responses.
+static std::string json_str(const std::string &j, const std::string &key) {
+    auto k = j.find("\"" + key + "\":\"");
+    if (k == std::string::npos) return {};
+    k += key.size() + 4;
+    auto e = j.find('"', k);
+    return e == std::string::npos ? std::string{} : j.substr(k, e - k);
+}
+
+static int64_t json_num(const std::string &j, const std::string &key) {
+    auto k = j.find("\"" + key + "\":");
+    if (k == std::string::npos) return 0;
+    return strtoll(j.c_str() + k + key.size() + 3, nullptr, 10);
+}
+
+std::vector<std::string> local_addresses() {
+    std::vector<std::string> v4, v6;
+    struct ifaddrs *ifs = nullptr;
+    if (getifaddrs(&ifs) != 0) return {};
+    for (struct ifaddrs *i = ifs; i; i = i->ifa_next) {
+        if (!i->ifa_addr) continue;
+        char buf[INET6_ADDRSTRLEN];
+        if (i->ifa_addr->sa_family == AF_INET) {
+            auto *sa = (struct sockaddr_in *)i->ifa_addr;
+            if (ntohl(sa->sin_addr.s_addr) >> 24 == 127) continue;
+            if (inet_ntop(AF_INET, &sa->sin_addr, buf, sizeof buf)) v4.push_back(buf);
+        } else if (i->ifa_addr->sa_family == AF_INET6) {
+            auto *sa = (struct sockaddr_in6 *)i->ifa_addr;
+            if (IN6_IS_ADDR_LOOPBACK(&sa->sin6_addr) ||
+                IN6_IS_ADDR_LINKLOCAL(&sa->sin6_addr))
+                continue;
+            if (inet_ntop(AF_INET6, &sa->sin6_addr, buf, sizeof buf)) v6.push_back(buf);
+        }
+    }
+    freeifaddrs(ifs);
+    v4.insert(v4.end(), v6.begin(), v6.end());
+    return v4;
+}
+
+bool register_device(const std::string &base_url, const Identity &id,
+                     const std::string &name, uint16_t port) {
+    int64_t ts = (int64_t)time(nullptr);
+    char payload[512];
+    snprintf(payload, sizeof payload, "%s|%s|%u|%lld", name.c_str(),
+             id.fingerprint().c_str(), port, (long long)ts);
+    std::string sig = id.sign_b64(payload);
+    std::string spki = id.spki_b64();
+    if (sig.empty() || spki.empty()) return false;
+
+    std::string addrs;
+    for (const auto &a : local_addresses()) {
+        if (!addrs.empty()) addrs += ",";
+        addrs += "\"" + json_escape(a) + "\"";
+    }
+    std::string body = "{\"name\":\"" + json_escape(name) +
+                       "\",\"fingerprint\":\"" + id.fingerprint() +
+                       "\",\"port\":" + std::to_string(port) +
+                       ",\"spki\":\"" + spki + "\",\"sig\":\"" + sig +
+                       "\",\"ts\":" + std::to_string(ts) +
+                       ",\"addrs\":[" + addrs + "]}";
+    std::string resp;
+    if (!https_request(base_url, "/dir/register", "POST", body, resp)) {
+        fprintf(stderr, "rivtd: rendezvous register failed: %s\n", resp.c_str());
+        return false;
+    }
+    return true;
+}
+
+bool lookup_device(const std::string &base_url, const std::string &name, DirEntry &out) {
+    std::string resp;
+    if (!https_request(base_url, "/dir/lookup?name=" + name, "GET", "", resp))
+        return false;
+    out.fingerprint = json_str(resp, "fingerprint");
+    out.port = (uint16_t)json_num(resp, "port");
+    out.last_seen_ms = json_num(resp, "last_seen");
+    // addrs array, then the NAT-observed public ip last.
+    auto a = resp.find("\"addrs\":[");
+    if (a != std::string::npos) {
+        a += 9;
+        auto end = resp.find(']', a);
+        std::string list = resp.substr(a, end - a);
+        size_t p = 0;
+        while ((p = list.find('"', p)) != std::string::npos) {
+            auto e = list.find('"', p + 1);
+            if (e == std::string::npos) break;
+            out.addrs.push_back(list.substr(p + 1, e - p - 1));
+            p = e + 1;
+        }
+    }
+    std::string obs = json_str(resp, "observed_ip");
+    if (!obs.empty()) out.addrs.push_back(obs);
+    return out.port != 0;
+}
+
+} // namespace rivt::net

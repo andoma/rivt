@@ -5,9 +5,38 @@
 //
 // Secrets (wrangler secret put): SPIKE_TOKEN, TURN_KEY_ID, TURN_KEY_API_TOKEN
 
+// --- Device directory (phase 3) ---------------------------------------
+// Names bind to a device key (SPKI) on first registration; updates must
+// be signed by that key. The directory is not part of the E2E trust:
+// clients pin peer certificates, so a hostile directory can only DoS.
+
+function b64ToBytes(b64) {
+  const bin = atob(b64.replace(/-/g, "+").replace(/_/g, "/"));
+  const out = new Uint8Array(bin.length);
+  for (let i = 0; i < bin.length; i++) out[i] = bin.charCodeAt(i);
+  return out;
+}
+
+async function verifyDeviceSig(spki_b64, sig_raw_b64, payload) {
+  try {
+    const key = await crypto.subtle.importKey(
+      "spki", b64ToBytes(spki_b64),
+      { name: "ECDSA", namedCurve: "P-256" }, false, ["verify"]);
+    return await crypto.subtle.verify(
+      { name: "ECDSA", hash: "SHA-256" }, key,
+      b64ToBytes(sig_raw_b64), new TextEncoder().encode(payload));
+  } catch {
+    return false;
+  }
+}
+
 export default {
   async fetch(request, env) {
     const url = new URL(request.url);
+    if (url.pathname.startsWith("/dir/")) {
+      const id = env.RENDEZVOUS.idFromName("directory");
+      return env.RENDEZVOUS.get(id).fetch(request);
+    }
     if (url.pathname === "/ws") {
       const set = url.searchParams.get("set");
       const token = url.searchParams.get("token");
@@ -31,6 +60,8 @@ export class Rendezvous {
   }
 
   async fetch(request) {
+    const url = new URL(request.url);
+    if (url.pathname.startsWith("/dir/")) return this.directory(request, url);
     if (request.headers.get("Upgrade") !== "websocket")
       return new Response("expected websocket", { status: 426 });
     const device = new URL(request.url).searchParams.get("device") ?? "anon";
@@ -40,6 +71,58 @@ export class Rendezvous {
     await this.ctx.storage.put(`seen:${device}`, Date.now());
     this.broadcast({ type: "joined", device }, device);
     return new Response(null, { status: 101, webSocket: pair[0] });
+  }
+
+  // ---- device directory ----
+  async directory(request, url) {
+    const json = (obj, status = 200) =>
+      new Response(JSON.stringify(obj), {
+        status, headers: { "content-type": "application/json" } });
+
+    if (url.pathname === "/dir/register" && request.method === "POST") {
+      let b;
+      try { b = await request.json(); } catch { return json({ error: "bad json" }, 400); }
+      const { name, fingerprint, port, spki, sig, ts, addrs } = b;
+      if (!name || !/^[a-zA-Z0-9_-]{1,64}$/.test(name) || !fingerprint || !port ||
+          !spki || !sig || !ts)
+        return json({ error: "missing fields" }, 400);
+      if (Math.abs(Date.now() / 1000 - ts) > 300)
+        return json({ error: "stale timestamp" }, 400);
+      const payload = `${name}|${fingerprint}|${port}|${ts}`;
+      if (!(await verifyDeviceSig(spki, sig, payload)))
+        return json({ error: "bad signature" }, 403);
+
+      const existing = await this.ctx.storage.get(`dev:${name}`);
+      if (existing && existing.spki !== spki)
+        return json({ error: "name is bound to another device key" }, 409);
+
+      const observed = request.headers.get("CF-Connecting-IP") ?? "";
+      await this.ctx.storage.put(`dev:${name}`, {
+        name, fingerprint, port, spki,
+        addrs: Array.isArray(addrs) ? addrs.slice(0, 8) : [],
+        observed_ip: observed,
+        last_seen: Date.now(),
+      });
+      return json({ ok: true, observed_ip: observed });
+    }
+
+    if (url.pathname === "/dir/lookup" && request.method === "GET") {
+      const name = url.searchParams.get("name") ?? "";
+      const d = await this.ctx.storage.get(`dev:${name}`);
+      if (!d) return json({ error: "unknown device" }, 404);
+      const { spki, ...pub } = d;
+      return json(pub);
+    }
+
+    if (url.pathname === "/dir/devices" && request.method === "GET") {
+      const out = [];
+      for (const [, d] of await this.ctx.storage.list({ prefix: "dev:" }))
+        out.push({ name: d.name, fingerprint: d.fingerprint,
+                   last_seen: d.last_seen });
+      return json({ devices: out });
+    }
+
+    return json({ error: "not found" }, 404);
   }
 
   device(ws) {

@@ -11,12 +11,13 @@
 
 namespace rivt {
 
-// Where a daemon lives: a local unix socket, or a QUIC host:port.
+// Where a daemon lives: a local unix socket, or QUIC candidates
+// (multiple addresses for one device — LAN, public/NAT-observed).
 struct RemoteEndpoint {
     std::string unix_path;
-    std::string host;
+    std::vector<std::string> hosts;
     uint16_t port = 0;
-    bool is_quic() const { return !host.empty(); }
+    bool is_quic() const { return !hosts.empty(); }
 };
 
 struct RemoteSessionInfo {
@@ -105,6 +106,13 @@ private:
     RemoteEndpoint m_endpoint;
     std::unique_ptr<net::Identity> m_identity;
     std::unique_ptr<net::QuicEngine> m_quic;
+    // Happy-eyeballs candidate probing: all candidates race, the first
+    // established handshake is adopted, the rest are parked.
+    std::vector<std::unique_ptr<net::QuicEngine>> m_probes;
+    std::vector<std::unique_ptr<net::QuicEngine>> m_stale_probes;  // parked, freed on fresh stack
+    std::string m_pending_out;  // frames sent before a probe won
+    void adopt_probe(size_t idx);
+    void probe_failed();
     // close() can run inside m_quic's own callback (on_closed -> fail);
     // the engine is parked here and disposed on a fresh stack (next
     // connect, or our destructor).

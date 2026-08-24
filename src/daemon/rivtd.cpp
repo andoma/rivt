@@ -11,6 +11,7 @@
 #include "core/pane.h"
 #include "net/identity.h"
 #include "net/quic_engine.h"
+#include "net/rendezvous.h"
 #include "proto/frame.h"
 #include "proto/messages.h"
 #include "proto/snapshot.h"
@@ -88,9 +89,10 @@ static constexpr uint32_t HANDOVER_VERSION = 1;
 
 class Daemon {
 public:
-    Daemon(std::string socket_path, std::string handover_path, int listen_port)
+    Daemon(std::string socket_path, std::string handover_path, int listen_port,
+           std::string device_name)
         : m_path(std::move(socket_path)), m_handover_in(std::move(handover_path)),
-          m_listen_port(listen_port) {
+          m_listen_port(listen_port), m_name(std::move(device_name)) {
         char exe[4096];
         ssize_t n = readlink("/proc/self/exe", exe, sizeof(exe) - 1);
         if (n > 0) { exe[n] = 0; m_exe = exe; }
@@ -151,6 +153,23 @@ public:
                 Client *c = (Client *)conn->user;
                 if (c) resume_session_panes(c->attached);
             };
+
+            // Publish to the device directory, if configured. Blocking
+            // HTTPS runs in a short-lived child so sessions never stall.
+            std::string rdv = net::rendezvous_url();
+            if (!rdv.empty()) {
+                auto publish = [this, rdv]() {
+                    pid_t pid = fork();
+                    if (pid != 0) return;
+                    net::register_device(rdv, *m_identity, m_name,
+                                         (uint16_t)m_listen_port);
+                    _exit(0);
+                };
+                fprintf(stderr, "rivtd: publishing '%s' to %s\n", m_name.c_str(),
+                        rdv.c_str());
+                publish();
+                m_loop.add_timer(60000, publish, true);
+            }
         }
         return true;
     }
@@ -852,7 +871,8 @@ private:
         std::string port = std::to_string(m_listen_port);
         if (m_listen_port > 0)
             execl(m_exe.c_str(), "rivtd", "--socket", m_path.c_str(),
-                  "--handover", file.c_str(), "--listen", port.c_str(), (char *)nullptr);
+                  "--handover", file.c_str(), "--listen", port.c_str(),
+                  "--name", m_name.c_str(), (char *)nullptr);
         else
             execl(m_exe.c_str(), "rivtd", "--socket", m_path.c_str(),
                   "--handover", file.c_str(), (char *)nullptr);
@@ -936,6 +956,7 @@ private:
     std::string m_handover_in;
     std::string m_exe;
     int m_listen_port = 0;
+    std::string m_name;
     Config m_config;
     EventLoop m_loop;
     // Declared after m_loop: the engine unregisters its fd/timer from
@@ -984,12 +1005,13 @@ static int request_upgrade(const std::string &path) {
 }
 
 int main(int argc, char **argv) {
-    std::string path, handover;
+    std::string path, handover, name;
     bool upgrade = false;
     int listen_port = 0;
     for (int i = 1; i < argc; i++) {
         if (!strcmp(argv[i], "--socket") && i + 1 < argc) path = argv[++i];
         else if (!strcmp(argv[i], "--handover") && i + 1 < argc) handover = argv[++i];
+        else if (!strcmp(argv[i], "--name") && i + 1 < argc) name = argv[++i];
         else if (!strcmp(argv[i], "--upgrade")) upgrade = true;
         else if (!strcmp(argv[i], "--listen")) {
             listen_port = 7433;
@@ -1005,8 +1027,15 @@ int main(int argc, char **argv) {
     }
     if (path.empty()) path = default_socket_path();
     if (upgrade) return request_upgrade(path);
+    if (name.empty()) {
+        char host[256] = "rivt";
+        gethostname(host, sizeof host - 1);
+        name = host;
+        auto dot = name.find('.');
+        if (dot != std::string::npos) name.resize(dot);
+    }
 
-    rivt::Daemon d(path, handover, listen_port);
+    rivt::Daemon d(path, handover, listen_port, name);
     if (!d.init()) return 1;
     fprintf(stderr, "rivtd: listening on %s\n", path.c_str());
     return d.run();

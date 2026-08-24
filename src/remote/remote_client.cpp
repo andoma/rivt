@@ -181,7 +181,10 @@ bool RemoteClient::connect(const RemoteEndpoint &ep, bool autostart) {
     if (!ep.is_quic()) return connect(ep.unix_path, autostart);
     m_endpoint = ep;
     if (m_quic) close();
-    m_stale_quic.reset();  // fresh stack: safe to dispose a parked engine
+    m_stale_quic.reset();  // fresh stack: safe to dispose parked engines
+    m_stale_probes.clear();
+    m_probes.clear();
+    m_pending_out.clear();
 
     if (!m_identity) {
         m_identity = net::Identity::load_or_create();
@@ -190,10 +193,30 @@ bool RemoteClient::connect(const RemoteEndpoint &ep, bool autostart) {
             return false;
         }
     }
-    m_quic = net::QuicEngine::connect(m_loop, ep.host, ep.port, *m_identity,
-                                      net::Identity::authorized_bundle_path());
-    if (!m_quic) return false;
+    std::string bundle = net::Identity::authorized_bundle_path();
+    for (size_t i = 0; i < ep.hosts.size(); i++) {
+        auto probe = net::QuicEngine::connect(m_loop, ep.hosts[i], ep.port,
+                                              *m_identity, bundle);
+        if (!probe) continue;
+        size_t idx = m_probes.size();
+        probe->on_connected = [this, idx](net::QuicEngine::Conn *) { adopt_probe(idx); };
+        probe->on_closed = [this](net::QuicEngine::Conn *) { probe_failed(); };
+        m_probes.push_back(std::move(probe));
+    }
+    return !m_probes.empty();
+}
+
+void RemoteClient::adopt_probe(size_t idx) {
+    if (m_quic) return;  // someone else won already
+    m_quic = std::move(m_probes[idx]);
     m_quic_conn = m_quic->client_conn();
+    // Losing probes are parked, never destroyed here — engines must not
+    // die on any probe's callback stack.
+    for (auto &p : m_probes)
+        if (p) m_stale_probes.push_back(std::move(p));
+    m_probes.clear();
+
+    m_quic->on_connected = nullptr;
     m_quic->on_data = [this](net::QuicEngine::Conn *, const uint8_t *d, size_t n) {
         m_in.append((const char *)d, n);
         process();
@@ -202,11 +225,26 @@ bool RemoteClient::connect(const RemoteEndpoint &ep, bool autostart) {
         // fail() must see connected()==true to run; close() clears the conn.
         fail();
     };
-    return true;
+    if (!m_pending_out.empty()) {
+        m_quic->send(m_quic_conn, m_pending_out.data(), m_pending_out.size());
+        m_pending_out.clear();
+    }
+}
+
+void RemoteClient::probe_failed() {
+    if (m_quic) return;  // race lost after adoption: irrelevant
+    for (auto &p : m_probes)
+        if (p && !p->client_conn()->dead) return;  // others still trying
+    // All candidates failed. Park (we're on one of their stacks).
+    for (auto &p : m_probes)
+        if (p) m_stale_probes.push_back(std::move(p));
+    m_probes.clear();
+    m_pending_out.clear();
+    if (on_disconnect) on_disconnect();
 }
 
 bool RemoteClient::connect(const std::string &path, bool autostart) {
-    m_endpoint = RemoteEndpoint{path, "", 0};
+    m_endpoint = RemoteEndpoint{path, {}, 0};
     m_fd = try_connect(path);
     if (m_fd < 0 && autostart) {
         dbg("remote: no daemon at %s, spawning rivtd", path.c_str());
@@ -387,6 +425,12 @@ void RemoteClient::send_frame(uint16_t channel, uint16_t type, const void *data,
     if (m_quic_conn) {
         m_quic->send(m_quic_conn, hdr, sizeof hdr);
         if (len) m_quic->send(m_quic_conn, data, len);
+        return;
+    }
+    if (!m_probes.empty()) {
+        // Handshake race still running: buffer until a probe wins.
+        m_pending_out.append((const char *)hdr, sizeof hdr);
+        m_pending_out.append((const char *)data, len);
         return;
     }
     if (m_fd < 0) return;

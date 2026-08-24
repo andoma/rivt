@@ -155,4 +155,67 @@ std::string Identity::authorized_bundle_path(const std::string &config_dir) {
     return path;
 }
 
+static std::string b64(const uint8_t *data, size_t len) {
+    static const char tbl[] = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+    std::string out;
+    for (size_t i = 0; i < len; i += 3) {
+        uint32_t v = data[i] << 16 | (i + 1 < len ? data[i + 1] << 8 : 0) |
+                     (i + 2 < len ? data[i + 2] : 0);
+        out += tbl[(v >> 18) & 63];
+        out += tbl[(v >> 12) & 63];
+        out += i + 1 < len ? tbl[(v >> 6) & 63] : '=';
+        out += i + 2 < len ? tbl[v & 63] : '=';
+    }
+    return out;
+}
+
+static EVP_PKEY *load_key(const std::string &path) {
+    FILE *f = fopen(path.c_str(), "r");
+    if (!f) return nullptr;
+    EVP_PKEY *key = PEM_read_PrivateKey(f, nullptr, nullptr, nullptr);
+    fclose(f);
+    return key;
+}
+
+std::string Identity::spki_b64() const {
+    EVP_PKEY *key = load_key(m_key_path);
+    if (!key) return {};
+    uint8_t *der = nullptr;
+    int len = i2d_PUBKEY(key, &der);
+    EVP_PKEY_free(key);
+    if (len <= 0) return {};
+    std::string out = b64(der, len);
+    OPENSSL_free(der);
+    return out;
+}
+
+std::string Identity::sign_b64(const std::string &payload) const {
+    EVP_PKEY *key = load_key(m_key_path);
+    if (!key) return {};
+    EVP_MD_CTX *ctx = EVP_MD_CTX_new();
+    uint8_t der[128];
+    size_t der_len = sizeof der;
+    bool ok = EVP_DigestSignInit(ctx, nullptr, EVP_sha256(), nullptr, key) == 1 &&
+              EVP_DigestSign(ctx, der, &der_len, (const uint8_t *)payload.data(),
+                             payload.size()) == 1;
+    EVP_MD_CTX_free(ctx);
+    EVP_PKEY_free(key);
+    if (!ok) return {};
+
+    // DER SEQUENCE{ INTEGER r, INTEGER s } -> raw r||s (32+32), the
+    // encoding WebCrypto verifies.
+    uint8_t raw[64] = {0};
+    size_t i = (der[1] & 0x80) ? 3 : 2;
+    for (int part = 0; part < 2; part++) {
+        if (i + 2 > der_len || der[i] != 0x02) return {};
+        size_t len = der[i + 1];
+        i += 2;
+        const uint8_t *v = der + i;
+        i += len;
+        while (len > 32) { v++; len--; }  // strip leading zero pad
+        memcpy(raw + part * 32 + (32 - len), v, len);
+    }
+    return b64(raw, 64);
+}
+
 } // namespace rivt::net

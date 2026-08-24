@@ -25,6 +25,12 @@ public:
     // Created empty if missing; returns the path.
     static std::string authorized_bundle_path(const std::string &config_dir = "");
 
+    // Public key (SPKI DER, base64) — the directory binds names to this.
+    std::string spki_b64() const;
+    // ECDSA-P256/SHA-256 over payload, raw r||s (64 bytes), base64 —
+    // WebCrypto-verifiable. Empty string on failure.
+    std::string sign_b64(const std::string &payload) const;
+
 private:
     std::string m_key_path, m_cert_path, m_cert_pem, m_fingerprint;
 };

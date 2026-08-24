@@ -339,10 +339,11 @@ void Window::mark_closing() {
     m_closing = true;
 }
 
-bool Window::init_remote_quic(const std::string &host, uint16_t port) {
+bool Window::init_remote_quic(const std::string &display_name,
+                              const std::vector<std::string> &hosts, uint16_t port) {
     m_platform = Platform::create();
     if (!m_platform) return false;
-    std::string title = "rivt [" + host + "]";
+    std::string title = "rivt [" + display_name + "]";
     if (!m_platform->create_window(m_win_w, m_win_h, title.c_str())) return false;
     if (!m_platform->create_gl_context()) return false;
     if (!m_renderer.init(m_config)) return false;
@@ -364,10 +365,10 @@ bool Window::init_remote_quic(const std::string &host, uint16_t port) {
 
     m_remote_client = std::make_unique<RemoteClient>(m_loop);
     RemoteEndpoint ep;
-    ep.host = host;
+    ep.hosts = hosts;
     ep.port = port;
     if (!m_remote_client->connect(ep, false)) {
-        fprintf(stderr, "rivt: cannot reach %s:%u\n", host.c_str(), port);
+        fprintf(stderr, "rivt: cannot reach %s:%u\n", display_name.c_str(), port);
         return false;
     }
 

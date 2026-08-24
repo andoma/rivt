@@ -28,9 +28,11 @@ public:
     // if 0. kill_on_close = throwaway session (dies with a clean close).
     bool init_remote(const std::string &socket_path, uint32_t attach_sid,
                      bool kill_on_close);
-    // Daemon on another machine over QUIC. Attaches to the newest
-    // session there, creating one if none exist.
-    bool init_remote_quic(const std::string &host, uint16_t port);
+    // Daemon on another machine over QUIC (candidate addresses race,
+    // first handshake wins). Attaches to the newest session there,
+    // creating one if none exist.
+    bool init_remote_quic(const std::string &display_name,
+                          const std::vector<std::string> &hosts, uint16_t port);
     void render_if_needed();
     bool reap_dead_panes();
     void toggle_cursor_blink();

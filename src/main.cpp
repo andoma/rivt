@@ -1,5 +1,6 @@
 #include "core/window.h"
 #include "remote/remote_client.h"
+#include "net/rendezvous.h"
 #include "core/event_loop.h"
 #include "core/config.h"
 #include "core/debug.h"
@@ -121,8 +122,34 @@ int main(int argc, char *argv[]) {
     };
 
     if (!connect_host.empty()) {
+        // A bare name (no dot/colon) resolves through the rendezvous
+        // directory to the device's candidate addresses.
+        std::vector<std::string> hosts;
+        if (connect_host.find('.') == std::string::npos &&
+            connect_host.find(':') == std::string::npos) {
+            std::string url = rivt::net::rendezvous_url();
+            if (url.empty()) {
+                fprintf(stderr,
+                        "rivt: '%s' looks like a device name but no rendezvous is "
+                        "configured (~/.config/rivt/rendezvous or $RIVT_RENDEZVOUS)\n",
+                        connect_host.c_str());
+                return 1;
+            }
+            rivt::net::DirEntry e;
+            if (!rivt::net::lookup_device(url, connect_host, e)) {
+                fprintf(stderr, "rivt: device '%s' not found in directory\n",
+                        connect_host.c_str());
+                return 1;
+            }
+            hosts = e.addrs;
+            connect_port = e.port;
+            fprintf(stderr, "rivt: %s -> %zu candidate address(es), port %u\n",
+                    connect_host.c_str(), hosts.size(), e.port);
+        } else {
+            hosts.push_back(connect_host);
+        }
         auto win = std::make_unique<Window>(base_config, loop);
-        if (!win->init_remote_quic(connect_host, connect_port)) return 1;
+        if (!win->init_remote_quic(connect_host, hosts, connect_port)) return 1;
         Window *raw = win.get();
         loop.add_fd(raw->event_fd(), [raw](uint32_t) {
             raw->platform()->process_events();

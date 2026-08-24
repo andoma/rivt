@@ -83,6 +83,7 @@ set(RIVT_SOURCES
     src/proto/snapshot.cpp
     src/net/identity.cpp
     src/net/quic_engine.cpp
+    src/net/rendezvous.cpp
 )
 
 if(APPLE)
@@ -134,6 +135,7 @@ target_link_libraries(rivt PRIVATE
     ${FREETYPE_LIBRARIES}
     ${HARFBUZZ_LIBRARIES}
     picoquic-core
+    OpenSSL::SSL
     OpenSSL::Crypto
 )
 
@@ -270,10 +272,11 @@ add_executable(rivtd
     src/pty/pty.cpp
     src/net/identity.cpp
     src/net/quic_engine.cpp
+    src/net/rendezvous.cpp
 )
 target_include_directories(rivtd PRIVATE src src/third_party ${picoquic_SOURCE_DIR}/picoquic)
 target_compile_options(rivtd PRIVATE -Wall -Wextra -Wpedantic)
-target_link_libraries(rivtd PRIVATE util picoquic-core OpenSSL::Crypto)
+target_link_libraries(rivtd PRIVATE util picoquic-core OpenSSL::SSL OpenSSL::Crypto)
 if(CMAKE_BUILD_TYPE STREQUAL "Debug")
     target_compile_options(rivtd PRIVATE -Og -ggdb -fsanitize=address)
     target_link_options(rivtd PRIVATE -fsanitize=address)
