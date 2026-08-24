@@ -371,6 +371,20 @@ const Line &ScreenBuffer::scrollback_line(int idx) const {
 void ScreenBuffer::scroll_viewport(int delta) {
     int max_offset = -(int)m_scrollback.size();
     m_viewport_offset = std::clamp(m_viewport_offset + delta, max_offset, 0);
+    if (on_scrollback_wanted && m_scrollback_trimmed > 0 &&
+        m_viewport_offset <= max_offset + 200)
+        on_scrollback_wanted();
+}
+
+void ScreenBuffer::prepend_scrollback(std::vector<Line> &&lines) {
+    if (lines.empty()) return;
+    m_scrollback_trimmed -= (int)lines.size();
+    m_scrollback.insert(m_scrollback.begin(),
+                        std::make_move_iterator(lines.begin()),
+                        std::make_move_iterator(lines.end()));
+    // viewport_offset is bottom-relative and absolute indices include
+    // m_scrollback_trimmed, so nothing else moves. All prepended lines
+    // render dirty if scrolled into view (Line ctor default).
 }
 
 void ScreenBuffer::scroll_to_bottom() {

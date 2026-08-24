@@ -85,6 +85,38 @@ RemoteController::RemoteController(RemoteClient &client, Window &window, TabMana
         if (p->on_needs_render) p->on_needs_render();
     };
 
+    m_client.on_scrollback = [this](uint32_t pane_id, const uint8_t *data, size_t len) {
+        m_fetching.erase(pane_id);
+        auto it = m_pane_map.find(pane_id);
+        if (it == m_pane_map.end()) return;
+        ScreenBuffer &sb = it->second.pane->screen();
+
+        proto::Reader r(data, len);
+        uint32_t start = r.u32();
+        uint32_t n = r.u32();
+        std::vector<Line> lines;
+        lines.reserve(n);
+        for (uint32_t i = 0; i < n && r.ok; i++) {
+            Line l(sb.cols());
+            if (!proto::Snapshot::decode_line(r, l)) return;
+            lines.push_back(std::move(l));
+        }
+        if (!r.ok) return;
+        // Contiguity: the chunk must end exactly where our history
+        // starts. A short/empty or gapped reply means the daemon
+        // evicted those lines — stop asking.
+        if (n == 0 || start + n != (uint32_t)sb.scrollback_trimmed()) {
+            m_fetch_done.insert(pane_id);
+            return;
+        }
+        sb.prepend_scrollback(std::move(lines));
+        if (it->second.pane->on_needs_render) it->second.pane->on_needs_render();
+        // Still pinned near the top with more available? Keep going.
+        if (sb.scrollback_trimmed() > 0 &&
+            sb.viewport_offset() <= -(sb.scrollback_count() - 200))
+            request_scrollback(pane_id);
+    };
+
     m_client.on_output = [this](uint32_t pane_id, const char *data, size_t len) {
         auto it = m_pane_map.find(pane_id);
         if (it != m_pane_map.end()) it->second.pane->feed_data(data, len);
@@ -228,6 +260,9 @@ Pane *RemoteController::create_remote_pane(Tab *tab, uint32_t pane_id, int cols,
     // authoritative parser. The replica must stay silent or every query
     // would be answered twice.
     pane->screen().on_write_back = nullptr;
+    pane->screen().on_scrollback_wanted = [this, pane_id]() {
+        request_scrollback(pane_id);
+    };
 
     m_pane_map[pane_id] = {pane, 0};  // wid filled by caller
     return pane;
@@ -253,6 +288,16 @@ void RemoteController::detach() {
 // The tab bar appears at 2 tabs and disappears at 1. Grow/shrink the
 // window so the terminal grid is unchanged, and shift existing pane
 // rects by the content-origin delta (same dance as TmuxController).
+void RemoteController::request_scrollback(uint32_t pane_id) {
+    if (!m_active || m_fetching.count(pane_id) || m_fetch_done.count(pane_id)) return;
+    auto it = m_pane_map.find(pane_id);
+    if (it == m_pane_map.end()) return;
+    int trimmed = it->second.pane->screen().scrollback_trimmed();
+    if (trimmed <= 0) return;
+    m_fetching.insert(pane_id);
+    m_client.fetch_scrollback(pane_id, (uint32_t)trimmed, 500);
+}
+
 void RemoteController::reposition_for_tab_bar() {
     int new_y = m_window.tab_bar_height();
     if (new_y == m_content_y) return;
@@ -267,6 +312,8 @@ void RemoteController::exit() {
     m_active = false;
     m_pane_map.clear();
     m_windows.clear();
+    m_fetching.clear();
+    m_fetch_done.clear();
     if (on_exit) on_exit();
 }
 

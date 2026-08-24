@@ -51,6 +51,7 @@ public:
     void close_pane(uint32_t pane_id);
     void new_window();
     void close_window(uint32_t window_id);
+    void fetch_scrollback(uint32_t pane_id, uint32_t end_abs, uint32_t count);
     void kill_session(uint32_t session_id);
     void send_input(uint32_t pane_id, const char *data, size_t len);
 
@@ -66,6 +67,7 @@ public:
     std::function<void(uint32_t sid, uint32_t wid, int cols, int rows,
                        const std::vector<RemotePaneGeom> &)> on_layout;
     std::function<void(uint32_t pane_id, const uint8_t *, size_t)> on_snapshot;
+    std::function<void(uint32_t pane_id, const uint8_t *, size_t)> on_scrollback;
     std::function<void(uint32_t pane_id, const char *, size_t)> on_output;
     std::function<void(uint32_t pane_id)> on_pane_exited;
     std::function<void(uint32_t sid)> on_session_closed;

@@ -1,4 +1,5 @@
 #pragma once
+#include "proto/wire.h"
 #include <cstdint>
 #include <cstddef>
 #include <vector>
@@ -7,6 +8,7 @@ namespace rivt {
 
 class ScreenBuffer;
 class VtParser;
+struct Line;
 
 namespace proto {
 
@@ -28,6 +30,10 @@ public:
     // in which case sb/vp may be partially modified.
     static bool deserialize(ScreenBuffer &sb, VtParser &vp,
                             const uint8_t *data, size_t len);
+
+    // Single-line encoding, shared with scrollback-fetch chunks.
+    static void encode_line(Writer &w, const Line &l);
+    static bool decode_line(Reader &r, Line &l);
 };
 
 } // namespace proto

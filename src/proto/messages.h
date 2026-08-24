@@ -6,13 +6,15 @@ namespace rivt::proto {
 // Bump on ANY wire-format change (messages, payloads, snapshot framing).
 // Daemon and client hard-reject mismatches with a clear error, so a
 // stale running daemon fails loudly instead of rendering nothing.
-constexpr uint32_t PROTO_VERSION = 2;
+constexpr uint32_t PROTO_VERSION = 3;
 
 // Frame types on pane channels (channel = pane id, > 0)
 enum PaneFrame : uint16_t {
     PANE_OUT = 0,       // daemon -> client: raw VT output bytes
     PANE_IN = 1,        // client -> daemon: raw input bytes
     PANE_SNAPSHOT = 2,  // daemon -> client: proto::Snapshot blob
+    PANE_SCROLLBACK = 3,// daemon -> client: u32 start_abs, u32 n, n lines
+                        //   (Snapshot::encode_line each, oldest first)
 };
 
 // Control messages (channel 0, type = MsgType). Payload encodings use
@@ -30,6 +32,9 @@ enum class MsgType : uint16_t {
     ClosePane = 9,      // u32 pane_id
     NewWindow = 10,     // - (in the attached session)
     CloseWindow = 11,   // u32 window_id
+    FetchScrollback = 12, // u32 pane_id, u32 end_abs (exclusive), u32 count
+                          //   — absolute line indices; reply is a
+                          //   PANE_SCROLLBACK frame, possibly clamped
 
     // daemon -> client
     HelloOk = 64,        // u32 proto_version

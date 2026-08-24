@@ -177,6 +177,45 @@ TEST(reject_garbage) {
         proto::Snapshot::deserialize(r.screen, r.parser, blob.data(), cut);
 }
 
+TEST(prepend_scrollback_stable_coordinates) {
+    TestTerminal t(20, 5);
+    for (int i = 0; i < 30; i++)
+        t.feed("line" + std::to_string(i) + "\r\n");
+
+    // Simulate a remote replica: restore from a tail-limited snapshot.
+    auto blob = proto::Snapshot::serialize(t.screen, t.parser, 10);
+    TestTerminal r(20, 5);
+    ASSERT_TRUE(proto::Snapshot::deserialize(r.screen, r.parser, blob.data(), blob.size()));
+    int trimmed = r.screen.scrollback_trimmed();
+    ASSERT_TRUE(trimmed > 0);
+    ASSERT_EQ(r.screen.scrollback_count(), 10);
+
+    // Select something and remember its text (absolute coordinates).
+    r.screen.selection.active = true;
+    r.screen.selection.start_line = trimmed + 2;
+    r.screen.selection.end_line = trimmed + 2;
+    r.screen.selection.start_col = 0;
+    r.screen.selection.end_col = 19;
+    std::string before = r.screen.get_selection_text();
+    ASSERT_TRUE(!before.empty());
+
+    // Prepend 5 older lines, as a scrollback-fetch chunk would.
+    std::vector<Line> older;
+    for (int i = 0; i < 5; i++) {
+        Line l(20);
+        l.cells[0].codepoint = 'O';
+        older.push_back(std::move(l));
+    }
+    r.screen.prepend_scrollback(std::move(older));
+
+    ASSERT_EQ(r.screen.scrollback_count(), 15);
+    ASSERT_EQ(r.screen.scrollback_trimmed(), trimmed - 5);
+    // Absolute coordinates unaffected: same selection, same text.
+    ASSERT_STR_EQ(r.screen.get_selection_text(), before);
+    // The prepended lines are the oldest held lines now.
+    ASSERT_EQ(r.screen.scrollback_line(14).cells[0].codepoint, (uint32_t)'O');
+}
+
 TEST(frame_header_roundtrip) {
     proto::FrameHeader h{12345, 7, 3}, out{};
     uint8_t buf[proto::FRAME_HEADER_SIZE];

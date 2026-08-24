@@ -207,6 +207,8 @@ void RemoteClient::process() {
             if (on_output) on_output(h.channel, (const char *)payload, h.len);
         } else if (h.type == proto::PANE_SNAPSHOT) {
             if (on_snapshot) on_snapshot(h.channel, payload, h.len);
+        } else if (h.type == proto::PANE_SCROLLBACK) {
+            if (on_scrollback) on_scrollback(h.channel, payload, h.len);
         }
         m_in.erase(0, total);
     }
@@ -381,6 +383,14 @@ void RemoteClient::close_pane(uint32_t pane_id) {
 
 void RemoteClient::new_window() {
     send_control((uint16_t)MsgType::NewWindow, {});
+}
+
+void RemoteClient::fetch_scrollback(uint32_t pane_id, uint32_t end_abs, uint32_t count) {
+    proto::Writer w;
+    w.u32(pane_id);
+    w.u32(end_abs);
+    w.u32(count);
+    send_control((uint16_t)MsgType::FetchScrollback, w);
 }
 
 void RemoteClient::close_window(uint32_t window_id) {

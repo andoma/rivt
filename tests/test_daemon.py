@@ -5,14 +5,14 @@ Usage: test_daemon.py <path-to-rivtd>"""
 import os, socket, struct, subprocess, sys, tempfile, time
 
 RIVTD = sys.argv[1]
-PROTO_VERSION = 2
+PROTO_VERSION = 3
 # control message types
 HELLO, LIST, CREATE, ATTACH, DETACH, RESIZE, KILL = 1, 2, 3, 4, 5, 6, 7
-SPLIT, CLOSE_PANE, NEW_WINDOW, CLOSE_WINDOW = 8, 9, 10, 11
+SPLIT, CLOSE_PANE, NEW_WINDOW, CLOSE_WINDOW, FETCH_SCROLLBACK = 8, 9, 10, 11, 12
 HELLO_OK, SESSION_LIST, SESSION_CREATED, ATTACH_OK = 64, 65, 66, 67
 SESSION_CLOSED, PANE_EXITED, LAYOUT = 68, 69, 74
 WINDOW_ADDED, WINDOW_CLOSED = 75, 76
-PANE_OUT, PANE_IN, PANE_SNAPSHOT = 0, 1, 2
+PANE_OUT, PANE_IN, PANE_SNAPSHOT, PANE_SCROLLBACK = 0, 1, 2, 3
 
 def fail(msg):
     print(f"FAIL: {msg}", file=sys.stderr)
@@ -80,27 +80,39 @@ def parse_layout(payload):
                      if False else struct.unpack("<IHHHH", payload[16 + i*12: 28 + i*12]))
     return sid, wid, cols, rows, panes  # pane = (id, x, y, cols, rows)
 
-def snapshot_text(blob):
-    """Decode GRID_MAIN rows from a snapshot blob into a text string."""
+def parse_lines(body, p, nlines):
+    """Decode nlines encoded Lines; returns (texts, new_offset)."""
+    texts = []
+    for _ in range(nlines):
+        _wrapped, _zone, ncells = struct.unpack("<BIH", body[p:p+7]); p += 7
+        row, got = [], 0
+        while got < ncells:
+            run, cp = struct.unpack("<HI", body[p:p+6]); p += 18  # run + cell
+            row += [chr(cp) if 32 <= cp < 0x110000 else " " ] * run
+            got += run
+        texts.append("".join(row).rstrip())
+    return texts, p
+
+def parse_snapshot(blob):
+    """Returns (grid_text, scrollback_texts, omitted)."""
     magic, ver = struct.unpack("<IB", blob[:5])
     assert magic == 0x504E5352 and ver == 1, "bad snapshot header"
     off = 5
-    text = []
+    grid, sb, omitted, rows = [], [], 0, 0
     while off < len(blob):
         tag = blob[off]; slen = struct.unpack("<I", blob[off+1:off+5])[0]
         body, off = blob[off+5:off+5+slen], off + 5 + slen
-        if tag != 2:  # SEC_GRID_MAIN
-            continue
-        p = 0
-        while p < len(body):
-            _wrapped, _zone, ncells = struct.unpack("<BIH", body[p:p+7]); p += 7
-            row, got = [], 0
-            while got < ncells:
-                run, cp = struct.unpack("<HI", body[p:p+6]); p += 18  # run+cell
-                row += [chr(cp) if 32 <= cp < 0x110000 else " "] * run
-                got += run
-            text.append("".join(row))
-    return "\n".join(text)
+        if tag == 1:  # GEOM
+            _, rows = struct.unpack("<HH", body[:4])
+        elif tag == 2:  # GRID_MAIN
+            grid, _ = parse_lines(body, 0, rows)
+        elif tag == 4:  # SCROLLBACK
+            inc, omitted = struct.unpack("<II", body[:8])
+            sb, _ = parse_lines(body, 8, inc)
+    return "\n".join(grid), sb, omitted
+
+def snapshot_text(blob):
+    return parse_snapshot(blob)[0]
 
 def main():
     tmp = tempfile.mkdtemp()
@@ -190,7 +202,12 @@ def main():
         assert cwid == wid2
         print(f"windows ok: added {wid2}, pane {pane3} usable, closed")
 
-        # --- persistence: reconnect, snapshot must contain earlier output ---
+        # --- push the marker beyond the snapshot tail with 2500 lines ---
+        a.frame(pane, PANE_IN, b"seq 1 2500\n")
+        a.collect_output(pane, b"\r\n2500", timeout=30)
+        time.sleep(0.3)
+
+        # --- persistence: reconnect; deep history only via lazy fetch ---
         a.s.close()
         time.sleep(0.2)
         b = Conn(sock)
@@ -206,9 +223,32 @@ def main():
         b.expect_control(LAYOUT)
         ch, ty, snap = b.recv_frame()
         assert ty == PANE_SNAPSHOT
-        text = snapshot_text(snap)
-        assert "OUT:rivt_marker_123" in text, f"marker missing from snapshot grid:\n{text}"
-        print("persistence ok: snapshot after reconnect contains earlier output")
+        grid, sb, omitted = parse_snapshot(snap)
+        joined = grid + "\n" + "\n".join(sb)
+        assert "OUT:rivt_marker_123" not in joined, "marker should be beyond snapshot tail"
+        assert omitted > 0, "expected omitted history"
+        print(f"persistence ok: snapshot holds {len(sb)} lines, {omitted} older on daemon")
+
+        # --- lazy fetch: walk history backward until the marker appears ---
+        end = omitted
+        found = False
+        for _ in range(20):
+            b.frame(0, FETCH_SCROLLBACK, struct.pack("<III", pane, end, 500))
+            while True:
+                ch, ty, payload = b.recv_frame()
+                if ch == pane and ty == PANE_SCROLLBACK:
+                    break
+            start, n = struct.unpack("<II", payload[:8])
+            texts, _ = parse_lines(payload, 8, n)
+            assert start + n == end, f"gap: start={start} n={n} end={end}"
+            if any("OUT:rivt_marker_123" in t for t in texts):
+                found = True
+                break
+            if n == 0 or start == 0:
+                break
+            end = start
+        assert found, "marker not found in fetched history"
+        print(f"lazy fetch ok: marker recovered from history at abs<{end}")
 
         # --- shell exit closes pane and session ---
         b.frame(pane, PANE_IN, b"exit\n")

@@ -360,6 +360,31 @@ private:
             remove_dead_pane((uint16_t)pid);
             break;
         }
+        case MsgType::FetchScrollback: {
+            uint32_t pid = r.u32();
+            uint32_t end_abs = r.u32();
+            uint32_t count = r.u32();
+            auto pit = m_panes.find((uint16_t)pid);
+            if (!r.ok || pit == m_panes.end() || pit->second.sid != c->attached) return;
+            if (count > 1000) count = 1000;
+
+            const ScreenBuffer &sb = pit->second.pane->screen();
+            uint32_t lo = (uint32_t)sb.scrollback_trimmed();  // oldest we still hold
+            uint32_t hi = lo + (uint32_t)sb.scrollback_count();
+            uint32_t end = end_abs < lo ? lo : (end_abs > hi ? hi : end_abs);
+            uint32_t start = end - lo > count ? end - count : lo;
+
+            proto::Writer w;
+            w.u32(start);
+            w.u32(end - start);
+            for (uint32_t a = start; a < end; a++) {
+                // scrollback_line(0) is the most recent line
+                int idx = sb.scrollback_count() - 1 - (int)(a - lo);
+                proto::Snapshot::encode_line(w, sb.scrollback_line(idx));
+            }
+            send_frame(c, (uint16_t)pid, proto::PANE_SCROLLBACK, w.buf.data(), w.buf.size());
+            break;
+        }
         case MsgType::NewWindow: {
             auto it = m_sessions.find(c->attached);
             if (it == m_sessions.end()) return;

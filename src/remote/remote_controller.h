@@ -3,6 +3,7 @@
 #include <cstdint>
 #include <functional>
 #include <unordered_map>
+#include <unordered_set>
 
 namespace rivt {
 
@@ -51,6 +52,7 @@ private:
     void apply_layout(uint32_t wid, int cols, int rows,
                       const std::vector<RemotePaneGeom> &panes);
     uint32_t focused_pane_id() const;
+    void request_scrollback(uint32_t pane_id);
     void reposition_for_tab_bar();
     void exit();
 
@@ -66,6 +68,8 @@ private:
     uint32_t m_session_id = 0;
     std::unordered_map<uint32_t, Tab *> m_windows;     // wid -> tab
     std::unordered_map<uint32_t, PaneEntry> m_pane_map;
+    std::unordered_set<uint32_t> m_fetching;      // scrollback fetch in flight
+    std::unordered_set<uint32_t> m_fetch_done;    // daemon has no more history
 
     int m_cols = 80, m_rows = 24;
     int m_cell_w = 0, m_cell_h = 0;

@@ -36,7 +36,7 @@ enum : uint32_t {
     MODE_CURSOR_VISIBLE = 1u << 7,
 };
 
-static void put_line(Writer &w, const Line &l) {
+void Snapshot::encode_line(Writer &w, const Line &l) {
     w.u8(l.wrapped ? 1 : 0);
     w.u32(l.semantic_zone);
     w.u16((uint16_t)l.cells.size());
@@ -61,7 +61,7 @@ static void put_line(Writer &w, const Line &l) {
     }
 }
 
-static bool get_line(Reader &r, Line &l) {
+bool Snapshot::decode_line(Reader &r, Line &l) {
     l.wrapped = r.u8() != 0;
     l.semantic_zone = r.u32();
     uint16_t ncells = r.u16();
@@ -105,13 +105,13 @@ std::vector<uint8_t> Snapshot::serialize(const ScreenBuffer &sb, const VtParser 
     }
     {
         Writer w;
-        for (int r = 0; r < sb.m_rows; r++) put_line(w, sb.sline(r));
+        for (int r = 0; r < sb.m_rows; r++) Snapshot::encode_line(w, sb.sline(r));
         append_section(out, SEC_GRID_MAIN, w);
     }
     {
         Writer w;
         w.u16((uint16_t)sb.m_alt_screen.size());
-        for (const Line &l : sb.m_alt_screen) put_line(w, l);
+        for (const Line &l : sb.m_alt_screen) Snapshot::encode_line(w, l);
         append_section(out, SEC_GRID_ALT, w);
     }
     {
@@ -124,7 +124,7 @@ std::vector<uint8_t> Snapshot::serialize(const ScreenBuffer &sb, const VtParser 
         // account for (and later fetch) the rest of the history.
         w.u32((uint32_t)include);
         w.u32((uint32_t)(total - include + sb.m_scrollback_trimmed));
-        for (size_t i = total - include; i < total; i++) put_line(w, sb.m_scrollback[i]);
+        for (size_t i = total - include; i < total; i++) Snapshot::encode_line(w, sb.m_scrollback[i]);
         append_section(out, SEC_SCROLLBACK, w);
     }
     {
@@ -238,7 +238,7 @@ bool Snapshot::deserialize(ScreenBuffer &sb, VtParser &vp,
             if (!got_geom) return false;
             std::vector<Line> grid(sb.m_rows, Line(sb.m_cols));
             for (Line &l : grid)
-                if (!get_line(r, l)) return false;
+                if (!Snapshot::decode_line(r, l)) return false;
             sb.m_screen = std::move(grid);
             sb.m_screen_top = 0;
             break;
@@ -248,7 +248,7 @@ bool Snapshot::deserialize(ScreenBuffer &sb, VtParser &vp,
             if (!r.ok || n > 4096) return false;
             std::vector<Line> grid(n, Line(got_geom ? sb.m_cols : 80));
             for (Line &l : grid)
-                if (!get_line(r, l)) return false;
+                if (!Snapshot::decode_line(r, l)) return false;
             sb.m_alt_screen = std::move(grid);
             break;
         }
@@ -259,7 +259,7 @@ bool Snapshot::deserialize(ScreenBuffer &sb, VtParser &vp,
             sb.m_scrollback.clear();
             for (uint32_t i = 0; i < n; i++) {
                 Line l(got_geom ? sb.m_cols : 80);
-                if (!get_line(r, l)) return false;
+                if (!Snapshot::decode_line(r, l)) return false;
                 sb.m_scrollback.push_back(std::move(l));
             }
             sb.m_scrollback_trimmed = (int)omitted;

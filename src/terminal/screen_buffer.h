@@ -114,6 +114,15 @@ public:
 
     // Scrollback
     int scrollback_count() const { return (int)m_scrollback.size(); }
+    // Lines that exist(ed) before our oldest held line — for local
+    // buffers these are evicted forever; for remote replicas they are
+    // fetchable from the daemon.
+    int scrollback_trimmed() const { return m_scrollback_trimmed; }
+
+    // Insert older history before our oldest line (remote lazy fetch).
+    // Absolute line numbers include m_scrollback_trimmed, so existing
+    // selections/search matches/anchors keep their coordinates.
+    void prepend_scrollback(std::vector<Line> &&lines);
     const Line &scrollback_line(int idx) const;  // 0 = most recent scrollback line
     int viewport_offset() const { return m_viewport_offset; }
     void scroll_viewport(int delta);  // negative = scroll up into history
@@ -180,6 +189,10 @@ public:
     std::function<void(const std::string &sel, const std::string &mime_type)> on_osc52_read;
     std::function<void(const std::string &)> on_cwd_change;
     std::function<void(const std::string &)> on_write_back;  // send response to PTY
+    // Fired when the viewport nears the top of held history while more
+    // exists beyond it (m_scrollback_trimmed > 0). Remote panes hook
+    // this to lazily fetch older lines from the daemon.
+    std::function<void()> on_scrollback_wanted;
 
     // VtHandler interface
     void print(uint32_t codepoint) override;
