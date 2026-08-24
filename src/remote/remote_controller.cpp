@@ -116,8 +116,10 @@ RemoteController::RemoteController(RemoteClient &client, Window &window, TabMana
 }
 
 void RemoteController::initialize(int cols, int rows, int cell_w, int cell_h,
-                                  int content_x, int content_y, uint32_t target_sid) {
+                                  int content_x, int content_y, uint32_t target_sid,
+                                  bool kill_on_close) {
     m_target_sid = target_sid;
+    m_kill_on_close = kill_on_close;
     m_cols = cols;
     m_rows = rows;
     m_cell_w = cell_w;
@@ -229,6 +231,17 @@ Pane *RemoteController::create_remote_pane(Tab *tab, uint32_t pane_id, int cols,
 
     m_pane_map[pane_id] = {pane, 0};  // wid filled by caller
     return pane;
+}
+
+void RemoteController::notify_window_closing() {
+    dbg("remote: window closing (kill_on_close=%d active=%d sid=%u)",
+        m_kill_on_close, m_active, m_session_id);
+    if (m_kill_on_close && m_active && m_session_id) {
+        // Throwaway session: a clean close ends it. send_frame flushes
+        // eagerly, so the message leaves before the socket does.
+        m_client.kill_session(m_session_id);
+    }
+    m_active = false;
 }
 
 void RemoteController::detach() {

@@ -24,8 +24,10 @@ public:
 
     bool init();
     bool init_tmux_pty(Pane *gateway_pane);
-    // Daemon-backed window: attach to session attach_sid, or create one if 0.
-    bool init_remote(const std::string &socket_path, uint32_t attach_sid);
+    // Daemon-backed window: attach to session attach_sid, or create one
+    // if 0. kill_on_close = throwaway session (dies with a clean close).
+    bool init_remote(const std::string &socket_path, uint32_t attach_sid,
+                     bool kill_on_close);
     void render_if_needed();
     bool reap_dead_panes();
     void toggle_cursor_blink();
@@ -33,7 +35,7 @@ public:
     Platform *platform() { return m_platform.get(); }
     int event_fd() const { return m_platform->get_event_fd(); }
     bool is_closing() const { return m_closing; }
-    void mark_closing() { m_closing = true; }
+    void mark_closing();  // notifies a remote session before teardown
     bool needs_render() const { return m_needs_render; }
     TabManager *tab_manager() { return m_tabs.get(); }
 

@@ -170,21 +170,24 @@ void RemoteClient::fail() {
 }
 
 void RemoteClient::on_event(uint32_t ev) {
-    if (ev & (EV_HUP | EV_ERR)) { fail(); return; }
     if (ev & EV_WRITE) flush();
-    if (ev & EV_READ) {
+    // Drain and process before honoring HUP/EOF so the daemon's final
+    // frames aren't discarded when it exits.
+    bool eof = false;
+    if (ev & (EV_READ | EV_HUP)) {
         char buf[65536];
         for (;;) {
             ssize_t n = recv(m_fd, buf, sizeof buf, 0);
             if (n > 0) { m_in.append(buf, n); continue; }
-            if (n == 0) { fail(); return; }
+            if (n == 0) { eof = true; break; }
             if (errno == EAGAIN || errno == EWOULDBLOCK) break;
             if (errno == EINTR) continue;
-            fail();
-            return;
+            eof = true;
+            break;
         }
         process();
     }
+    if (eof || (ev & (EV_HUP | EV_ERR))) fail();
 }
 
 void RemoteClient::process() {

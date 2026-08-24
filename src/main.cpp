@@ -25,23 +25,36 @@ extern "C" const char *__lsan_default_suppressions() {
 }
 
 static volatile sig_atomic_t got_sigchld = 0;
+static volatile sig_atomic_t got_term = 0;
 
 static void sigchld_handler(int) {
     got_sigchld = 1;
 }
 
+// SIGTERM/SIGINT are a clean shutdown (logout, kill, ^C): windows close
+// properly, so throwaway daemon sessions are killed. SIGKILL/crash sends
+// nothing and sessions survive — that's the recovery feature.
+static void sigterm_handler(int) {
+    got_term = 1;
+}
+
 int main(int argc, char *argv[]) {
     setlocale(LC_ALL, "");
     signal(SIGCHLD, sigchld_handler);
+    signal(SIGTERM, sigterm_handler);
+    signal(SIGINT, sigterm_handler);
 
     // Parse global flags
-    bool remote = false;
+    bool remote = false;      // persistent sessions + resume all
+    bool no_daemon = false;   // classic in-process terminal
     std::string remote_socket;
     for (int i = 1; i < argc; i++) {
         if (strcmp(argv[i], "--debug") == 0 || strcmp(argv[i], "-d") == 0) {
             debug_enabled() = true;
         } else if (strcmp(argv[i], "--remote") == 0) {
             remote = true;
+        } else if (strcmp(argv[i], "--no-daemon") == 0) {
+            no_daemon = true;
         } else if (strcmp(argv[i], "--socket") == 0 && i + 1 < argc) {
             remote_socket = argv[++i];
         }
@@ -53,7 +66,9 @@ int main(int argc, char *argv[]) {
 
     std::function<void(Pane *)> create_tmux_window;
     std::function<void()> create_window;
-    std::function<void(uint32_t)> create_remote_window;
+    // (attach_sid, persistent): sid 0 creates a session; non-persistent
+    // sessions are killed on clean window close.
+    std::function<bool(uint32_t, bool)> create_remote_window;
 
     create_tmux_window = [&](Pane *gateway) {
         auto win = std::make_unique<Window>(base_config, loop);
@@ -66,18 +81,21 @@ int main(int argc, char *argv[]) {
         windows.push_back(std::move(win));
     };
 
-    create_remote_window = [&](uint32_t attach_sid) {
+    create_remote_window = [&](uint32_t attach_sid, bool persistent) {
         auto win = std::make_unique<Window>(base_config, loop);
-        if (!win->init_remote(remote_socket, attach_sid)) return;
+        if (!win->init_remote(remote_socket, attach_sid, !persistent)) return false;
         Window *raw = win.get();
         loop.add_fd(raw->event_fd(), [raw](uint32_t) {
             raw->platform()->process_events();
         });
-        // New windows from a remote window are new daemon sessions.
-        raw->on_new_window = [&create_remote_window]() { create_remote_window(0); };
+        // New windows from a daemon-backed window get the same lifecycle.
+        raw->on_new_window = [&create_remote_window, persistent]() {
+            create_remote_window(0, persistent);
+        };
         raw->on_new_tmux_window = create_tmux_window;
         raw->on_close = [](Window *w) { w->mark_closing(); };
         windows.push_back(std::move(win));
+        return true;
     };
 
     create_window = [&]() {
@@ -101,12 +119,20 @@ int main(int argc, char *argv[]) {
         std::vector<RemoteSessionInfo> sessions;
         RemoteClient::query_sessions(path, /*autostart=*/true, sessions);
         if (sessions.empty()) {
-            create_remote_window(0);
+            create_remote_window(0, true);
         } else {
-            for (const auto &si : sessions) create_remote_window(si.id);
+            for (const auto &si : sessions) create_remote_window(si.id, true);
         }
-    } else {
+    } else if (no_daemon) {
         create_window();
+    } else {
+        // Default: daemon-backed throwaway session. Clean close kills it;
+        // a crash leaves it recoverable via rivt --remote. Fall back to
+        // the in-process terminal if the daemon can't be reached.
+        if (!create_remote_window(0, false)) {
+            fprintf(stderr, "rivt: daemon unreachable, running in-process\n");
+            create_window();
+        }
     }
     if (windows.empty()) return 1;
 
@@ -138,6 +164,11 @@ int main(int argc, char *argv[]) {
             }
             return false;
         });
+
+        if (got_term) {
+            got_term = 0;
+            for (auto &w : windows) w->mark_closing();
+        }
 
         if (got_sigchld) {
             got_sigchld = 0;

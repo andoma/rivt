@@ -196,7 +196,7 @@ void Window::setup_callbacks() {
         if (m_tmux_controller && m_tmux_controller->is_active()) {
             m_tmux_controller->detach();
         }
-        m_closing = true;
+        mark_closing();  // notifies a remote session (kill-on-clean-close)
     };
 
     // Native menu actions (Cmd-N / Cmd-W / Cmd-C / Cmd-V on macOS).
@@ -286,7 +286,8 @@ bool Window::init_tmux_pty(Pane *gateway_pane) {
     return true;
 }
 
-bool Window::init_remote(const std::string &socket_path, uint32_t attach_sid) {
+bool Window::init_remote(const std::string &socket_path, uint32_t attach_sid,
+                         bool kill_on_close) {
     m_platform = Platform::create();
     if (!m_platform) return false;
     if (!m_platform->create_window(m_win_w, m_win_h, "rivt [rivtd]")) return false;
@@ -324,11 +325,18 @@ bool Window::init_remote(const std::string &socket_path, uint32_t attach_sid) {
     int bar_h = tab_bar_height();
     int cols = m.cell_width > 0 ? m_win_w / m.cell_width : 80;
     int rows = m.cell_height > 0 ? (m_win_h - bar_h - kBottomPad) / m.cell_height : 24;
-    m_remote_controller->initialize(cols, rows, m.cell_width, m.cell_height, 0, bar_h, attach_sid);
+    m_remote_controller->initialize(cols, rows, m.cell_width, m.cell_height, 0, bar_h,
+                                    attach_sid, kill_on_close);
 
     m_platform->show_window();
     setup_callbacks();
     return true;
+}
+
+void Window::mark_closing() {
+    if (m_closing) return;
+    if (m_remote_controller) m_remote_controller->notify_window_closing();
+    m_closing = true;
 }
 
 void Window::stop_tmux_pty_mode() {

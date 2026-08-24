@@ -21,8 +21,14 @@ public:
 
     // Attach to session target_sid, or create a fresh session if 0.
     // cols/rows: our window's grid; the daemon layout is sized to it.
+    // kill_on_close: throwaway session — a clean window close kills it
+    // (plain rivt semantics). A crash sends nothing, so it survives.
     void initialize(int cols, int rows, int cell_w, int cell_h,
-                    int content_x, int content_y, uint32_t target_sid);
+                    int content_x, int content_y, uint32_t target_sid,
+                    bool kill_on_close);
+
+    // Called by Window on a clean close (close button, quit).
+    void notify_window_closing();
     void handle_resize(int cols, int rows, int cell_w, int cell_h,
                        int content_x, int content_y);
 
@@ -55,6 +61,7 @@ private:
     struct PaneEntry { Pane *pane; uint32_t wid; };
 
     bool m_active = false;
+    bool m_kill_on_close = false;
     uint32_t m_target_sid = 0;
     uint32_t m_session_id = 0;
     std::unordered_map<uint32_t, Tab *> m_windows;     // wid -> tab

@@ -164,21 +164,25 @@ private:
 
     void client_event(Client *c, uint32_t ev) {
         if (c->dead) return;
-        if (ev & (EV_HUP | EV_ERR)) { kill_client(c); return; }
         if (ev & EV_WRITE) flush_client(c);
-        if (ev & EV_READ) {
+        // Drain and process before honoring HUP/EOF: a client's final
+        // frames (e.g. KillSession right before window close) arrive in
+        // the same event batch as the hangup.
+        bool eof = false;
+        if (ev & (EV_READ | EV_HUP)) {
             char buf[65536];
             for (;;) {
                 ssize_t n = recv(c->fd, buf, sizeof buf, 0);
                 if (n > 0) { c->in.append(buf, n); continue; }
-                if (n == 0) { kill_client(c); return; }
+                if (n == 0) { eof = true; break; }
                 if (errno == EAGAIN || errno == EWOULDBLOCK) break;
                 if (errno == EINTR) continue;
-                kill_client(c);
-                return;
+                eof = true;
+                break;
             }
             process_client(c);
         }
+        if (eof || (ev & (EV_HUP | EV_ERR))) kill_client(c);
     }
 
     void process_client(Client *c) {
