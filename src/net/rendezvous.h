@@ -16,6 +16,9 @@ class Identity;
 // line). Empty string when unconfigured.
 std::string rendezvous_url();
 
+// Persist the rendezvous URL to ~/.config/rivt/rendezvous (mkdir -p).
+bool set_rendezvous_url(const std::string &url);
+
 struct DirEntry {
     std::string fingerprint;
     uint16_t port = 0;

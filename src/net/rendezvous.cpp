@@ -9,6 +9,7 @@
 #include <ifaddrs.h>
 #include <netdb.h>
 #include <arpa/inet.h>
+#include <sys/stat.h>
 #include <unistd.h>
 
 namespace rivt::net {
@@ -28,6 +29,26 @@ std::string rendezvous_url() {
     while (!url.empty() && (url.back() == '\n' || url.back() == '\r' || url.back() == '/'))
         url.pop_back();
     return url;
+}
+
+bool set_rendezvous_url(const std::string &url) {
+    const char *cfg = getenv("XDG_CONFIG_HOME");
+    std::string dir = cfg && *cfg ? std::string(cfg) + "/rivt"
+                                  : std::string(getenv("HOME") ? getenv("HOME") : ".") +
+                                        "/.config/rivt";
+    // mkdir -p the config dir.
+    std::string acc;
+    for (size_t i = 0; i <= dir.size(); i++) {
+        if (i == dir.size() || dir[i] == '/') {
+            if (!acc.empty()) mkdir(acc.c_str(), 0755);
+        }
+        if (i < dir.size()) acc += dir[i];
+    }
+    FILE *f = fopen((dir + "/rendezvous").c_str(), "w");
+    if (!f) return false;
+    fprintf(f, "%s\n", url.c_str());
+    fclose(f);
+    return true;
 }
 
 // Minimal blocking HTTPS/1.1 request. host from url ("https://host[/...]").

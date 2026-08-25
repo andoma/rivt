@@ -168,6 +168,9 @@ bool pair_join(const std::string &code, const Identity &self) {
         fprintf(stderr, "rivt: malformed pairing code\n");
         return false;
     }
+    // The code carries the rendezvous URL, so a joining box needs no
+    // prior config — persist it now.
+    set_rendezvous_url(rdv);
     std::string name = device_name();
     std::string pubkey = self.spki_der();
     std::string cert = self.cert_pem();

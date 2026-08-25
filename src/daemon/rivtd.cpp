@@ -12,6 +12,7 @@
 #include "net/identity.h"
 #include "net/quic_engine.h"
 #include "net/membership.h"
+#include "net/pairing.h"
 #include "net/rendezvous.h"
 #include "proto/frame.h"
 #include "proto/messages.h"
@@ -187,45 +188,7 @@ public:
     // Live QUIC verification re-reads the bundle per handshake via the
     // TLS store, so a rewrite takes effect for new connections.
     void sync_membership() {
-        std::string path = net::MembershipLog::default_path();
-        net::MembershipLog log;
-        if (!log.load_file(path)) {
-            // No set yet: found one anchored on this device.
-            std::string g = net::MembershipLog::genesis(*m_identity);
-            if (g.empty() || !log.load({g})) {
-                fprintf(stderr, "rivtd: failed to create device set\n");
-                return;
-            }
-            log.save(path);
-            fprintf(stderr, "rivtd: founded device set %s\n", log.set_id().c_str());
-        }
-
-        std::string rdv = net::rendezvous_url();
-        if (!rdv.empty()) {
-            std::string set = log.set_id();
-            std::vector<std::string> remote;
-            if (net::membership_fetch(rdv, set, remote) && remote.size() > log.size()) {
-                // Adopt the longer log only if it verifies and extends
-                // ours (shares our genesis). The DO can withhold but not
-                // forge, so this is safe.
-                net::MembershipLog cand;
-                if (cand.load(remote) && cand.set_id() == set) {
-                    log = std::move(cand);
-                    log.save(path);
-                    fprintf(stderr, "rivtd: synced set to %zu ops\n", log.size());
-                }
-            }
-            // Push any ops the DO is missing (we added while it was
-            // behind, or a fresh genesis).
-            std::vector<std::string> have;
-            net::membership_fetch(rdv, set, have);
-            for (size_t i = have.size(); i < log.size(); i++)
-                net::membership_push(rdv, set, (uint32_t)i, log.ops()[i]);
-        }
-
-        std::string bundle = net::Identity::authorized_bundle_path();
-        if (!log.write_bundle(bundle, (int64_t)time(nullptr)))
-            fprintf(stderr, "rivtd: failed to write trust bundle\n");
+        net::sync_membership(*m_identity, /*found_if_missing=*/true);
     }
 
     int run() {
@@ -1039,6 +1002,107 @@ static std::string default_socket_path() {
     return dir + "/daemon.sock";
 }
 
+// --- interactive first-run setup -------------------------------------
+
+static std::string prompt(const char *msg) {
+    fputs(msg, stdout);
+    fflush(stdout);
+    char line[1024];
+    if (!fgets(line, sizeof line, stdin)) return {};
+    std::string s = line;
+    while (!s.empty() && (s.back() == '\n' || s.back() == '\r' || s.back() == ' '))
+        s.pop_back();
+    return s;
+}
+
+// Write a systemd --user unit for this exact binary and enable it.
+static bool install_systemd_unit() {
+    char exe[4096];
+    ssize_t n = readlink("/proc/self/exe", exe, sizeof(exe) - 1);
+    if (n <= 0) { fprintf(stderr, "cannot resolve own path\n"); return false; }
+    exe[n] = 0;
+
+    const char *cfg = getenv("XDG_CONFIG_HOME");
+    std::string dir = cfg && *cfg ? std::string(cfg) + "/systemd/user"
+                                  : std::string(getenv("HOME") ? getenv("HOME") : ".") +
+                                        "/.config/systemd/user";
+    std::string acc;
+    for (size_t i = 0; i <= dir.size(); i++) {
+        if ((i == dir.size() || dir[i] == '/') && !acc.empty()) mkdir(acc.c_str(), 0755);
+        if (i < dir.size()) acc += dir[i];
+    }
+    std::string path = dir + "/rivtd.service";
+    FILE *f = fopen(path.c_str(), "w");
+    if (!f) { fprintf(stderr, "cannot write %s\n", path.c_str()); return false; }
+    fprintf(f,
+            "[Unit]\nDescription=rivt terminal session daemon\n"
+            "After=network-online.target\nWants=network-online.target\n\n"
+            "[Service]\nExecStart=%s --listen\nRestart=on-failure\nRestartSec=2\n\n"
+            "[Install]\nWantedBy=default.target\n",
+            exe);
+    fclose(f);
+
+    if (system("systemctl --user daemon-reload") != 0 ||
+        system("systemctl --user enable --now rivtd") != 0) {
+        fprintf(stderr,
+                "\nInstalled %s but could not enable it (no systemd --user session?).\n"
+                "Enable manually: systemctl --user enable --now rivtd\n",
+                path.c_str());
+        return false;
+    }
+    // Best-effort: keep it running across logout / at boot.
+    if (system("loginctl enable-linger \"$USER\" >/dev/null 2>&1") != 0)
+        fprintf(stderr, "note: run `loginctl enable-linger` to start at boot without login\n");
+    return true;
+}
+
+static int run_setup(int argc, char **argv) {
+    auto id = rivt::net::Identity::load_or_create();
+    if (!id) { fprintf(stderr, "cannot create device identity\n"); return 1; }
+
+    // A code may be given as an argument, else prompt.
+    std::string code;
+    for (int i = 1; i < argc; i++)
+        if (argv[i][0] != '-' && strcmp(argv[i], "setup") != 0) { code = argv[i]; break; }
+
+    printf("rivt device setup\n"
+           "  fingerprint: %s\n\n", id->fingerprint().c_str());
+
+    if (code.empty()) {
+        printf("Paste a pairing code from another device (run `rivt pair` there),\n"
+               "or press Enter to found a NEW device set on this machine.\n\n");
+        code = prompt("Pairing code: ");
+    }
+
+    bool ok;
+    if (!code.empty()) {
+        // The code carries the rendezvous URL; join persists it.
+        ok = rivt::net::pair_join(code, *id);
+    } else {
+        std::string url = rivt::net::rendezvous_url();
+        if (url.empty()) url = prompt("Rendezvous URL (https://...): ");
+        if (url.empty()) { fprintf(stderr, "a rendezvous URL is required\n"); return 1; }
+        rivt::net::set_rendezvous_url(url);
+        ok = !rivt::net::sync_membership(*id, /*found_if_missing=*/true).empty();
+        if (ok)
+            printf("\nFounded a new set. Pair other devices by running `rivtd pair` here.\n");
+    }
+    if (!ok) return 1;
+
+    std::string ans = prompt("\nRun rivtd as a background service (systemd --user)? [Y/n] ");
+    if (ans.empty() || ans[0] == 'y' || ans[0] == 'Y') {
+        if (install_systemd_unit())
+            printf("\nrivtd is running and will start on boot.\n");
+    } else {
+        printf("\nStart it yourself with: rivtd --listen\n");
+    }
+    printf("\nDone. Connect from another device with:  rivt --connect %s\n",
+           []{ char h[256]="this-host"; gethostname(h,sizeof h-1);
+                std::string s=h; auto d=s.find('.'); if(d!=std::string::npos) s.resize(d);
+                static std::string r; r=s; return r.c_str(); }());
+    return 0;
+}
+
 // Ask a running daemon to upgrade itself (works across protocol versions).
 static int request_upgrade(const std::string &path) {
     struct sockaddr_un addr {};
@@ -1079,6 +1143,24 @@ int main(int argc, char **argv) {
             return 0;
         }
     }
+    // Interactive first-run setup.
+    for (int i = 1; i < argc; i++)
+        if (!strcmp(argv[i], "setup")) return run_setup(argc, argv);
+
+    // Pairing / set verbs (foreground, no daemon).
+    for (int i = 1; i < argc; i++) {
+        if (!strcmp(argv[i], "pair") || !strcmp(argv[i], "join") ||
+            !strcmp(argv[i], "init")) {
+            auto id = rivt::net::Identity::load_or_create();
+            if (!id) return 1;
+            if (!strcmp(argv[i], "pair")) return rivt::net::pair_invite(*id) ? 0 : 1;
+            if (!strcmp(argv[i], "init"))
+                return rivt::net::sync_membership(*id, true).empty() ? 1 : 0;
+            if (i + 1 >= argc) { fprintf(stderr, "usage: rivtd join <code>\n"); return 1; }
+            return rivt::net::pair_join(argv[i + 1], *id) ? 0 : 1;
+        }
+    }
+
     if (path.empty()) path = default_socket_path();
     if (upgrade) return request_upgrade(path);
     if (name.empty()) {
