@@ -7,6 +7,7 @@
 
 #include <cstring>
 #include <netdb.h>
+#include <arpa/inet.h>
 #include <sys/socket.h>
 #include <unistd.h>
 
@@ -85,6 +86,7 @@ QuicEngine::~QuicEngine() {
     on_connected = nullptr;
     on_closed = nullptr;
     on_data = nullptr;
+    if (m_stun_timer >= 0) m_loop.remove_timer(m_stun_timer);
     if (m_timer >= 0) m_loop.remove_timer(m_timer);
     if (m_fd >= 0) {
         m_loop.remove_fd(m_fd);
@@ -236,12 +238,78 @@ void QuicEngine::on_socket(uint32_t events) {
         ssize_t n = recvfrom(m_fd, buf, sizeof buf, 0, (struct sockaddr *)&from, &fl);
         if (n < 0) break;
         if (n == 0) continue;
+        if (m_stun_active && is_stun(buf, (size_t)n)) {
+            struct sockaddr_storage mapped {};
+            if (stun_parse_response(buf, (size_t)n, m_stun_txid, &mapped)) {
+                m_stun_active = false;
+                if (m_stun_timer >= 0) { m_loop.remove_timer(m_stun_timer); m_stun_timer = -1; }
+                auto cb = m_stun_cb;
+                m_stun_cb = nullptr;
+                if (cb) cb(true, mapped);
+            }
+            continue;  // never hand STUN to picoquic
+        }
         if (qdbg()) fprintf(stderr, "quic[%p] rx %zd\n", (void *)this, n);
         picoquic_incoming_packet(m_quic, buf, (size_t)n, (struct sockaddr *)&from,
                                  (struct sockaddr *)&m_local, 0, 0,
                                  picoquic_current_time());
     }
     pump();
+}
+
+uint16_t QuicEngine::local_port() const {
+    if (m_local.ss_family == AF_INET6)
+        return ntohs(((struct sockaddr_in6 *)&m_local)->sin6_port);
+    if (m_local.ss_family == AF_INET)
+        return ntohs(((struct sockaddr_in *)&m_local)->sin_port);
+    return 0;
+}
+
+void QuicEngine::stun_send() {
+    uint8_t req[20];
+    stun_build_request(req, m_stun_txid);
+    socklen_t sl = m_stun_server.ss_family == AF_INET6 ? sizeof(struct sockaddr_in6)
+                                                       : sizeof(struct sockaddr_in);
+    sendto(m_fd, req, sizeof req, 0, (struct sockaddr *)&m_stun_server, sl);
+}
+
+void QuicEngine::discover_reflexive(
+    std::function<void(bool, const struct sockaddr_storage &)> cb,
+    const char *stun_host, uint16_t stun_port) {
+    if (m_stun_active) { struct sockaddr_storage z {}; cb(false, z); return; }
+    // Resolve into a v4-mapped v6 address to match our dual-stack socket.
+    struct addrinfo hints {}, *res = nullptr;
+    hints.ai_family = AF_INET6;
+    hints.ai_flags = AI_V4MAPPED | AI_ALL;
+    hints.ai_socktype = SOCK_DGRAM;
+    const char *host = stun_host ? stun_host : "stun.cloudflare.com";
+    if (getaddrinfo(host, std::to_string(stun_port).c_str(), &hints, &res) != 0 || !res) {
+        struct sockaddr_storage z {};
+        cb(false, z);
+        return;
+    }
+    memcpy(&m_stun_server, res->ai_addr, res->ai_addrlen);
+    freeaddrinfo(res);
+
+    m_stun_active = true;
+    m_stun_tries = 0;
+    m_stun_cb = std::move(cb);
+    stun_send();
+    // Retransmit a few times (UDP), then give up.
+    m_stun_timer = m_loop.add_timer(500, [this]() {
+        if (!m_stun_active) return;
+        if (++m_stun_tries >= 5) {
+            m_stun_active = false;
+            m_loop.remove_timer(m_stun_timer);
+            m_stun_timer = -1;
+            auto cb = m_stun_cb;
+            m_stun_cb = nullptr;
+            struct sockaddr_storage z {};
+            if (cb) cb(false, z);
+            return;
+        }
+        stun_send();
+    }, true);
 }
 
 void QuicEngine::pump() {

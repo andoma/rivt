@@ -1,6 +1,8 @@
 #pragma once
 #include "core/event_loop.h"
+#include "net/stun.h"
 #include <cstdint>
+#include <functional>
 #include <sys/socket.h>
 #include <functional>
 #include <memory>
@@ -57,6 +59,15 @@ public:
     void close_conn(Conn *c);
     Conn *client_conn() { return m_client_conn; }  // client mode only
 
+    // Discover this socket's reflexive (public) transport address via a
+    // STUN server (default stun.cloudflare.com:3478). The callback fires
+    // once with the mapped address, or with ok=false on timeout. STUN
+    // shares the QUIC socket and is demuxed by first byte.
+    void discover_reflexive(std::function<void(bool ok, const struct sockaddr_storage &)> cb,
+                            const char *stun_host = nullptr, uint16_t stun_port = 3478);
+    // The bound local UDP port (for candidate advertisement).
+    uint16_t local_port() const;
+
     // Internal, used by the C callback trampoline in quic_engine.cpp.
     int handle_event(picoquic_cnx_t *cnx, Conn *conn, uint64_t stream_id,
                      uint8_t *bytes, size_t length, int event);
@@ -76,6 +87,15 @@ private:
     int m_timer = -1;
     struct sockaddr_storage m_local {};
     bool m_want_write = false;
+
+    // Pending STUN reflexive query (at most one at a time).
+    bool m_stun_active = false;
+    uint8_t m_stun_txid[STUN_TXID_LEN] = {0};
+    struct sockaddr_storage m_stun_server {};
+    int m_stun_timer = -1;
+    int m_stun_tries = 0;
+    std::function<void(bool, const struct sockaddr_storage &)> m_stun_cb;
+    void stun_send();
     std::vector<std::unique_ptr<Conn>> m_conns;
     Conn *m_client_conn = nullptr;
 };

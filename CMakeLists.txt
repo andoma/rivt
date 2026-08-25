@@ -96,6 +96,7 @@ set(RIVT_SOURCES
     src/proto/snapshot.cpp
     src/net/identity.cpp
     src/net/quic_engine.cpp
+    src/net/stun.cpp
     src/net/rendezvous.cpp
 )
 
@@ -285,6 +286,7 @@ add_executable(rivtd
     src/pty/pty.cpp
     src/net/identity.cpp
     src/net/quic_engine.cpp
+    src/net/stun.cpp
     src/net/rendezvous.cpp
 )
 target_include_directories(rivtd PRIVATE src src/third_party ${picoquic_SOURCE_DIR}/picoquic)
@@ -309,6 +311,7 @@ add_executable(test_quic
     tests/test_quic.cpp
     src/net/identity.cpp
     src/net/quic_engine.cpp
+    src/net/stun.cpp
     src/core/event_loop.cpp
 )
 target_include_directories(test_quic PRIVATE src ${picoquic_SOURCE_DIR}/picoquic)

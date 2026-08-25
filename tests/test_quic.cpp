@@ -6,6 +6,7 @@
 #include "net/quic_engine.h"
 
 #include <cstdlib>
+#include <arpa/inet.h>
 #include <sys/stat.h>
 #include <unistd.h>
 
@@ -164,6 +165,46 @@ TEST(quic_bulk_throughput_with_backpressure) {
     ASSERT_EQ(received, TOTAL);
     ASSERT_FALSE(corrupt);
     ASSERT_TRUE(sconn != nullptr);
+}
+
+// Network-dependent: hits real Cloudflare STUN. Skips (passes) if the
+// socket can't reach it, so offline/sandboxed CI stays green.
+TEST(quic_stun_reflexive) {
+    std::string d = tmpd("stun");
+    auto id = Identity::load_or_create(d);
+    std::string bundle = d + "/authorized.pem";
+    append_file(bundle, id->cert_pem());
+
+    EventLoop loop;
+    auto e = QuicEngine::listen(loop, 0, *id, bundle);
+    ASSERT_TRUE(e != nullptr);
+    ASSERT_TRUE(e->local_port() != 0);
+
+    bool done = false, ok = false;
+    char ip[64] = {0};
+    uint16_t port = 0;
+    e->discover_reflexive([&](bool good, const struct sockaddr_storage &sa) {
+        done = true;
+        ok = good;
+        if (good) {
+            if (sa.ss_family == AF_INET) {
+                auto *s = (const struct sockaddr_in *)&sa;
+                inet_ntop(AF_INET, &s->sin_addr, ip, sizeof ip);
+                port = ntohs(s->sin_port);
+            } else {
+                auto *s = (const struct sockaddr_in6 *)&sa;
+                inet_ntop(AF_INET6, &s->sin6_addr, ip, sizeof ip);
+                port = ntohs(s->sin6_port);
+            }
+        }
+    });
+    pump_until(loop, [&] { return done; }, 6000);
+    if (!ok) {
+        fprintf(stderr, "  [stun] no response (offline?) — skipping\n");
+        return;
+    }
+    fprintf(stderr, "  [stun] reflexive %s:%u\n", ip, port);
+    ASSERT_TRUE(port != 0);
 }
 
 int main() { return run_tests(); }
