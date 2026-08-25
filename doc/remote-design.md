@@ -482,6 +482,19 @@ Two replication subtleties, both decided:
   silent re-snapshot; same mechanism doubles as the multi-client
   resync and as a test oracle.
 
+### Attach picker (planned — the daily driver)
+
+Connecting by command line is not the daily mode. New-window opens a
+tiny text-based picker instead: a synthetic pane (menu painted via
+feed_data with ANSI, input intercepted — reuses the whole renderer)
+listing `[ local terminal ]` first, then the directory roster with
+online state (last_seen within ~2 heartbeats), later each device's
+sessions. Selection transforms the window in place: local spawns a
+shell, remote runs the existing candidate-racing connect. Roster
+fetches run in a forked child over a pipe so the UI never blocks.
+Depends on NAT traversal to be honest — a picker full of unreachable
+boxes is worse than none — so it lands right after it.
+
 ### UI attachment model
 
 v1: one OS window attaches to one session (exactly the tmux -CC
