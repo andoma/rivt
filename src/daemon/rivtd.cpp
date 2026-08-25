@@ -11,6 +11,7 @@
 #include "core/pane.h"
 #include "net/identity.h"
 #include "net/quic_engine.h"
+#include "net/membership.h"
 #include "net/rendezvous.h"
 #include "proto/frame.h"
 #include "proto/messages.h"
@@ -119,6 +120,10 @@ public:
         if (m_listen_port > 0) {
             m_identity = net::Identity::load_or_create();
             if (!m_identity) { fprintf(stderr, "rivtd: cannot create identity\n"); return false; }
+            // Membership drives trust: load the set (auto-init a
+            // single-device set if none), sync it, and write the QUIC
+            // bundle from it — before the engine reads the bundle.
+            sync_membership();
             std::string bundle = net::Identity::authorized_bundle_path();
             m_quic = net::QuicEngine::listen(m_loop, (uint16_t)m_listen_port,
                                              *m_identity, bundle);
@@ -169,9 +174,58 @@ public:
                         rdv.c_str());
                 publish();
                 m_loop.add_timer(60000, publish, true);
+                // Re-sync the set periodically so newly-paired devices
+                // become trusted without a restart.
+                m_loop.add_timer(60000, [this]() { sync_membership(); }, true);
             }
         }
         return true;
+    }
+
+    // Load the membership log (auto-init a single-device set if none),
+    // reconcile with the rendezvous, and rewrite the QUIC trust bundle.
+    // Live QUIC verification re-reads the bundle per handshake via the
+    // TLS store, so a rewrite takes effect for new connections.
+    void sync_membership() {
+        std::string path = net::MembershipLog::default_path();
+        net::MembershipLog log;
+        if (!log.load_file(path)) {
+            // No set yet: found one anchored on this device.
+            std::string g = net::MembershipLog::genesis(*m_identity);
+            if (g.empty() || !log.load({g})) {
+                fprintf(stderr, "rivtd: failed to create device set\n");
+                return;
+            }
+            log.save(path);
+            fprintf(stderr, "rivtd: founded device set %s\n", log.set_id().c_str());
+        }
+
+        std::string rdv = net::rendezvous_url();
+        if (!rdv.empty()) {
+            std::string set = log.set_id();
+            std::vector<std::string> remote;
+            if (net::membership_fetch(rdv, set, remote) && remote.size() > log.size()) {
+                // Adopt the longer log only if it verifies and extends
+                // ours (shares our genesis). The DO can withhold but not
+                // forge, so this is safe.
+                net::MembershipLog cand;
+                if (cand.load(remote) && cand.set_id() == set) {
+                    log = std::move(cand);
+                    log.save(path);
+                    fprintf(stderr, "rivtd: synced set to %zu ops\n", log.size());
+                }
+            }
+            // Push any ops the DO is missing (we added while it was
+            // behind, or a fresh genesis).
+            std::vector<std::string> have;
+            net::membership_fetch(rdv, set, have);
+            for (size_t i = have.size(); i < log.size(); i++)
+                net::membership_push(rdv, set, (uint32_t)i, log.ops()[i]);
+        }
+
+        std::string bundle = net::Identity::authorized_bundle_path();
+        if (!log.write_bundle(bundle, (int64_t)time(nullptr)))
+            fprintf(stderr, "rivtd: failed to write trust bundle\n");
     }
 
     int run() {
