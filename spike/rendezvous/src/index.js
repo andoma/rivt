@@ -33,7 +33,7 @@ async function verifyDeviceSig(spki_b64, sig_raw_b64, payload) {
 export default {
   async fetch(request, env) {
     const url = new URL(request.url);
-    if (url.pathname.startsWith("/dir/")) {
+    if (url.pathname.startsWith("/dir/") || url.pathname.startsWith("/log/")) {
       const id = env.RENDEZVOUS.idFromName("directory");
       return env.RENDEZVOUS.get(id).fetch(request);
     }
@@ -61,7 +61,8 @@ export class Rendezvous {
 
   async fetch(request) {
     const url = new URL(request.url);
-    if (url.pathname.startsWith("/dir/")) return this.directory(request, url);
+    if (url.pathname.startsWith("/dir/") || url.pathname.startsWith("/log/"))
+      return this.directory(request, url);
     if (request.headers.get("Upgrade") !== "websocket")
       return new Response("expected websocket", { status: 426 });
     const device = new URL(request.url).searchParams.get("device") ?? "anon";
@@ -112,6 +113,36 @@ export class Rendezvous {
       if (!d) return json({ error: "unknown device" }, 404);
       const { spki, ...pub } = d;
       return json(pub);
+    }
+
+    // --- membership log: opaque, append-only, optimistic-concurrency ---
+    // The log is fully client-verified, so the DO stores base64 ops
+    // without interpreting them. Append requires the expected seq (=
+    // current length) to serialize concurrent writers.
+    if (url.pathname === "/log/append" && request.method === "POST") {
+      let b;
+      try { b = await request.json(); } catch { return json({ error: "bad json" }, 400); }
+      const { set, seq, op } = b;
+      if (!set || typeof seq !== "number" || typeof op !== "string")
+        return json({ error: "missing fields" }, 400);
+      const count = (await this.ctx.storage.get(`logcount:${set}`)) ?? 0;
+      if (seq !== count) return json({ error: "seq conflict", count }, 409);
+      await this.ctx.storage.put(`log:${set}:${seq}`, op);
+      await this.ctx.storage.put(`logcount:${set}`, count + 1);
+      return json({ ok: true, seq });
+    }
+
+    if (url.pathname === "/log/fetch" && request.method === "GET") {
+      const set = url.searchParams.get("set") ?? "";
+      const count = (await this.ctx.storage.get(`logcount:${set}`)) ?? 0;
+      const ops = [];
+      // Batch-read the ordered ops.
+      const map = await this.ctx.storage.list({ prefix: `log:${set}:` });
+      const byseq = [];
+      for (const [k, v] of map) byseq.push([parseInt(k.split(":").pop(), 10), v]);
+      byseq.sort((a, b) => a[0] - b[0]);
+      for (const [, v] of byseq) ops.push(v);
+      return json({ count, ops });
     }
 
     if (url.pathname === "/dir/devices" && request.method === "GET") {

@@ -32,4 +32,13 @@ bool lookup_device(const std::string &base_url, const std::string &name, DirEntr
 // Non-loopback interface addresses, v4 first.
 std::vector<std::string> local_addresses();
 
+// --- membership log sync (ops are opaque binary; base64 on the wire) ---
+// Push one op at expected position seq. Returns: 0 = appended,
+// 1 = seq conflict (caller should re-fetch and retry), -1 = error.
+int membership_push(const std::string &base_url, const std::string &set_id,
+                    uint32_t seq, const std::string &op);
+// Fetch all ops for a set (verified by the caller, not here).
+bool membership_fetch(const std::string &base_url, const std::string &set_id,
+                      std::vector<std::string> &ops_out);
+
 } // namespace rivt::net

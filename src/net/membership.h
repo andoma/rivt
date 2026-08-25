@@ -46,6 +46,20 @@ public:
     const std::vector<std::string> &ops() const { return m_ops; }
     size_t size() const { return m_ops.size(); }
 
+    // Set id = SHA-256 hex of the genesis op (stable, unforgeable name
+    // for the device set). Empty if no genesis loaded.
+    std::string set_id() const;
+
+    // --- on-disk persistence (length-prefixed ops) ---
+    static std::string default_path();  // ~/.local/state/rivt/membership.log
+    bool save(const std::string &path) const;
+    bool load_file(const std::string &path);  // verifies; false if absent/invalid
+
+    // Write the QUIC trust bundle (concatenated member cert PEMs) so the
+    // existing cert-pinning auth is driven by the log. now filters
+    // expired members. Returns false on write error.
+    bool write_bundle(const std::string &bundle_path, int64_t now) const;
+
 private:
     bool append_verified(const std::string &op);
 

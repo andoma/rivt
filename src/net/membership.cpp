@@ -9,6 +9,8 @@
 
 #include <algorithm>
 #include <cstdio>
+#include <sys/stat.h>
+#include <unistd.h>
 
 namespace rivt::net {
 
@@ -66,6 +68,13 @@ static std::string sha256(const std::string &d) {
     uint8_t h[SHA256_DIGEST_LENGTH];
     SHA256((const uint8_t *)d.data(), d.size(), h);
     return std::string((const char *)h, sizeof h);
+}
+
+static std::string hex(const std::string &b) {
+    static const char *t = "0123456789abcdef";
+    std::string o;
+    for (unsigned char c : b) { o += t[c >> 4]; o += t[c & 15]; }
+    return o;
 }
 
 static EVP_PKEY *pub_from_der(const std::string &der) {
@@ -227,6 +236,62 @@ bool MembershipLog::is_member(const std::string &pubkey_der, int64_t now) const 
     for (const auto &m : members(now))
         if (m.pubkey_der == pubkey_der) return true;
     return false;
+}
+
+std::string MembershipLog::set_id() const {
+    if (m_ops.empty()) return {};
+    return hex(sha256(m_ops.front()));
+}
+
+std::string MembershipLog::default_path() {
+    const char *st = getenv("RIVT_STATE_DIR");
+    if (st && *st) { std::string d = st; mkdir(d.c_str(), 0700); return d + "/membership.log"; }
+    const char *xdg = getenv("XDG_STATE_HOME");
+    std::string d = xdg && *xdg ? std::string(xdg) + "/rivt"
+                                : std::string(getenv("HOME") ? getenv("HOME") : ".") +
+                                      "/.local/state/rivt";
+    mkdir(d.c_str(), 0700);
+    return d + "/membership.log";
+}
+
+bool MembershipLog::save(const std::string &path) const {
+    proto::Writer w;
+    w.u32((uint32_t)m_ops.size());
+    for (const auto &op : m_ops) w.str(op);
+    std::string tmp = path + ".tmp";
+    FILE *f = fopen(tmp.c_str(), "wb");
+    if (!f) return false;
+    bool ok = fwrite(w.buf.data(), 1, w.buf.size(), f) == w.buf.size();
+    fclose(f);
+    if (!ok) { unlink(tmp.c_str()); return false; }
+    return rename(tmp.c_str(), path.c_str()) == 0;
+}
+
+bool MembershipLog::load_file(const std::string &path) {
+    FILE *f = fopen(path.c_str(), "rb");
+    if (!f) return false;
+    std::string data;
+    char buf[65536];
+    size_t n;
+    while ((n = fread(buf, 1, sizeof buf, f)) > 0) data.append(buf, n);
+    fclose(f);
+    proto::Reader r((const uint8_t *)data.data(), data.size());
+    uint32_t cnt = r.u32();
+    std::vector<std::string> ops;
+    for (uint32_t i = 0; i < cnt && r.ok; i++) ops.push_back(r.str());
+    if (!r.ok) return false;
+    return load(ops);
+}
+
+bool MembershipLog::write_bundle(const std::string &bundle_path, int64_t now) const {
+    std::string tmp = bundle_path + ".tmp";
+    FILE *f = fopen(tmp.c_str(), "w");
+    if (!f) return false;
+    chmod(tmp.c_str(), 0600);
+    for (const auto &m : members(now))
+        fwrite(m.cert_pem.data(), 1, m.cert_pem.size(), f);
+    fclose(f);
+    return rename(tmp.c_str(), bundle_path.c_str()) == 0;
 }
 
 } // namespace rivt::net

@@ -3,6 +3,7 @@
 #include "test.h"
 #include "net/identity.h"
 #include "net/membership.h"
+#include "net/rendezvous.h"
 
 #include <cstdlib>
 #include <sys/stat.h>
@@ -121,6 +122,83 @@ TEST(membership_rejects_tampering) {
     trunc[1].resize(trunc[1].size() / 2);
     MembershipLog t4;
     ASSERT_FALSE(t4.load(trunc));
+}
+
+TEST(membership_persist_and_bundle) {
+    std::string dir = tmpd("persist");
+    auto a = Identity::load_or_create(dir + "/a");
+    auto b = Identity::load_or_create(dir + "/b");
+    MembershipLog log;
+    log.load({MembershipLog::genesis(*a)});
+    log.add_member(*a, b->spki_der(), "boxb", b->cert_pem());
+
+    std::string path = dir + "/membership.log";
+    ASSERT_TRUE(log.save(path));
+    ASSERT_TRUE(!log.set_id().empty());
+
+    MembershipLog reloaded;
+    ASSERT_TRUE(reloaded.load_file(path));
+    ASSERT_EQ((int)reloaded.members().size(), 2);
+    ASSERT_STR_EQ(reloaded.set_id(), log.set_id());  // stable id
+
+    // Bundle = concatenated member cert PEMs; both certs present.
+    std::string bundle = dir + "/authorized.pem";
+    ASSERT_TRUE(log.write_bundle(bundle, 0));
+    FILE *f = fopen(bundle.c_str(), "r");
+    ASSERT_TRUE(f != nullptr);
+    std::string content;
+    char buf[4096]; size_t n;
+    while ((n = fread(buf, 1, sizeof buf, f)) > 0) content.append(buf, n);
+    fclose(f);
+    ASSERT_TRUE(content.find(a->cert_pem()) != std::string::npos);
+    ASSERT_TRUE(content.find(b->cert_pem()) != std::string::npos);
+
+    // Expired members are excluded from the bundle.
+    MembershipLog log2;
+    log2.load({MembershipLog::genesis(*a)});
+    log2.add_member(*a, b->spki_der(), "boxb", b->cert_pem(), 1000);
+    std::string bundle2 = dir + "/authorized2.pem";
+    ASSERT_TRUE(log2.write_bundle(bundle2, 2000));  // b expired
+    content.clear();
+    f = fopen(bundle2.c_str(), "r");
+    while ((n = fread(buf, 1, sizeof buf, f)) > 0) content.append(buf, n);
+    fclose(f);
+    ASSERT_TRUE(content.find(a->cert_pem()) != std::string::npos);
+    ASSERT_TRUE(content.find(b->cert_pem()) == std::string::npos);
+}
+
+// Live DO round-trip: push a locally-built log op-by-op, fetch it back
+// fresh, and verify the chain reconstructs. Skips without RIVT_RENDEZVOUS.
+TEST(membership_do_sync) {
+    const char *url = getenv("RIVT_RENDEZVOUS");
+    if (!url) { fprintf(stderr, "  [do-sync] RIVT_RENDEZVOUS unset — skipping\n"); return; }
+    std::string dir = tmpd("dosync");
+    auto a = Identity::load_or_create(dir + "/a");
+    auto b = Identity::load_or_create(dir + "/b");
+    MembershipLog log;
+    log.load({MembershipLog::genesis(*a)});
+    log.add_member(*a, b->spki_der(), "boxb", b->cert_pem());
+    std::string set = log.set_id();  // unique per test run (fresh keys)
+
+    for (size_t i = 0; i < log.ops().size(); i++) {
+        int rc = net::membership_push(url, set, (uint32_t)i, log.ops()[i]);
+        if (rc == -1 && i == 0) {
+            fprintf(stderr, "  [do-sync] push failed (offline?) — skipping\n");
+            return;
+        }
+        ASSERT_EQ(rc, 0);
+    }
+    std::vector<std::string> fetched;
+    ASSERT_TRUE(net::membership_fetch(url, set, fetched));
+    ASSERT_EQ((int)fetched.size(), (int)log.ops().size());
+    MembershipLog rebuilt;
+    ASSERT_TRUE(rebuilt.load(fetched));  // full chain verification
+    ASSERT_EQ((int)rebuilt.members().size(), 2);
+    ASSERT_STR_EQ(rebuilt.set_id(), set);
+
+    // seq conflict: re-pushing seq 0 must be rejected.
+    ASSERT_EQ(net::membership_push(url, set, 0, log.ops()[0]), 1);
+    fprintf(stderr, "  [do-sync] pushed/fetched/verified %d ops\n", (int)fetched.size());
 }
 
 int main() { return run_tests(); }

@@ -100,6 +100,36 @@ static bool https_request(const std::string &url, const std::string &path,
     return status_ok;
 }
 
+static const char B64[] = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+static std::string b64enc(const std::string &in) {
+    std::string o;
+    const uint8_t *d = (const uint8_t *)in.data();
+    for (size_t i = 0; i < in.size(); i += 3) {
+        uint32_t v = d[i] << 16 | (i + 1 < in.size() ? d[i + 1] << 8 : 0) |
+                     (i + 2 < in.size() ? d[i + 2] : 0);
+        o += B64[(v >> 18) & 63];
+        o += B64[(v >> 12) & 63];
+        o += i + 1 < in.size() ? B64[(v >> 6) & 63] : '=';
+        o += i + 2 < in.size() ? B64[v & 63] : '=';
+    }
+    return o;
+}
+static std::string b64dec(const std::string &in) {
+    int t[256];
+    for (int i = 0; i < 256; i++) t[i] = -1;
+    for (int i = 0; i < 64; i++) t[(uint8_t)B64[i]] = i;
+    std::string o;
+    uint32_t v = 0;
+    int bits = 0;
+    for (char c : in) {
+        if (c == '=' || t[(uint8_t)c] < 0) continue;
+        v = (v << 6) | t[(uint8_t)c];
+        bits += 6;
+        if (bits >= 8) { bits -= 8; o += (char)((v >> bits) & 0xff); }
+    }
+    return o;
+}
+
 static std::string json_escape(const std::string &s) {
     std::string out;
     for (char c : s) {
@@ -201,6 +231,36 @@ bool lookup_device(const std::string &base_url, const std::string &name, DirEntr
     std::string obs = json_str(resp, "observed_ip");
     if (!obs.empty()) out.addrs.push_back(obs);
     return out.port != 0;
+}
+
+int membership_push(const std::string &base_url, const std::string &set_id,
+                    uint32_t seq, const std::string &op) {
+    std::string body = "{\"set\":\"" + set_id + "\",\"seq\":" + std::to_string(seq) +
+                       ",\"op\":\"" + b64enc(op) + "\"}";
+    std::string resp;
+    bool ok = https_request(base_url, "/log/append", "POST", body, resp);
+    if (ok) return 0;
+    if (resp.find("seq conflict") != std::string::npos) return 1;
+    return -1;
+}
+
+bool membership_fetch(const std::string &base_url, const std::string &set_id,
+                      std::vector<std::string> &ops_out) {
+    std::string resp;
+    if (!https_request(base_url, "/log/fetch?set=" + set_id, "GET", "", resp)) return false;
+    auto a = resp.find("\"ops\":[");
+    if (a == std::string::npos) return false;
+    a += 7;
+    auto end = resp.find(']', a);
+    std::string list = resp.substr(a, end - a);
+    size_t p = 0;
+    while ((p = list.find('"', p)) != std::string::npos) {
+        auto e = list.find('"', p + 1);
+        if (e == std::string::npos) break;
+        ops_out.push_back(b64dec(list.substr(p + 1, e - p - 1)));
+        p = e + 1;
+    }
+    return true;
 }
 
 } // namespace rivt::net
