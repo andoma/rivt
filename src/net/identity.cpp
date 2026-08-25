@@ -189,6 +189,18 @@ std::string Identity::spki_b64() const {
     return out;
 }
 
+std::string Identity::spki_der() const {
+    EVP_PKEY *key = load_key(m_key_path);
+    if (!key) return {};
+    uint8_t *der = nullptr;
+    int len = i2d_PUBKEY(key, &der);
+    EVP_PKEY_free(key);
+    if (len <= 0) return {};
+    std::string out((const char *)der, len);
+    OPENSSL_free(der);
+    return out;
+}
+
 std::string Identity::sign_b64(const std::string &payload) const {
     EVP_PKEY *key = load_key(m_key_path);
     if (!key) return {};

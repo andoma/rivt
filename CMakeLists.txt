@@ -339,3 +339,19 @@ if(CMAKE_BUILD_TYPE STREQUAL "Debug")
 endif()
 add_test(NAME ws COMMAND test_ws)
 endif()
+
+if(RIVT_QUIC AND NOT APPLE)
+add_executable(test_membership
+    tests/test_membership.cpp
+    src/net/identity.cpp
+    src/net/membership.cpp
+)
+target_include_directories(test_membership PRIVATE src)
+target_compile_options(test_membership PRIVATE -Wall -Wextra -Wpedantic)
+target_link_libraries(test_membership PRIVATE OpenSSL::Crypto)
+if(CMAKE_BUILD_TYPE STREQUAL "Debug")
+    target_compile_options(test_membership PRIVATE -Og -ggdb -fsanitize=address)
+    target_link_options(test_membership PRIVATE -fsanitize=address)
+endif()
+add_test(NAME membership COMMAND test_membership)
+endif()

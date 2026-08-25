@@ -143,6 +143,16 @@ Names are display labels; the pubkey is the identity. Rejoining under
 an old name is a new identity: it needs a fresh approval and leaves the
 old key as a dead member until removed.
 
+Trust is NOT maintained per-box or pairwise (no ssh-style
+authorized_keys list on each machine). The log is the single source of
+truth: enroll a device once and every box derives the new member from
+the synced log. Each daemon writes its QUIC trust bundle
+(authorized_certs.pem) from the verified log, so the existing
+cert-pinning QUIC auth is unchanged — only the bundle's source moves
+from hand-editing to log derivation. The DO stores the log but cannot
+forge it (every client verifies the signature chain locally), so
+security never depends on the rendezvous.
+
 For fleet hygiene (many hosts, hosts that reinstall), `add` ops may
 carry an optional `expires` timestamp. An expired key counts as
 removed. A device added with expiry keeps itself alive by signing
@@ -163,8 +173,11 @@ needed (the code is copy-pasted or QR-scanned between your own
 machines, never memorized):
 
 1. On an existing member M: `rivt pair` creates a single-use invite
-   `{set_id, invite_id, secret}` (128-bit secret, 10 min expiry),
-   shown as one paste-able string. M stays connected, listening.
+   `{rendezvous_url, set_id, invite_id, secret}` (128-bit secret, 10
+   min expiry), shown as one paste-able string. The invite carries the
+   rendezvous URL so joining a device configures it automatically — a
+   new box needs no pre-existing config, just the one pasted code. M
+   stays connected, listening.
 2. On the new device N: `rivt join <code>`. N connects to the DO's
    unauthenticated join endpoint addressed by `invite_id` and sends
    `{pubkey_N, name_N, hmac(secret, pubkey_N || name_N)}`.
