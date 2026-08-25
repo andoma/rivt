@@ -98,6 +98,8 @@ set(RIVT_SOURCES
     src/net/quic_engine.cpp
     src/net/stun.cpp
     src/net/rendezvous.cpp
+    src/net/membership.cpp
+    src/net/pairing.cpp
 )
 
 if(APPLE)

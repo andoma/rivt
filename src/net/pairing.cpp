@@ -51,6 +51,17 @@ static std::string jget(const std::string &j, const std::string &key) {
     return e == std::string::npos ? std::string{} : j.substr(k, e - k);
 }
 
+static std::string prompt_line(const char *msg) {
+    fputs(msg, stdout);
+    fflush(stdout);
+    char line[1024];
+    if (!fgets(line, sizeof line, stdin)) return {};
+    std::string s = line;
+    while (!s.empty() && (s.back() == '\n' || s.back() == '\r' || s.back() == ' '))
+        s.pop_back();
+    return s;
+}
+
 static std::string device_name() {
     char host[256] = "rivt";
     gethostname(host, sizeof host - 1);
@@ -159,6 +170,28 @@ bool pair_invite(const Identity &self) {
         return false;
     }
     printf("Approved '%s'. It is now a member of the set.\n", name.c_str());
+    return true;
+}
+
+bool interactive_enroll(const std::string &code_arg) {
+    auto id = Identity::load_or_create();
+    if (!id) { fprintf(stderr, "cannot create device identity\n"); return false; }
+    printf("This device's fingerprint: %s\n\n", id->fingerprint().c_str());
+
+    std::string code = code_arg;
+    if (code.empty()) {
+        printf("Paste a pairing code from another device (run `rivt pair` there),\n"
+               "or press Enter to found a NEW device set on this machine.\n\n");
+        code = prompt_line("Pairing code: ");
+    }
+    if (!code.empty()) return pair_join(code, *id);
+
+    std::string url = rendezvous_url();
+    if (url.empty()) url = prompt_line("Rendezvous URL (https://...): ");
+    if (url.empty()) { fprintf(stderr, "a rendezvous URL is required\n"); return false; }
+    set_rendezvous_url(url);
+    if (sync_membership(*id, /*found_if_missing=*/true).empty()) return false;
+    printf("\nFounded a new set. Pair other devices with `rivtd pair` / `rivt pair`.\n");
     return true;
 }
 

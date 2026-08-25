@@ -1057,37 +1057,12 @@ static bool install_systemd_unit() {
 }
 
 static int run_setup(int argc, char **argv) {
-    auto id = rivt::net::Identity::load_or_create();
-    if (!id) { fprintf(stderr, "cannot create device identity\n"); return 1; }
-
-    // A code may be given as an argument, else prompt.
     std::string code;
     for (int i = 1; i < argc; i++)
         if (argv[i][0] != '-' && strcmp(argv[i], "setup") != 0) { code = argv[i]; break; }
 
-    printf("rivt device setup\n"
-           "  fingerprint: %s\n\n", id->fingerprint().c_str());
-
-    if (code.empty()) {
-        printf("Paste a pairing code from another device (run `rivt pair` there),\n"
-               "or press Enter to found a NEW device set on this machine.\n\n");
-        code = prompt("Pairing code: ");
-    }
-
-    bool ok;
-    if (!code.empty()) {
-        // The code carries the rendezvous URL; join persists it.
-        ok = rivt::net::pair_join(code, *id);
-    } else {
-        std::string url = rivt::net::rendezvous_url();
-        if (url.empty()) url = prompt("Rendezvous URL (https://...): ");
-        if (url.empty()) { fprintf(stderr, "a rendezvous URL is required\n"); return 1; }
-        rivt::net::set_rendezvous_url(url);
-        ok = !rivt::net::sync_membership(*id, /*found_if_missing=*/true).empty();
-        if (ok)
-            printf("\nFounded a new set. Pair other devices by running `rivtd pair` here.\n");
-    }
-    if (!ok) return 1;
+    printf("rivt server setup\n\n");
+    if (!rivt::net::interactive_enroll(code)) return 1;
 
     std::string ans = prompt("\nRun rivtd as a background service (systemd --user)? [Y/n] ");
     if (ans.empty() || ans[0] == 'y' || ans[0] == 'Y') {
@@ -1096,10 +1071,13 @@ static int run_setup(int argc, char **argv) {
     } else {
         printf("\nStart it yourself with: rivtd --listen\n");
     }
-    printf("\nDone. Connect from another device with:  rivt --connect %s\n",
-           []{ char h[256]="this-host"; gethostname(h,sizeof h-1);
-                std::string s=h; auto d=s.find('.'); if(d!=std::string::npos) s.resize(d);
-                static std::string r; r=s; return r.c_str(); }());
+    char h[256] = "this-host";
+    gethostname(h, sizeof h - 1);
+    std::string host = h;
+    auto d = host.find('.');
+    if (d != std::string::npos) host.resize(d);
+    printf("\nDone. Reach this box from another device with:  rivt --connect %s\n",
+           host.c_str());
     return 0;
 }
 

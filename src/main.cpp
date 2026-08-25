@@ -1,6 +1,8 @@
 #include "core/window.h"
 #include "remote/remote_client.h"
 #include "net/rendezvous.h"
+#include "net/identity.h"
+#include "net/pairing.h"
 #include "core/event_loop.h"
 #include "core/config.h"
 #include "core/debug.h"
@@ -41,6 +43,29 @@ static void sigterm_handler(int) {
 
 int main(int argc, char *argv[]) {
     setlocale(LC_ALL, "");
+
+    // Membership verbs (foreground, no window). `rivt setup` is the
+    // client enrollment: join a set (or found one) — no daemon/systemd.
+    for (int i = 1; i < argc; i++) {
+        if (!strcmp(argv[i], "setup")) {
+            std::string code;
+            for (int j = 1; j < argc; j++)
+                if (argv[j][0] != '-' && strcmp(argv[j], "setup") != 0) { code = argv[j]; break; }
+            printf("rivt client setup\n\n");
+            if (!rivt::net::interactive_enroll(code)) return 1;
+            printf("\nDone. Connect to a device with:  rivt --connect <name>\n");
+            return 0;
+        }
+        if (!strcmp(argv[i], "pair")) {
+            auto id = rivt::net::Identity::load_or_create();
+            return id && rivt::net::pair_invite(*id) ? 0 : 1;
+        }
+        if (!strcmp(argv[i], "join")) {
+            auto id = rivt::net::Identity::load_or_create();
+            if (!id || i + 1 >= argc) { fprintf(stderr, "usage: rivt join <code>\n"); return 1; }
+            return rivt::net::pair_join(argv[i + 1], *id) ? 0 : 1;
+        }
+    }
     signal(SIGCHLD, sigchld_handler);
     signal(SIGTERM, sigterm_handler);
     signal(SIGINT, sigterm_handler);
