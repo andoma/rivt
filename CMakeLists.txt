@@ -27,8 +27,21 @@ endif()
 # QUIC transport (rivtd <-> rivt across machines). Fetches pinned
 # picoquic + picotls at configure time; needs OpenSSL.
 option(RIVT_QUIC "Build QUIC remote transport" ON)
-if(RIVT_QUIC AND NOT APPLE)
+if(RIVT_QUIC)
     include(FetchContent)
+    # Homebrew's OpenSSL isn't on CMake's default search path; point both
+    # our find and picoquic's internal find at it.
+    if(APPLE AND NOT OPENSSL_ROOT_DIR)
+        execute_process(COMMAND brew --prefix openssl@3
+            OUTPUT_VARIABLE _brew_ossl OUTPUT_STRIP_TRAILING_WHITESPACE
+            RESULT_VARIABLE _brew_rc ERROR_QUIET)
+        if(_brew_rc EQUAL 0 AND EXISTS "${_brew_ossl}")
+            set(OPENSSL_ROOT_DIR "${_brew_ossl}" CACHE PATH "" FORCE)
+        else()
+            message(FATAL_ERROR
+                "OpenSSL not found. Install it with: brew install openssl@3")
+        endif()
+    endif()
     set(PICOQUIC_FETCH_PTLS Y CACHE BOOL "" FORCE)
     set(PICOQUIC_BUILD_DEMOS OFF CACHE BOOL "" FORCE)
     set(BUILD_TESTING OFF CACHE BOOL "" FORCE)

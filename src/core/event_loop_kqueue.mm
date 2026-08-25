@@ -242,6 +242,20 @@ int EventLoop::add_timer(int interval_ms, TimerCallback cb, bool repeating) {
     return id;
 }
 
+void EventLoop::reset_timer(int timer_id, int delay_ms) {
+    if (delay_ms < 1) delay_ms = 1;
+    auto it = std::find_if(m_timers.begin(), m_timers.end(),
+        [timer_id](const TimerEntry &e) { return e.id == timer_id; });
+    if (it == m_timers.end()) return;
+    struct kevent ke;
+    uint16_t flags = EV_ADD | EV_ENABLE;
+    if (!it->repeating) flags |= EV_ONESHOT;
+    // Re-arming an existing EVFILT_TIMER ident updates its interval.
+    EV_SET(&ke, it->kq_ident, EVFILT_TIMER, flags, 0, delay_ms,
+           (void *)(uintptr_t)it->id);
+    kevent(m_backend_fd, &ke, 1, nullptr, 0, nullptr);
+}
+
 void EventLoop::remove_timer(int timer_id) {
     auto it = std::find_if(m_timers.begin(), m_timers.end(),
         [timer_id](const TimerEntry &e) { return e.id == timer_id; });

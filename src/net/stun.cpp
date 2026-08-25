@@ -2,7 +2,7 @@
 
 #include <cstring>
 #include <netinet/in.h>
-#include <sys/random.h>
+#include <openssl/rand.h>
 
 namespace rivt::net {
 
@@ -22,7 +22,7 @@ size_t stun_build_request(uint8_t *out, uint8_t txid[STUN_TXID_LEN]) {
     out[2] = 0x00; out[3] = 0x00;  // length 0
     uint32_t magic = htonl(MAGIC);
     memcpy(out + 4, &magic, 4);
-    if (getrandom(txid, STUN_TXID_LEN, 0) != (ssize_t)STUN_TXID_LEN) {
+    if (RAND_bytes(txid, STUN_TXID_LEN) != 1) {
         for (size_t i = 0; i < STUN_TXID_LEN; i++) txid[i] = (uint8_t)(i * 7 + 1);
     }
     memcpy(out + 8, txid, STUN_TXID_LEN);
