@@ -1,15 +1,28 @@
 cmake_minimum_required(VERSION 3.16)
 project(rivt VERSION 0.1.0 LANGUAGES C CXX)
 
+if(NOT CMAKE_BUILD_TYPE)
+    set(CMAKE_BUILD_TYPE Release CACHE STRING "" FORCE)
+endif()
+
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 
 find_package(PkgConfig REQUIRED)
 
-# Headless machines (build/dev servers) need only rivtd: configure with
-# -DRIVT_UI=OFF and no graphics libraries are required at all.
-option(RIVT_UI "Build the rivt UI (requires freetype/xcb/GL...)" ON)
+# The UI needs freetype/xcb/GL; headless machines get rivtd only.
+# Autodetected: if freetype2 is absent, the UI is skipped. Force with
+# -DRIVT_UI=ON/OFF.
+if(NOT DEFINED RIVT_UI)
+    pkg_check_modules(FREETYPE_PROBE QUIET freetype2)
+    if(FREETYPE_PROBE_FOUND OR APPLE)
+        set(RIVT_UI ON)
+    else()
+        set(RIVT_UI OFF)
+        message(STATUS "freetype2 not found — building rivtd only (set -DRIVT_UI=ON to require the UI)")
+    endif()
+endif()
 
 # QUIC transport (rivtd <-> rivt across machines). Fetches pinned
 # picoquic + picotls at configure time; needs OpenSSL.
@@ -282,6 +295,9 @@ if(CMAKE_BUILD_TYPE STREQUAL "Debug")
     target_link_options(rivtd PRIVATE -fsanitize=address)
 endif()
 install(TARGETS rivtd RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR})
+configure_file(data/rivtd.service.in rivtd.service @ONLY)
+install(FILES ${CMAKE_CURRENT_BINARY_DIR}/rivtd.service
+        DESTINATION lib/systemd/user)
 endif()
 
 if(NOT APPLE)

@@ -46,8 +46,7 @@ int main(int argc, char *argv[]) {
     signal(SIGINT, sigterm_handler);
 
     // Parse global flags
-    bool remote = false;      // persistent sessions + resume all
-    bool no_daemon = false;   // classic in-process terminal
+    bool remote = false;      // daemon-backed sessions + resume all (opt-in)
     std::string remote_socket;
     std::string connect_host; // QUIC daemon on another machine
     uint16_t connect_port = 7433;
@@ -56,8 +55,6 @@ int main(int argc, char *argv[]) {
             debug_enabled() = true;
         } else if (strcmp(argv[i], "--remote") == 0) {
             remote = true;
-        } else if (strcmp(argv[i], "--no-daemon") == 0) {
-            no_daemon = true;
         } else if (strcmp(argv[i], "--socket") == 0 && i + 1 < argc) {
             remote_socket = argv[++i];
         } else if (strcmp(argv[i], "--connect") == 0 && i + 1 < argc) {
@@ -168,21 +165,11 @@ int main(int argc, char *argv[]) {
         } else {
             for (const auto &si : sessions) create_remote_window(si.id, true);
         }
-    } else if (no_daemon) {
-        create_window();
     } else {
-        // Default: daemon-backed throwaway session. Verify the daemon
-        // synchronously first (spawning or upgrading it as needed): a
-        // WM-launched terminal must always produce a window, so any
-        // failure falls back to the in-process terminal.
-        std::string path = remote_socket.empty() ? RemoteClient::default_socket_path()
-                                                 : remote_socket;
-        std::vector<RemoteSessionInfo> ignored;
-        bool daemon_ok = RemoteClient::query_sessions(path, /*autostart=*/true, ignored);
-        if (!daemon_ok || !create_remote_window(0, false)) {
-            fprintf(stderr, "rivt: daemon unavailable, running in-process\n");
-            create_window();
-        }
+        // Plain rivt is a classic in-process terminal: no daemon, no
+        // persistence. Daemons belong on remote machines (--connect) or
+        // behind an explicit --remote.
+        create_window();
     }
     if (windows.empty()) return 1;
 

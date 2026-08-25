@@ -489,18 +489,19 @@ shape, so TabManager semantics carry over: one tab per server
 window). Mixing sessions in one window is a later UI feature, not a
 protocol feature; the protocol is per-pane already.
 
-Local terminals become daemon-backed too: the UI autostarts rivtd
-(`$XDG_RUNTIME_DIR/rivt/daemon.sock`, 0700 dir) and attaches over the
-unix socket, so local sessions survive UI restarts. The current
-in-process path remains behind `--no-daemon` during the transition.
-tmux -CC mode is untouched throughout.
+Local terminals stay classic in-process (decision revised 2026-08-25:
+local session persistence is not wanted — daemons belong on remote
+machines). `rivt --remote` opts into daemon-backed local sessions;
+plain `rivt` never touches the daemon. tmux -CC mode is untouched
+throughout.
 
 ### Implementation order (each step compiles, tests, and ships)
 
 1. `src/proto/`: framing + snapshot roundtrip with unit tests.
 2. `rivtd`: sessions, single-client attach over the unix socket.
 3. UI `RemoteController` + attach; local persistence works end to end.
-4. Local shells default to daemon-backed (`--no-daemon` fallback).
+4. ~~Local shells default to daemon-backed~~ — built, then reverted
+   by design: plain rivt is in-process; the daemon serves remote use.
 5. Multi-client: active-client-wins sizing, bounded per-client buffers
    with snapshot-resync, grid-hash verification, OSC 52 / agent
    routing to the most-recently-active client.

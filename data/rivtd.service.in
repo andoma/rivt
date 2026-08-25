@@ -1,0 +1,14 @@
+[Unit]
+Description=rivt terminal session daemon
+Documentation=https://github.com/andoma/rivt
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+ExecStart=@CMAKE_INSTALL_FULL_BINDIR@/rivtd --listen
+Restart=on-failure
+RestartSec=2
+# rivtd --upgrade re-execs in place; the pid never changes.
+
+[Install]
+WantedBy=default.target
