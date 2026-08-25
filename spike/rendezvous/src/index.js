@@ -33,7 +33,8 @@ async function verifyDeviceSig(spki_b64, sig_raw_b64, payload) {
 export default {
   async fetch(request, env) {
     const url = new URL(request.url);
-    if (url.pathname.startsWith("/dir/") || url.pathname.startsWith("/log/")) {
+    if (url.pathname.startsWith("/dir/") || url.pathname.startsWith("/log/") ||
+        url.pathname.startsWith("/pair/")) {
       const id = env.RENDEZVOUS.idFromName("directory");
       return env.RENDEZVOUS.get(id).fetch(request);
     }
@@ -61,7 +62,8 @@ export class Rendezvous {
 
   async fetch(request) {
     const url = new URL(request.url);
-    if (url.pathname.startsWith("/dir/") || url.pathname.startsWith("/log/"))
+    if (url.pathname.startsWith("/dir/") || url.pathname.startsWith("/log/") ||
+        url.pathname.startsWith("/pair/"))
       return this.directory(request, url);
     if (request.headers.get("Upgrade") !== "websocket")
       return new Response("expected websocket", { status: 426 });
@@ -151,6 +153,26 @@ export class Rendezvous {
         out.push({ name: d.name, fingerprint: d.fingerprint,
                    last_seen: d.last_seen });
       return json({ devices: out });
+    }
+
+    // Pairing mailbox: two boxes (offer/answer) keyed by invite id. The
+    // secret that authenticates the exchange never touches the DO — it
+    // travels in the pasted code, out of band — so this is a dumb relay.
+    if (url.pathname === "/pair/put" && request.method === "POST") {
+      let b;
+      try { b = await request.json(); } catch { return json({ error: "bad json" }, 400); }
+      const { id, box, payload } = b;
+      if (!id || (box !== "offer" && box !== "answer") || typeof payload !== "string")
+        return json({ error: "missing fields" }, 400);
+      await this.ctx.storage.put(`pair:${id}:${box}`, { payload, ts: Date.now() });
+      return json({ ok: true });
+    }
+    if (url.pathname === "/pair/get" && request.method === "GET") {
+      const id = url.searchParams.get("id") ?? "";
+      const box = url.searchParams.get("box") ?? "";
+      const v = await this.ctx.storage.get(`pair:${id}:${box}`);
+      if (!v || Date.now() - v.ts > 900000) return json({ empty: true });
+      return json({ payload: v.payload });
     }
 
     return json({ error: "not found" }, 404);

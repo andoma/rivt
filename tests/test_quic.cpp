@@ -4,6 +4,7 @@
 #include "core/event_loop.h"
 #include "net/identity.h"
 #include "net/quic_engine.h"
+#include "net/membership.h"
 
 #include <cstdlib>
 #include <arpa/inet.h>
@@ -205,6 +206,48 @@ TEST(quic_stun_reflexive) {
     }
     fprintf(stderr, "  [stun] reflexive %s:%u\n", ip, port);
     ASSERT_TRUE(port != 0);
+}
+
+// The payoff: a membership log derives the QUIC trust bundle, and that
+// bundle grants/denies connections. No hand-maintained cert lists.
+TEST(quic_trust_derived_from_membership_log) {
+    std::string da = tmpd("mla"), db = tmpd("mlb"), dc = tmpd("mlc");
+    auto a = Identity::load_or_create(da);   // founder
+    auto b = Identity::load_or_create(db);   // member
+    auto c = Identity::load_or_create(dc);   // outsider
+
+    MembershipLog log;
+    log.load({MembershipLog::genesis(*a)});
+    log.add_member(*a, b->spki_der(), "b", b->cert_pem());
+
+    std::string bundle_a = da + "/bundle.pem", bundle_b = db + "/bundle.pem",
+                bundle_c = dc + "/bundle.pem";
+    ASSERT_TRUE(log.write_bundle(bundle_a, 0));
+    ASSERT_TRUE(log.write_bundle(bundle_b, 0));
+    ASSERT_TRUE(log.write_bundle(bundle_c, 0));  // c has the bundle but isn't in it
+
+    EventLoop loop;
+    uint16_t port = 47834;
+    auto server = QuicEngine::listen(loop, port, *a, bundle_a);
+    ASSERT_TRUE(server != nullptr);
+    bool got = false;
+    server->on_data = [&](QuicEngine::Conn *, const uint8_t *, size_t) { got = true; };
+
+    // Member B (in A's log) connects — trusted.
+    auto cb = QuicEngine::connect(loop, "127.0.0.1", port, *b, bundle_b);
+    bool b_up = false;
+    cb->on_connected = [&](QuicEngine::Conn *) { b_up = true; };
+    ASSERT_TRUE(pump_until(loop, [&] { return b_up; }));
+    cb->send(cb->client_conn(), "hi", 2);
+    ASSERT_TRUE(pump_until(loop, [&] { return got; }));
+
+    // Outsider C (not in the log, so absent from A's bundle) is rejected.
+    auto cc = QuicEngine::connect(loop, "127.0.0.1", port, *c, bundle_c);
+    bool c_up = false, c_closed = false;
+    cc->on_connected = [&](QuicEngine::Conn *) { c_up = true; };
+    cc->on_closed = [&](QuicEngine::Conn *) { c_closed = true; };
+    pump_until(loop, [&] { return c_closed; }, 4000);
+    ASSERT_TRUE(!c_up || c_closed);
 }
 
 int main() { return run_tests(); }

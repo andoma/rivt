@@ -101,7 +101,7 @@ static bool https_request(const std::string &url, const std::string &path,
 }
 
 static const char B64[] = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
-static std::string b64enc(const std::string &in) {
+std::string b64_encode(const std::string &in) {
     std::string o;
     const uint8_t *d = (const uint8_t *)in.data();
     for (size_t i = 0; i < in.size(); i += 3) {
@@ -114,7 +114,7 @@ static std::string b64enc(const std::string &in) {
     }
     return o;
 }
-static std::string b64dec(const std::string &in) {
+std::string b64_decode(const std::string &in) {
     int t[256];
     for (int i = 0; i < 256; i++) t[i] = -1;
     for (int i = 0; i < 64; i++) t[(uint8_t)B64[i]] = i;
@@ -236,7 +236,7 @@ bool lookup_device(const std::string &base_url, const std::string &name, DirEntr
 int membership_push(const std::string &base_url, const std::string &set_id,
                     uint32_t seq, const std::string &op) {
     std::string body = "{\"set\":\"" + set_id + "\",\"seq\":" + std::to_string(seq) +
-                       ",\"op\":\"" + b64enc(op) + "\"}";
+                       ",\"op\":\"" + b64_encode(op) + "\"}";
     std::string resp;
     bool ok = https_request(base_url, "/log/append", "POST", body, resp);
     if (ok) return 0;
@@ -257,10 +257,28 @@ bool membership_fetch(const std::string &base_url, const std::string &set_id,
     while ((p = list.find('"', p)) != std::string::npos) {
         auto e = list.find('"', p + 1);
         if (e == std::string::npos) break;
-        ops_out.push_back(b64dec(list.substr(p + 1, e - p - 1)));
+        ops_out.push_back(b64_decode(list.substr(p + 1, e - p - 1)));
         p = e + 1;
     }
     return true;
+}
+
+bool pair_put(const std::string &base_url, const std::string &invite_id,
+              const std::string &box, const std::string &payload_b64) {
+    std::string body = "{\"id\":\"" + invite_id + "\",\"box\":\"" + box +
+                       "\",\"payload\":\"" + payload_b64 + "\"}";
+    std::string resp;
+    return https_request(base_url, "/pair/put", "POST", body, resp);
+}
+
+bool pair_get(const std::string &base_url, const std::string &invite_id,
+              const std::string &box, std::string &payload_b64_out) {
+    std::string resp;
+    if (!https_request(base_url, "/pair/get?id=" + invite_id + "&box=" + box, "GET", "", resp))
+        return false;
+    if (resp.find("\"empty\"") != std::string::npos) return false;
+    payload_b64_out = json_str(resp, "payload");
+    return !payload_b64_out.empty();
 }
 
 } // namespace rivt::net

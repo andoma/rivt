@@ -102,7 +102,15 @@ std::unique_ptr<Identity> Identity::load_or_create(const std::string &state_dir)
 
         char host[256] = "rivt";
         gethostname(host, sizeof host - 1);
-        std::string cn = std::string("rivt-") + host;
+        // Unique subject per device: multiple self-signed member certs
+        // share one OpenSSL trust store (the log-derived bundle), and a
+        // store collapses certs with identical subject DNs. A random
+        // suffix keeps every device's cert distinct.
+        uint8_t rnd[6];
+        RAND_bytes(rnd, sizeof rnd);
+        char suf[13];
+        for (int i = 0; i < 6; i++) snprintf(suf + i * 2, 3, "%02x", rnd[i]);
+        std::string cn = std::string("rivt-") + host + "-" + suf;
         X509_NAME *name = X509_get_subject_name(cert);
         X509_NAME_add_entry_by_txt(name, "CN", MBSTRING_ASC,
                                    (const unsigned char *)cn.c_str(), -1, -1, 0);

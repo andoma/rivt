@@ -41,4 +41,15 @@ int membership_push(const std::string &base_url, const std::string &set_id,
 bool membership_fetch(const std::string &base_url, const std::string &set_id,
                       std::vector<std::string> &ops_out);
 
+// --- pairing mailbox (opaque base64 payloads, box = "offer"/"answer") ---
+bool pair_put(const std::string &base_url, const std::string &invite_id,
+              const std::string &box, const std::string &payload_b64);
+// Returns true and fills out when a payload is present; false if empty/error.
+bool pair_get(const std::string &base_url, const std::string &invite_id,
+              const std::string &box, std::string &payload_b64_out);
+
+// base64 (std, with padding) — shared with pairing.
+std::string b64_encode(const std::string &in);
+std::string b64_decode(const std::string &in);
+
 } // namespace rivt::net

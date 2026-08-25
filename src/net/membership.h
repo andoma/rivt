@@ -7,6 +7,13 @@ namespace rivt::net {
 
 class Identity;
 
+// Load the device set from disk, reconcile with the rendezvous (adopt a
+// longer verified log that shares our genesis; push ops the DO lacks),
+// and write the QUIC trust bundle from it. found_if_missing founds a
+// single-device set when none exists (daemon) vs failing (client that
+// must join first). Returns the set_id, or "" if no usable set.
+std::string sync_membership(const Identity &self, bool found_if_missing);
+
 // The device set as a signed, append-only operation log. Every op is
 // signed by a device that is a member at that point; op 0 (genesis) is
 // self-signed and is the trust anchor. The log is verified in full by

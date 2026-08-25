@@ -289,6 +289,7 @@ add_executable(rivtd
     src/net/stun.cpp
     src/net/rendezvous.cpp
     src/net/membership.cpp
+    src/net/pairing.cpp
 )
 target_include_directories(rivtd PRIVATE src src/third_party ${picoquic_SOURCE_DIR}/picoquic)
 target_compile_options(rivtd PRIVATE -Wall -Wextra -Wpedantic)
@@ -313,6 +314,8 @@ add_executable(test_quic
     src/net/identity.cpp
     src/net/quic_engine.cpp
     src/net/stun.cpp
+    src/net/membership.cpp
+    src/net/rendezvous.cpp
     src/core/event_loop.cpp
 )
 target_include_directories(test_quic PRIVATE src ${picoquic_SOURCE_DIR}/picoquic)

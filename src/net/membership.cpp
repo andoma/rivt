@@ -1,5 +1,6 @@
 #include "net/membership.h"
 #include "net/identity.h"
+#include "net/rendezvous.h"
 #include "proto/wire.h"
 
 #include <openssl/evp.h>
@@ -9,6 +10,7 @@
 
 #include <algorithm>
 #include <cstdio>
+#include <ctime>
 #include <sys/stat.h>
 #include <unistd.h>
 
@@ -292,6 +294,46 @@ bool MembershipLog::write_bundle(const std::string &bundle_path, int64_t now) co
         fwrite(m.cert_pem.data(), 1, m.cert_pem.size(), f);
     fclose(f);
     return rename(tmp.c_str(), bundle_path.c_str()) == 0;
+}
+
+std::string sync_membership(const Identity &self, bool found_if_missing) {
+    std::string path = MembershipLog::default_path();
+    MembershipLog log;
+    if (!log.load_file(path)) {
+        if (!found_if_missing) {
+            fprintf(stderr, "rivt: this device is not a member of any set "
+                            "(join one with `rivt join <code>`)\n");
+            return {};
+        }
+        std::string g = MembershipLog::genesis(self);
+        if (g.empty() || !log.load({g})) {
+            fprintf(stderr, "rivt: failed to create device set\n");
+            return {};
+        }
+        log.save(path);
+        fprintf(stderr, "rivt: founded device set %s\n", log.set_id().c_str());
+    }
+
+    std::string rdv = rendezvous_url();
+    if (!rdv.empty()) {
+        std::string set = log.set_id();
+        std::vector<std::string> remote;
+        if (membership_fetch(rdv, set, remote) && remote.size() > log.size()) {
+            MembershipLog cand;
+            if (cand.load(remote) && cand.set_id() == set) {
+                log = std::move(cand);
+                log.save(path);
+            }
+        }
+        std::vector<std::string> have;
+        membership_fetch(rdv, set, have);
+        for (size_t i = have.size(); i < log.size(); i++)
+            membership_push(rdv, set, (uint32_t)i, log.ops()[i]);
+    }
+
+    if (!log.write_bundle(Identity::authorized_bundle_path(), (int64_t)time(nullptr)))
+        fprintf(stderr, "rivt: failed to write trust bundle\n");
+    return log.set_id();
 }
 
 } // namespace rivt::net
