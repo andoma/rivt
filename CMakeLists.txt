@@ -323,3 +323,19 @@ if(CMAKE_BUILD_TYPE STREQUAL "Debug")
 endif()
 add_test(NAME quic COMMAND test_quic)
 endif()
+
+if(RIVT_QUIC AND NOT APPLE)
+add_executable(test_ws
+    tests/test_ws.cpp
+    src/net/ws_client.cpp
+    src/core/event_loop.cpp
+)
+target_include_directories(test_ws PRIVATE src)
+target_compile_options(test_ws PRIVATE -Wall -Wextra -Wpedantic)
+target_link_libraries(test_ws PRIVATE OpenSSL::SSL OpenSSL::Crypto)
+if(CMAKE_BUILD_TYPE STREQUAL "Debug")
+    target_compile_options(test_ws PRIVATE -Og -ggdb -fsanitize=address)
+    target_link_options(test_ws PRIVATE -fsanitize=address)
+endif()
+add_test(NAME ws COMMAND test_ws)
+endif()
