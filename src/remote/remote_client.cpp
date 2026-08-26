@@ -195,7 +195,10 @@ bool RemoteClient::connect(const RemoteEndpoint &ep, bool autostart) {
         }
     }
     std::string bundle = net::Identity::authorized_bundle_path();
+    fprintf(stderr, "rivt: connecting, racing %zu address(es) on udp/%u:\n",
+            ep.hosts.size(), ep.port);
     for (size_t i = 0; i < ep.hosts.size(); i++) {
+        fprintf(stderr, "rivt:   - %s\n", ep.hosts[i].c_str());
         auto probe = net::QuicEngine::connect(m_loop, ep.hosts[i], ep.port,
                                               *m_identity, bundle);
         if (!probe) continue;
@@ -241,6 +244,13 @@ void RemoteClient::probe_failed() {
         if (p) m_stale_probes.push_back(std::move(p));
     m_probes.clear();
     m_pending_out.clear();
+    fprintf(stderr,
+            "rivt: no candidate address responded — the peer's QUIC port "
+            "(udp/%u) is not reachable from here.\n"
+            "      Likely NAT/firewall between the two networks (direct "
+            "reachability only for now), or rivtd not listening.\n"
+            "      Try RIVT_QUIC_DEBUG=1 to see per-packet send/receive.\n",
+            m_endpoint.port);
     if (on_disconnect) on_disconnect();
 }
 
