@@ -195,12 +195,11 @@ bool RemoteClient::connect(const RemoteEndpoint &ep, bool autostart) {
         }
     }
     std::string bundle = net::Identity::authorized_bundle_path();
-    fprintf(stderr, "rivt: connecting, racing %zu address(es) on udp/%u:\n",
-            ep.hosts.size(), ep.port);
-    for (size_t i = 0; i < ep.hosts.size(); i++) {
-        fprintf(stderr, "rivt:   - %s\n", ep.hosts[i].c_str());
-        auto probe = net::QuicEngine::connect(m_loop, ep.hosts[i], ep.port,
-                                              *m_identity, bundle);
+    fprintf(stderr, "rivt: connecting, racing %zu candidate(s):\n",
+            ep.candidates.size());
+    for (const auto &c : ep.candidates) {
+        fprintf(stderr, "rivt:   [%-8s] %s:%u\n", c.kind.c_str(), c.host.c_str(), c.port);
+        auto probe = net::QuicEngine::connect(m_loop, c.host, c.port, *m_identity, bundle);
         if (!probe) continue;
         size_t idx = m_probes.size();
         probe->on_connected = [this, idx](net::QuicEngine::Conn *) { adopt_probe(idx); };
@@ -250,12 +249,12 @@ void RemoteClient::probe_failed() {
             "      Likely NAT/firewall between the two networks (direct "
             "reachability only for now), or rivtd not listening.\n"
             "      Try RIVT_QUIC_DEBUG=1 to see per-packet send/receive.\n",
-            m_endpoint.port);
+            m_endpoint.candidates.empty() ? 0 : m_endpoint.candidates.front().port);
     if (on_disconnect) on_disconnect();
 }
 
 bool RemoteClient::connect(const std::string &path, bool autostart) {
-    m_endpoint = RemoteEndpoint{path, {}, 0};
+    m_endpoint = RemoteEndpoint{path, {}};
     m_fd = try_connect(path);
     if (m_fd < 0 && autostart) {
         dbg("remote: no daemon at %s, spawning rivtd", path.c_str());

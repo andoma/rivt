@@ -3,6 +3,7 @@
 #include "core/tab_manager.h"
 #include "core/input_encoder.h"
 #include "render/renderer.h"
+#include "net/rendezvous.h"
 #include "platform/platform.h"
 #include <functional>
 #include <memory>
@@ -32,7 +33,7 @@ public:
     // first handshake wins). Attaches to the newest session there,
     // creating one if none exist.
     bool init_remote_quic(const std::string &display_name,
-                          const std::vector<std::string> &hosts, uint16_t port);
+                          const std::vector<net::Candidate> &candidates);
     void render_if_needed();
     bool reap_dead_panes();
     void toggle_cursor_blink();

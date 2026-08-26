@@ -235,7 +235,7 @@ bool lookup_device(const std::string &base_url, const std::string &name, DirEntr
     out.fingerprint = json_str(resp, "fingerprint");
     out.port = (uint16_t)json_num(resp, "port");
     out.last_seen_ms = json_num(resp, "last_seen");
-    // addrs array, then the NAT-observed public ip last.
+    // addrs array = the peer's own interface addresses ("local").
     auto a = resp.find("\"addrs\":[");
     if (a != std::string::npos) {
         a += 9;
@@ -245,12 +245,13 @@ bool lookup_device(const std::string &base_url, const std::string &name, DirEntr
         while ((p = list.find('"', p)) != std::string::npos) {
             auto e = list.find('"', p + 1);
             if (e == std::string::npos) break;
-            out.addrs.push_back(list.substr(p + 1, e - p - 1));
+            out.candidates.push_back({list.substr(p + 1, e - p - 1), out.port, "local"});
             p = e + 1;
         }
     }
+    // The rendezvous-observed public IP (HTTP edge, not a STUN mapping).
     std::string obs = json_str(resp, "observed_ip");
-    if (!obs.empty()) out.addrs.push_back(obs);
+    if (!obs.empty()) out.candidates.push_back({obs, out.port, "observed"});
     return out.port != 0;
 }
 

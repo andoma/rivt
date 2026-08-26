@@ -146,7 +146,7 @@ int main(int argc, char *argv[]) {
     if (!connect_host.empty()) {
         // A bare name (no dot/colon) resolves through the rendezvous
         // directory to the device's candidate addresses.
-        std::vector<std::string> hosts;
+        std::vector<rivt::net::Candidate> candidates;
         if (connect_host.find('.') == std::string::npos &&
             connect_host.find(':') == std::string::npos) {
             std::string url = rivt::net::rendezvous_url();
@@ -159,19 +159,19 @@ int main(int argc, char *argv[]) {
             }
             rivt::net::DirEntry e;
             if (!rivt::net::lookup_device(url, connect_host, e)) {
-                fprintf(stderr, "rivt: device '%s' not found in directory\n",
+                fprintf(stderr, "rivt: device '%s' not found in directory "
+                                "(is rivtd --listen running there?)\n",
                         connect_host.c_str());
                 return 1;
             }
-            hosts = e.addrs;
-            connect_port = e.port;
-            fprintf(stderr, "rivt: %s -> %zu candidate address(es), port %u\n",
-                    connect_host.c_str(), hosts.size(), e.port);
+            candidates = e.candidates;
+            fprintf(stderr, "rivt: %s -> %zu candidate(s) from directory\n",
+                    connect_host.c_str(), candidates.size());
         } else {
-            hosts.push_back(connect_host);
+            candidates.push_back({connect_host, connect_port, "direct"});
         }
         auto win = std::make_unique<Window>(base_config, loop);
-        if (!win->init_remote_quic(connect_host, hosts, connect_port)) return 1;
+        if (!win->init_remote_quic(connect_host, candidates)) return 1;
         Window *raw = win.get();
         loop.add_fd(raw->event_fd(), [raw](uint32_t) {
             raw->platform()->process_events();

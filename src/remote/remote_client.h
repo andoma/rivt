@@ -2,6 +2,7 @@
 #include "core/event_loop.h"
 #include "net/identity.h"
 #include "net/quic_engine.h"
+#include "net/rendezvous.h"
 #include "proto/wire.h"
 #include <cstdint>
 #include <functional>
@@ -11,13 +12,12 @@
 
 namespace rivt {
 
-// Where a daemon lives: a local unix socket, or QUIC candidates
-// (multiple addresses for one device — LAN, public/NAT-observed).
+// Where a daemon lives: a local unix socket, or typed QUIC candidates
+// (LAN / observed / stun / turn — see net::Candidate).
 struct RemoteEndpoint {
     std::string unix_path;
-    std::vector<std::string> hosts;
-    uint16_t port = 0;
-    bool is_quic() const { return !hosts.empty(); }
+    std::vector<net::Candidate> candidates;
+    bool is_quic() const { return !candidates.empty(); }
 };
 
 struct RemoteSessionInfo {

@@ -19,10 +19,22 @@ std::string rendezvous_url();
 // Persist the rendezvous URL to ~/.config/rivt/rendezvous (mkdir -p).
 bool set_rendezvous_url(const std::string &url);
 
+// A connection candidate and where it came from. kind is one of:
+//   "local"    interface address the peer advertised
+//   "observed" peer's public IP as seen by the rendezvous (HTTP edge)
+//   "stun"     server-reflexive (peer's own STUN of its QUIC socket)
+//   "turn"     relayed through a TURN server
+//   "direct"   an address typed on the command line
+struct Candidate {
+    std::string host;
+    uint16_t port = 0;
+    std::string kind;
+};
+
 struct DirEntry {
     std::string fingerprint;
     uint16_t port = 0;
-    std::vector<std::string> addrs;  // local candidates, then observed ip
+    std::vector<Candidate> candidates;  // local addrs (+ observed public ip)
     int64_t last_seen_ms = 0;
 };
 

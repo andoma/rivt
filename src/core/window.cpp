@@ -340,7 +340,7 @@ void Window::mark_closing() {
 }
 
 bool Window::init_remote_quic(const std::string &display_name,
-                              const std::vector<std::string> &hosts, uint16_t port) {
+                              const std::vector<net::Candidate> &candidates) {
     m_platform = Platform::create();
     if (!m_platform) return false;
     std::string title = "rivt [" + display_name + "]";
@@ -365,10 +365,9 @@ bool Window::init_remote_quic(const std::string &display_name,
 
     m_remote_client = std::make_unique<RemoteClient>(m_loop);
     RemoteEndpoint ep;
-    ep.hosts = hosts;
-    ep.port = port;
+    ep.candidates = candidates;
     if (!m_remote_client->connect(ep, false)) {
-        fprintf(stderr, "rivt: cannot reach %s:%u\n", display_name.c_str(), port);
+        fprintf(stderr, "rivt: cannot reach %s\n", display_name.c_str());
         return false;
     }
 
