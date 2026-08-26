@@ -1,141 +1,131 @@
 # rivt manual
 
-rivt is a Linux/macOS terminal emulator that can also attach to
-persistent terminal *sessions* running on other machines, reached by
-name through a small coordination service, with no SSH and no VPN.
+rivt lets you attach to persistent terminal *sessions* on other
+machines, reached by name through a small coordination service, with no
+SSH and no VPN. It is also a plain local terminal.
 
-This manual covers day-to-day use and the one-time setup. For the
-internal design see `doc/remote-design.md`.
+There are two roles, set up **independently**:
 
----
+- **Server** — a machine you connect *into*. Runs the `rivtd` daemon,
+  which owns the shells so sessions survive disconnects. Linux only.
+- **Client** — a machine you connect *from*, using the `rivt` UI (which
+  is also your local terminal). Linux or macOS.
 
-## 1. Concepts
+A machine can be both: just do the server setup and the client setup on
+it. There is no combined mode — the two are wholly separate.
 
-- **Device** — one machine. Has a persistent identity (a P-256 keypair
-  + self-signed cert) created automatically on first run.
-- **Device set** — your group of devices (like a Tailscale tailnet).
-  One device *founds* the set; others *join* it with a one-time code.
-  Membership is what grants trust between devices.
-- **rendezvous** — a Cloudflare Worker (+ Durable Object) you host. It
-  does two jobs: a **directory** (look up a device by name) and it
-  stores the signed **membership log**. It is untrusted: it can help
-  devices find each other but cannot read your sessions or join your
-  set (every device verifies the membership log itself).
-- **rivtd** — the session daemon. Runs on machines you want to reach
-  *into* (dev boxes, your desktop). Owns the shells; sessions survive
-  your connection dropping.
-- **rivt** — the terminal UI. A plain local terminal, and the client
-  that connects to remote `rivtd`s.
-
-Trust (membership) and reachability (running a daemon) are independent:
-a laptop can be a member that only connects out; a dev box is a member
-that also listens.
+Every machine, of either role, is a **device** in your **device set**
+(like a Tailscale tailnet): membership is what lets devices trust each
+other. See `doc/remote-design.md` for internals.
 
 ---
 
-## 2. Install
+## Prerequisite: the rendezvous (once, ever)
 
-Default build type is Release. The build auto-detects whether it can
-build the UI.
+Both roles need a **rendezvous**: a Cloudflare Worker + Durable Object
+you host. It lets devices find each other by name and stores the signed
+membership log. It is untrusted — it cannot read sessions or join your
+set.
 
-**Linux desktop/laptop (UI + daemon):**
+Deploy it once from `spike/rendezvous/` (`wrangler deploy`) and note its
+URL, e.g. `https://rivt-rendezvous.<you>.workers.dev`. You never type
+this URL on most devices: it travels inside pairing codes.
+
+The very first device you set up (server or client, doesn't matter)
+**founds** the set: at its setup prompt, press Enter instead of pasting
+a code, and give the rendezvous URL once. Every other device then
+**joins** with a pairing code minted from an existing member
+(`rivt pair` or `rivtd pair`).
+
+---
+
+## Server setup (`rivtd`, Linux)
+
+### 1. Build & install
 ```
-cmake -B build -G Ninja .
+cmake -B build -G Ninja -DRIVT_UI=OFF .    # daemon only, no graphics deps
 cmake --build build
-sudo cmake --install build      # installs rivt, rivtd, systemd unit
+sudo cmake --install build                  # rivtd + systemd unit
 ```
-Needs: a C++20 compiler, CMake+Ninja, OpenSSL headers, and the UI deps
-(freetype2, harfbuzz, fontconfig, xcb*, xkbcommon, EGL, GLESv2). Network
-access is needed at configure time to fetch the pinned picoquic.
-
-**Linux dev box / server (daemon only, no graphics stack):**
-```
-cmake -B build -G Ninja -DRIVT_UI=OFF .
-cmake --build build
-```
-Builds `rivtd` alone; no freetype/xcb/GL required. Runtime needs only
+Needs a C++20 compiler, CMake+Ninja, OpenSSL headers, and network access
+at configure time (fetches pinned picoquic). Runtime deps are just
 libc/libstdc++/libcrypto.
 
-**macOS (client only):**
+### 2. Enroll and run
+```
+rivtd setup <code>     # paste a code from `rivtd pair`/`rivt pair` on a member
+```
+This joins the set (learning the rendezvous URL from the code), then
+offers to install and start the background service. Accept it, or run it
+yourself:
+```
+systemctl --user enable --now rivtd     # runs `rivtd --listen` (udp/7433)
+loginctl enable-linger                   # keep running at boot / after logout
+```
+That's it — the box publishes itself under its hostname and is now
+reachable by name.
+
+To make this the founding device instead, run `rivtd setup` with no code
+and press Enter.
+
+### Server admin
+```
+rivtd --fingerprint    # identity + config paths
+rivtd pair             # mint a code to add another device
+rivtd --upgrade        # re-exec a new build in place; sessions/PTYs/clients survive
+rivtd --listen [port]  # run in the foreground (default udp/7433)
+```
+
+---
+
+## Client setup (`rivt`, Linux or macOS)
+
+### 1. Build
+Linux:
+```
+cmake -B build -G Ninja .
+cmake --build build && sudo cmake --install build
+```
+macOS:
 ```
 brew install openssl@3
 cmake -B build -G Ninja .
 cmake --build build
 ```
-Produces the `rivt` UI. There is no `rivtd` on macOS (it's a
-connect-only client).
 
----
-
-## 3. First-time setup
-
-Do this once per device. You need your rendezvous Worker deployed (see
-`spike/rendezvous/`, `wrangler deploy`) and its URL, e.g.
-`https://rivt-rendezvous.<you>.workers.dev`.
-
-### a. Found the set (once, on your main machine)
-
+### 2. Enroll
 ```
-rivtd setup            # Linux desktop:  founds + runs the daemon
-# or
-rivt setup             # macOS/laptop:   founds, client only
+rivt setup <code>      # paste a code from `rivt pair`/`rivtd pair` on a member
 ```
-Press **Enter** at the code prompt to found a new set. It asks for the
-rendezvous URL once and saves it. On `rivtd` it also offers to install
-the systemd service.
+Joins the set (rendezvous URL comes from the code) and writes this
+device's trust bundle. No daemon, nothing to run in the background.
 
-### b. Add every other device (paste one code)
+To make this the founding device instead, run `rivt setup` with no code
+and press Enter.
 
-On a device that is already a member:
+### 3. Connect
 ```
-rivt pair              # or: rivtd pair
-        → prints:  rivt1_XXXX…       (valid 10 min, single use)
-```
-On the new device:
-```
-rivtd setup rivt1_XXXX…    # Linux box you want to reach into
-# or
-rivt setup rivt1_XXXX…     # macOS/laptop, connect-only
-# or interactively: run `rivt setup` and paste at the prompt
-```
-The code carries the rendezvous URL, so the joining device needs **no
-prior configuration**. Back on the pairing device, confirm the shown
-name + fingerprint with `y`.
-
-Typical layout:
-- **desktop (Linux):** `rivtd setup` → Enter (founds the set, runs the daemon)
-- **dev boxes (Linux):** `rivtd pair` on the desktop → `rivtd setup <code>` on the box
-- **laptop (macOS):** `rivt pair` on the desktop → `rivt setup <code>` on the laptop
-
-### c. Dev box as a background service
-
-`rivtd setup` offers this; to do it by hand:
-```
-systemctl --user enable --now rivtd     # runs `rivtd --listen`
-loginctl enable-linger                   # start at boot, no login needed
-```
-
----
-
-## 4. Daily use
-
-### Local terminal
-```
-rivt
-```
-A plain terminal. No daemon, no persistence — close it and it's gone.
-
-### Connect to a remote machine
-```
-rivt --connect devbox            # by name (directory lookup)
+rivt --connect devbox            # by name (via the directory)
 rivt --connect 10.0.0.5:7433     # or a direct address
 ```
-Attaches to the newest session there (creating one if none). The
-session lives in the remote `rivtd`: if your connection drops or you
-close the window, it keeps running; reconnect to find it as you left
-it, full scrollback and layout restored.
+Attaches to the newest session on that server (creating one if none).
+The session lives in the server's `rivtd`: drop the connection or close
+the window and it keeps running; reconnect and it's exactly as you left
+it, scrollback and split layout restored.
 
-### Window / pane keys (local and remote)
+### Client admin
+```
+rivt pair              # mint a code to add another device
+rivt join <code>       # (same as `rivt setup <code>` without the prompts)
+rivt                   # plain local terminal (no daemon, no persistence)
+```
+
+---
+
+## Using a rivt window
+
+Applies to any rivt window, local or connected to a server:
+
 | Keys | Action |
 |---|---|
 | Ctrl+Shift+N | new window |
@@ -148,75 +138,39 @@ it, full scrollback and layout restored.
 | Ctrl+Shift+C / V | copy / paste |
 | Ctrl+Shift + / − / 0 | font size up / down / reset |
 
-### Opt-in local persistence
-```
-rivt --remote
-```
-Runs local sessions through a daemon so they survive UI restarts, and
-resumes all of them on launch. Off by default — plain `rivt` is
-ephemeral by design.
-
 ---
 
-## 5. Managing devices
+## Reference
 
-```
-rivtd --fingerprint     # this device's identity + config paths
-rivt pair / rivtd pair  # add another device
-```
-Removing a device (revocation) is signed into the membership log; a CLI
-for it is pending. Each daemon re-syncs the set every ~60 s, so a newly
-paired device becomes reachable shortly after; a box that was already
-running may need `systemctl --user restart rivtd` to pick up a change
-immediately (see Limitations).
-
----
-
-## 6. Files and environment
-
-Per device (override the base dirs with the env vars below):
+### Files (per device)
 - `~/.local/state/rivt/device_key.pem` — private device key (0600)
 - `~/.local/state/rivt/device_cert.pem` — self-signed cert
 - `~/.local/state/rivt/membership.log` — the verified device set
 - `~/.config/rivt/rendezvous` — rendezvous URL (one line)
 - `~/.config/rivt/authorized_certs.pem` — QUIC trust bundle, derived
-  from the membership log (do not hand-edit)
-- `$XDG_RUNTIME_DIR/rivt/daemon.sock` — local daemon socket
+  from the membership log (never hand-edited)
+- `$XDG_RUNTIME_DIR/rivt/daemon.sock` — local daemon socket (server)
 
-Environment:
+### Environment
 - `RIVT_RENDEZVOUS` — rendezvous URL (overrides the config file)
-- `RIVT_STATE_DIR`, `XDG_CONFIG_HOME` — relocate state/config (used for
-  isolated test setups)
+- `RIVT_STATE_DIR`, `XDG_CONFIG_HOME` — relocate state/config
 - `RIVT_QUIC_IDLE_MS` — QUIC idle timeout (default 60000)
-- `RIVT_QUIC_DEBUG=1` — log QUIC packet/event trace to stderr
+- `RIVT_QUIC_DEBUG=1` — QUIC packet/event trace to stderr
 
-Regenerating identity: delete `device_key.pem` (new identity, must
-re-pair). Delete only `device_cert.pem` to keep the key but refresh the
-cert (needed once if you built before certs carried a unique subject).
-
----
-
-## 7. Upgrading the daemon
-
-```
-rivtd --upgrade         # re-exec in place; sessions, PTYs, clients survive
-```
-Same PID, shells never notice, attached clients blink and re-attach.
-Safe to run after installing a new build. Under systemd it also just
-works (the exec preserves the unit's process).
+### Identity
+Delete `device_key.pem` for a fresh identity (must re-pair). Delete only
+`device_cert.pem` to keep the key and refresh the cert (do this once if
+you built before certs carried a unique subject).
 
 ---
 
-## 8. Current limitations
+## Current limitations
 
-- **Direct reachability only.** `rivt --connect` works when a device's
-  advertised address is reachable from you (same LAN, or a public /
-  port-forwarded `udp/7433`). Punching through NATs and jump hosts is
-  in progress; until it lands, boxes behind NAT need a reachable
-  address or a forward.
-- **Membership reload.** Pair devices before starting the daemon, or
+- **Direct reachability only.** A client reaches a server when the
+  server's advertised address is reachable (same LAN, or a public /
+  port-forwarded `udp/7433`). NAT / jump-host traversal is in progress.
+- **Membership reload.** Enroll a server before starting its daemon, or
   restart the daemon after pairing, until in-place membership reload
   lands.
-- **macOS is client-only** (no `rivtd`).
-- **Kitty graphics** are not carried in remote session snapshots (they
-  reappear when the app redraws).
+- **Kitty graphics** are not carried in remote snapshots (they reappear
+  when the app redraws).
