@@ -1,6 +1,7 @@
 #include "net/quic_engine.h"
 #include "core/debug.h"
 #include "net/identity.h"
+#include "net/sock.h"
 
 #include <picoquic.h>
 #include <picoquic_utils.h>
@@ -118,7 +119,7 @@ bool QuicEngine::init(uint16_t bind_port, const Identity &id, const std::string 
     // picoquic's default is ~30 s).
     picoquic_set_default_handshake_timeout(m_quic, 5ull * 1000000);
 
-    m_fd = socket(AF_INET6, SOCK_DGRAM | SOCK_NONBLOCK | SOCK_CLOEXEC, 0);
+    m_fd = socket_cloexec(AF_INET6, SOCK_DGRAM, 0, /*nonblock=*/true);
     if (m_fd < 0) return false;
     int off = 0;
     setsockopt(m_fd, IPPROTO_IPV6, IPV6_V6ONLY, &off, sizeof off);  // dual stack

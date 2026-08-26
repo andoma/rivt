@@ -1,4 +1,5 @@
 #include "net/ws_client.h"
+#include "net/sock.h"
 
 #include <openssl/bio.h>
 #include <openssl/err.h>
@@ -50,7 +51,7 @@ bool WsClient::connect(const std::string &url) {
     hints.ai_family = AF_UNSPEC;
     hints.ai_socktype = SOCK_STREAM;
     if (getaddrinfo(m_host.c_str(), port.c_str(), &hints, &res) != 0 || !res) return false;
-    m_fd = socket(res->ai_family, SOCK_STREAM | SOCK_NONBLOCK | SOCK_CLOEXEC, 0);
+    m_fd = socket_cloexec(res->ai_family, SOCK_STREAM, 0, /*nonblock=*/true);
     if (m_fd < 0) { freeaddrinfo(res); return false; }
     int rc = ::connect(m_fd, res->ai_addr, res->ai_addrlen);
     freeaddrinfo(res);

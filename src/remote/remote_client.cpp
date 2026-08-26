@@ -3,6 +3,7 @@
 #include "proto/frame.h"
 #include "proto/messages.h"
 #include "net/identity.h"
+#include "net/sock.h"
 
 #include <cstring>
 #include <errno.h>
@@ -31,7 +32,7 @@ static int try_connect(const std::string &path) {
     addr.sun_family = AF_UNIX;
     if (path.size() >= sizeof(addr.sun_path)) return -1;
     strcpy(addr.sun_path, path.c_str());
-    int fd = socket(AF_UNIX, SOCK_STREAM | SOCK_CLOEXEC, 0);
+    int fd = net::socket_cloexec(AF_UNIX, SOCK_STREAM, 0);
     if (fd < 0) return -1;
     if (::connect(fd, (struct sockaddr *)&addr, sizeof(addr)) < 0) {
         ::close(fd);
