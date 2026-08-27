@@ -39,7 +39,7 @@ export default {
   async fetch(request, env) {
     const url = new URL(request.url);
     if (url.pathname.startsWith("/dir/") || url.pathname.startsWith("/log/") ||
-        url.pathname.startsWith("/pair/")) {
+        url.pathname.startsWith("/pair/") || url.pathname.startsWith("/turn/")) {
       const id = env.RENDEZVOUS.idFromName("directory");
       return env.RENDEZVOUS.get(id).fetch(request);
     }
@@ -67,7 +67,7 @@ export class Rendezvous {
   async fetch(request) {
     const url = new URL(request.url);
     if (url.pathname.startsWith("/dir/") || url.pathname.startsWith("/log/") ||
-        url.pathname.startsWith("/pair/"))
+        url.pathname.startsWith("/pair/") || url.pathname.startsWith("/turn/"))
       return this.directory(request, url);
     if (request.headers.get("Upgrade") !== "websocket")
       return new Response("expected websocket", { status: 426 });
@@ -158,6 +158,19 @@ export class Rendezvous {
         out.push({ name: d.name, fingerprint: d.fingerprint,
                    last_seen: d.last_seen });
       return json({ devices: out });
+    }
+
+    // Mint short-lived TURN credentials (Cloudflare API token stays here).
+    if (url.pathname === "/turn/credentials" && request.method === "GET") {
+      const r = await fetch(
+        `https://rtc.live.cloudflare.com/v1/turn/keys/${this.env.TURN_KEY_ID}/credentials/generate-ice-servers`,
+        { method: "POST",
+          headers: { Authorization: `Bearer ${this.env.TURN_KEY_API_TOKEN}`,
+                     "Content-Type": "application/json" },
+          body: JSON.stringify({ ttl: 86400 }) });
+      const body = await r.text();
+      return new Response(body, { status: r.status,
+                                  headers: { "content-type": "application/json" } });
     }
 
     // Pairing mailbox: two boxes (offer/answer) keyed by invite id. The

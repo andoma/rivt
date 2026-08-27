@@ -1,6 +1,7 @@
 #include "net/quic_engine.h"
 #include "core/debug.h"
 #include "net/identity.h"
+#include "net/turn.h"
 #include "net/sock.h"
 
 #include <picoquic.h>
@@ -341,6 +342,36 @@ void QuicEngine::discover_reflexive(
     }, true);
 }
 
+void QuicEngine::enable_turn(TurnRelay *turn) {
+    m_turn = turn;
+    turn->on_data = [this](const struct sockaddr_in &peer, const uint8_t *d, size_t n) {
+        feed_relayed(peer, d, n);
+    };
+}
+
+void QuicEngine::feed_relayed(const struct sockaddr_in &peer, const uint8_t *d, size_t n) {
+    // Remember this peer so pump() routes replies back through TURN.
+    bool known = false;
+    for (auto &p : m_relayed_peers)
+        if (p.sin_addr.s_addr == peer.sin_addr.s_addr && p.sin_port == peer.sin_port) {
+            known = true; break;
+        }
+    if (!known) m_relayed_peers.push_back(peer);
+    picoquic_incoming_packet(m_quic, (uint8_t *)d, n, (struct sockaddr *)&peer,
+                             (struct sockaddr *)&m_local, 0, 0, picoquic_current_time());
+    pump();
+}
+
+bool QuicEngine::is_relayed(const struct sockaddr_storage &to, struct sockaddr_in *peer) const {
+    if (to.ss_family != AF_INET) return false;
+    auto *s = (const struct sockaddr_in *)&to;
+    for (const auto &p : m_relayed_peers)
+        if (p.sin_addr.s_addr == s->sin_addr.s_addr && p.sin_port == s->sin_port) {
+            *peer = *s; return true;
+        }
+    return false;
+}
+
 void QuicEngine::pump() {
     uint8_t buf[1536];
     for (;;) {
@@ -352,6 +383,11 @@ void QuicEngine::pump() {
                                               sizeof buf, &send_len, &to, &fromaddr,
                                               &if_index, nullptr, &last);
         if (rc != 0 || send_len == 0) break;
+        struct sockaddr_in rpeer {};
+        if (m_turn && is_relayed(to, &rpeer)) {
+            m_turn->send_to(rpeer, buf, send_len);
+            continue;
+        }
         ssize_t sent = sendto(m_fd, buf, send_len, 0, (struct sockaddr *)&to,
                to.ss_family == AF_INET ? sizeof(struct sockaddr_in)
                                        : sizeof(struct sockaddr_in6));

@@ -5,6 +5,9 @@
 #include "net/identity.h"
 #include "net/quic_engine.h"
 #include "net/membership.h"
+#include "net/rendezvous.h"
+#include "net/turn.h"
+#include <arpa/inet.h>
 
 #include <cstdlib>
 #include <arpa/inet.h>
@@ -248,6 +251,72 @@ TEST(quic_trust_derived_from_membership_log) {
     cc->on_closed = [&](QuicEngine::Conn *) { c_closed = true; };
     pump_until(loop, [&] { return c_closed; }, 4000);
     ASSERT_TRUE(!c_up || c_closed);
+}
+
+// Full relayed path through real Cloudflare TURN: the listener
+// allocates a relay and the client connects only to that public
+// relayed address (never a direct path). Proves TURN fallback works
+// from a single network. Skips without RIVT_RENDEZVOUS.
+TEST(quic_over_turn_relay) {
+    const char *rdv = getenv("RIVT_RENDEZVOUS");
+    if (!rdv) { fprintf(stderr, "  [turn] RIVT_RENDEZVOUS unset — skipping\n"); return; }
+
+    std::string da = tmpd("ta"), db = tmpd("tb");
+    auto a = Identity::load_or_create(da);   // listener
+    auto b = Identity::load_or_create(db);   // client
+    std::string bundle_a = da + "/b.pem", bundle_b = db + "/b.pem";
+    append_file(bundle_a, b->cert_pem());
+    append_file(bundle_b, a->cert_pem());
+
+    std::string user, pass, thost; uint16_t tport;
+    if (!net::turn_credentials(rdv, user, pass, thost, tport)) {
+        fprintf(stderr, "  [turn] no creds (offline?) — skipping\n"); return;
+    }
+
+    EventLoop loop;
+    // Listener with a TURN relay.
+    auto server = QuicEngine::listen(loop, 0, *a, bundle_a);
+    ASSERT_TRUE(server != nullptr);
+    net::TurnRelay relay(loop);
+    if (!relay.allocate(thost, tport, user, pass)) {
+        fprintf(stderr, "  [turn] allocate failed — skipping\n"); return;
+    }
+    server->enable_turn(&relay);
+    std::string got_at_server;
+    server->on_data = [&](QuicEngine::Conn *, const uint8_t *d, size_t n) {
+        got_at_server.append((const char *)d, n);
+    };
+
+    // Client: a STUNable socket; we permit its reflexive on the relay,
+    // then it connects to the relayed public address.
+    auto client = QuicEngine::create_client(loop, *b, bundle_b);
+    ASSERT_TRUE(client != nullptr);
+    bool have_refl = false;
+    struct sockaddr_in refl {};
+    client->discover_reflexive([&](bool ok, const struct sockaddr_storage &sa) {
+        if (ok) {
+            // v4-mapped v6 or v4 — extract v4.
+            if (sa.ss_family == AF_INET) refl = *(const struct sockaddr_in *)&sa;
+            else {
+                auto *s6 = (const struct sockaddr_in6 *)&sa;
+                refl.sin_family = AF_INET;
+                refl.sin_port = s6->sin6_port;
+                memcpy(&refl.sin_addr, s6->sin6_addr.s6_addr + 12, 4);  // v4-mapped tail
+            }
+            have_refl = true;
+        }
+    });
+    ASSERT_TRUE(pump_until(loop, [&] { return have_refl; }, 6000));
+    relay.permit(refl);
+
+    bool connected = false;
+    client->on_connected = [&](QuicEngine::Conn *) { connected = true; };
+    ASSERT_TRUE(client->start_connection(relay.relayed_host(), relay.relayed_port()));
+    ASSERT_TRUE(pump_until(loop, [&] { return connected; }, 10000));
+    client->send(client->client_conn(), "via-turn-relay", 14);
+    ASSERT_TRUE(pump_until(loop, [&] { return got_at_server.size() >= 14; }, 8000));
+    ASSERT_STR_EQ(got_at_server, "via-turn-relay");
+    fprintf(stderr, "  [turn] QUIC handshake + data over Cloudflare relay ok\n");
 }
 
 int main() { return run_tests(); }

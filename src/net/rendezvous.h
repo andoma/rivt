@@ -67,4 +67,9 @@ bool pair_get(const std::string &base_url, const std::string &invite_id,
 std::string b64_encode(const std::string &in);
 std::string b64_decode(const std::string &in);
 
+// Fetch short-lived TURN credentials from the rendezvous. Fills the
+// long-term username/credential and the udp turn host:port.
+bool turn_credentials(const std::string &base_url, std::string &user,
+                      std::string &pass, std::string &host, uint16_t &port);
+
 } // namespace rivt::net

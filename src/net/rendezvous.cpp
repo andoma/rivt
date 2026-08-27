@@ -101,7 +101,8 @@ static bool https_request(const std::string &url, const std::string &path,
     // the worker are typical; strip chunk framing crudely).
     auto hdr_end = out.find("\r\n\r\n");
     if (hdr_end == std::string::npos) return false;
-    bool status_ok = out.compare(0, 12, "HTTP/1.1 200") == 0;
+    // Accept any 2xx (the TURN mint returns 201 Created).
+    bool status_ok = out.size() > 11 && out[9] == '2';
     std::string b = out.substr(hdr_end + 4);
     if (out.find("Transfer-Encoding: chunked") != std::string::npos ||
         out.find("transfer-encoding: chunked") != std::string::npos) {
@@ -283,6 +284,31 @@ bool membership_fetch(const std::string &base_url, const std::string &set_id,
         p = e + 1;
     }
     return true;
+}
+
+bool turn_credentials(const std::string &base_url, std::string &user,
+                      std::string &pass, std::string &host, uint16_t &port) {
+    std::string resp;
+    if (!https_request(base_url, "/turn/credentials", "GET", "", resp)) return false;
+    user = json_str(resp, "username");
+    pass = json_str(resp, "credential");
+    // Pick the udp turn: url. urls is an array of strings.
+    auto u = resp.find("turn:");
+    while (u != std::string::npos) {
+        auto e = resp.find('"', u);
+        std::string url = resp.substr(u, e - u);
+        if (url.find("transport=udp") != std::string::npos) {
+            // turn:host:port?transport=udp
+            auto h = url.substr(5);
+            auto colon = h.find(':');
+            auto q = h.find('?');
+            host = h.substr(0, colon);
+            port = (uint16_t)atoi(h.substr(colon + 1, q - colon - 1).c_str());
+            break;
+        }
+        u = resp.find("turn:", u + 5);
+    }
+    return !user.empty() && !pass.empty() && !host.empty() && port != 0;
 }
 
 bool pair_put(const std::string &base_url, const std::string &invite_id,

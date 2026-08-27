@@ -4,6 +4,7 @@
 #include <cstdint>
 #include <functional>
 #include <sys/socket.h>
+#include <netinet/in.h>
 #include <functional>
 #include <memory>
 #include <string>
@@ -11,6 +12,8 @@
 
 typedef struct st_picoquic_quic_t picoquic_quic_t;
 typedef struct st_picoquic_cnx_t picoquic_cnx_t;
+
+namespace rivt::net { class TurnRelay; }
 
 namespace rivt::net {
 
@@ -57,6 +60,12 @@ public:
     // NAT mapping toward the peer (hole punch). Harmless if it arrives:
     // not valid QUIC, so the peer's stack ignores it.
     void punch(const std::string &host, uint16_t port);
+
+    // Route this connection's traffic through a TURN relay (listener
+    // side). Inbound Data indications become QUIC packets; outbound
+    // QUIC to the relayed peer goes out as Send indications. The peer
+    // is identified by the address TURN reports (its reflexive).
+    void enable_turn(TurnRelay *turn);
     ~QuicEngine();
 
     std::function<void(Conn *)> on_connected;   // handshake complete
@@ -100,6 +109,11 @@ private:
     int m_timer = -1;
     struct sockaddr_storage m_local {};
     bool m_want_write = false;
+
+    TurnRelay *m_turn = nullptr;
+    std::vector<struct sockaddr_in> m_relayed_peers;  // reached via m_turn
+    void feed_relayed(const struct sockaddr_in &peer, const uint8_t *d, size_t n);
+    bool is_relayed(const struct sockaddr_storage &to, struct sockaddr_in *peer) const;
 
     // Pending STUN reflexive query (at most one at a time).
     bool m_stun_active = false;

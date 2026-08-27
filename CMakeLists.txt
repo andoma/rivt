@@ -115,6 +115,7 @@ set(RIVT_SOURCES
     src/net/pairing.cpp
     src/net/signaling.cpp
     src/net/ws_client.cpp
+    src/net/turn.cpp
 )
 
 if(APPLE)
@@ -309,6 +310,7 @@ add_executable(rivtd
     src/net/pairing.cpp
     src/net/signaling.cpp
     src/net/ws_client.cpp
+    src/net/turn.cpp
 )
 target_include_directories(rivtd PRIVATE src src/third_party ${picoquic_SOURCE_DIR}/picoquic)
 target_compile_options(rivtd PRIVATE -Wall -Wextra -Wpedantic)
@@ -333,6 +335,7 @@ add_executable(test_quic
     src/net/identity.cpp
     src/net/quic_engine.cpp
     src/net/stun.cpp
+    src/net/turn.cpp
     src/net/membership.cpp
     src/net/rendezvous.cpp
     src/core/event_loop.cpp
