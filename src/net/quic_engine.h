@@ -80,6 +80,10 @@ public:
     void send(Conn *c, const void *data, size_t len);
     void close_conn(Conn *c);
     Conn *client_conn() { return m_client_conn; }  // client mode only
+    // Seconds since any datagram last arrived on this engine (keepalives
+    // included) — 0 if nothing yet. Basis for liveness/staleness.
+    double seconds_since_rx() const;
+
     // True if a connection closed due to peer-certificate rejection
     // (TLS certificate_unknown) — i.e. we reached the peer but neither
     // side trusts the other (not in the same device set).
@@ -115,6 +119,7 @@ private:
     bool m_want_write = false;
 
     bool m_cert_rejected = false;
+    uint64_t m_last_rx_us = 0;  // picoquic_current_time() of last datagram
     TurnRelay *m_turn = nullptr;
     std::vector<struct sockaddr_in> m_relayed_peers;  // reached via m_turn
     void feed_relayed(const struct sockaddr_in &peer, const uint8_t *d, size_t n);

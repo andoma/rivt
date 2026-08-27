@@ -125,8 +125,6 @@ private:
     std::vector<std::string> m_probe_kinds;   // parallel: candidate kind per probe
     std::string m_transport;                  // winning transport (display)
     std::string m_link_state = "connecting";
-    int64_t m_last_rx_ms = 0;
-    void note_rx();
     void set_link(const std::string &st);
     std::vector<std::unique_ptr<net::QuicEngine>> m_stale_probes;  // parked, freed on fresh stack
     std::string m_pending_out;  // frames sent before a probe won

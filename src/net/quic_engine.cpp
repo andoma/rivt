@@ -273,6 +273,7 @@ void QuicEngine::on_socket(uint32_t events) {
         ssize_t n = recvfrom(m_fd, buf, sizeof buf, 0, (struct sockaddr *)&from, &fl);
         if (n < 0) break;
         if (n == 0) continue;
+        m_last_rx_us = picoquic_current_time();
         if (m_stun_active && is_stun(buf, (size_t)n)) {
             struct sockaddr_storage mapped {};
             if (stun_parse_response(buf, (size_t)n, m_stun_txid, &mapped)) {
@@ -290,6 +291,12 @@ void QuicEngine::on_socket(uint32_t events) {
                                  picoquic_current_time());
     }
     pump();
+}
+
+double QuicEngine::seconds_since_rx() const {
+    if (m_last_rx_us == 0) return 0.0;
+    uint64_t now = picoquic_current_time();
+    return now > m_last_rx_us ? (now - m_last_rx_us) / 1e6 : 0.0;
 }
 
 uint16_t QuicEngine::local_port() const {
@@ -355,6 +362,7 @@ void QuicEngine::enable_turn(TurnRelay *turn) {
 }
 
 void QuicEngine::feed_relayed(const struct sockaddr_in &peer, const uint8_t *d, size_t n) {
+    m_last_rx_us = picoquic_current_time();
     // Remember this peer so pump() routes replies back through TURN.
     bool known = false;
     for (auto &p : m_relayed_peers)

@@ -20,14 +20,8 @@ namespace rivt {
 
 using proto::MsgType;
 
-static int64_t now_ms() {
-    return std::chrono::duration_cast<std::chrono::milliseconds>(
-               std::chrono::steady_clock::now().time_since_epoch()).count();
-}
-
-void RemoteClient::note_rx() { m_last_rx_ms = now_ms(); }
 double RemoteClient::seconds_since_rx() const {
-    return m_last_rx_ms ? (now_ms() - m_last_rx_ms) / 1000.0 : 0.0;
+    return m_quic ? m_quic->seconds_since_rx() : 0.0;
 }
 void RemoteClient::set_link(const std::string &st) {
     if (m_link_state == st) return;
@@ -323,7 +317,6 @@ void RemoteClient::adopt_probe(size_t idx) {
         const std::string &k = m_probe_kinds[idx];
         m_transport = (k == "turn") ? "relay" : (k == "local") ? "lan" : "direct";
     }
-    note_rx();
     set_link("connected");
     m_quic = std::move(m_probes[idx]);
     m_quic_conn = m_quic->client_conn();
@@ -335,7 +328,6 @@ void RemoteClient::adopt_probe(size_t idx) {
 
     m_quic->on_connected = nullptr;
     m_quic->on_data = [this](net::QuicEngine::Conn *, const uint8_t *d, size_t n) {
-        note_rx();
         m_in.append((const char *)d, n);
         process();
     };
