@@ -196,7 +196,14 @@ public:
             [this](const std::string &from, bool answer, std::vector<net::Candidate> cands) {
                 if (!answer) handle_offer(from, cands);
             };
-        if (!m_signaling->start(rdv)) { m_signaling.reset(); return; }
+        m_signaling->on_ready = []() {
+            fprintf(stderr, "rivtd: signaling connected (ready for hole punch / relay)\n");
+        };
+        if (!m_signaling->start(rdv)) {
+            fprintf(stderr, "rivtd: signaling failed to start\n");
+            m_signaling.reset();
+            return;
+        }
         // App-level keepalive: edge-answered, keeps the NAT/TCP mapping
         // alive without waking the DO.
         m_loop.add_timer(30000, [this]() { if (m_signaling) m_signaling->keepalive(); }, true);
