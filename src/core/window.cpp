@@ -545,7 +545,10 @@ void Window::picker_select() {
     picker_stop();
     if (e.is_local) {
         // Turn the picker pane into a real local terminal in place.
-        m_picker_pane->feed_data("\033[2J\033[H", 6);
+        // Reset attributes, clear screen + scrollback, home the cursor
+        // (the length was wrong before, leaving the cursor mid-screen).
+        static const char kReset[] = "\033[0m\033[2J\033[3J\033[H";
+        m_picker_pane->feed_data(kReset, sizeof kReset - 1);
         m_picker_pane->spawn_shell(m_loop);
         m_picker_pane = nullptr;
         m_needs_render = true;
