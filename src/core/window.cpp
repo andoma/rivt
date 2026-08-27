@@ -453,18 +453,25 @@ void Window::picker_paint() {
     o += "  \033[1mrivt\033[0m  \033[2m\u2014 connect\033[0m\r\n\r\n";
     for (int i = 0; i < (int)m_pick_entries.size(); i++) {
         const auto &e = m_pick_entries[i];
-        std::string dot, label = e.label;
-        if (e.is_local) dot = "  ";
-        else {
-            bool online = false;
+        const std::string &label = e.label;
+        bool online = false;
+        if (!e.is_local)
             for (const auto &d : m_roster)
                 if (d.name == e.name && now - d.last_seen_ms < 90000) online = true;
-            dot = online ? "\033[32m\u25cf\033[0m " : "\033[2m\u25cb\033[0m ";
+        // Marker glyph occupies one column; label is ASCII. Pad the row
+        // so the highlight bar is a clean rectangle.
+        const char *glyph = e.is_local ? " " : (online ? "\u25cf" : "\u25cb");
+        int width = 2 + (int)label.size();  // glyph + space + label
+        std::string pad(width < 28 ? 28 - width : 0, ' ');
+        if (i == m_pick_sel) {
+            // Reverse video spans the whole row: no color resets inside,
+            // or they'd clear the reverse attribute mid-line.
+            o += "  \033[7m" + std::string(glyph) + " " + label + pad + "\033[0m\r\n";
+        } else {
+            std::string cglyph = e.is_local ? " "
+                : (online ? "\033[32m\u25cf\033[0m" : "\033[2m\u25cb\033[0m");
+            o += "  " + cglyph + " " + label + "\r\n";
         }
-        if (i == m_pick_sel)
-            o += "  \033[7m  " + dot + label + "  \033[0m\r\n";
-        else
-            o += "    " + dot + label + "\r\n";
     }
     o += "\r\n  \033[2m\u2191\u2193 select · enter connect · type to filter · esc close\033[0m";
     if (!m_pick_filter.empty()) o += "\r\n\r\n  filter: " + m_pick_filter;
