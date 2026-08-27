@@ -31,6 +31,14 @@ struct Candidate {
     std::string kind;
 };
 
+struct RosterDevice {
+    std::string name;
+    int64_t last_seen_ms = 0;
+};
+
+// All devices registered in the directory (for the attach picker).
+bool list_devices(const std::string &base_url, std::vector<RosterDevice> &out);
+
 struct DirEntry {
     std::string fingerprint;
     std::string sig_id;  // peer's signaling id (SHA-256 of its SPKI)

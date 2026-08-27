@@ -365,6 +365,16 @@ bool Window::init_remote_quic(const std::string &display_name,
     m_platform->resize_window(m_win_w, m_win_h);
     m_renderer.set_viewport(m_win_w, m_win_h);
 
+    if (!attach_remote(display_name, candidates, peer_sig_id, rendezvous)) return false;
+
+    m_platform->show_window();
+    setup_callbacks();
+    return true;
+}
+
+bool Window::attach_remote(const std::string &display_name,
+                           const std::vector<net::Candidate> &candidates,
+                           const std::string &peer_sig_id, const std::string &rendezvous) {
     m_remote_client = std::make_unique<RemoteClient>(m_loop);
     RemoteEndpoint ep;
     ep.candidates = candidates;
@@ -374,23 +384,131 @@ bool Window::init_remote_quic(const std::string &display_name,
         fprintf(stderr, "rivt: cannot reach %s\n", display_name.c_str());
         return false;
     }
-
     m_remote_controller = std::make_unique<RemoteController>(*m_remote_client, *this, *m_tabs);
     m_remote_controller->set_peer_name(display_name);
     m_remote_controller->on_exit = [this]() {
         if (on_close) on_close(this);
     };
-
+    const auto &m = m_renderer.metrics();
     int bar_h = tab_bar_height();
     int cols = m.cell_width > 0 ? m_win_w / m.cell_width : 80;
     int rows = m.cell_height > 0 ? (m_win_h - bar_h - kBottomPad) / m.cell_height : 24;
     m_remote_controller->initialize(cols, rows, m.cell_width, m.cell_height, 0, bar_h,
-                                    RemoteController::ATTACH_NEWEST,
-                                    /*kill_on_close=*/false);
+                                    RemoteController::ATTACH_NEWEST, /*kill_on_close=*/false);
+    return true;
+}
+
+bool Window::init_picker(const std::string &rendezvous) {
+    m_platform = Platform::create();
+    if (!m_platform) return false;
+    if (!m_platform->create_window(m_win_w, m_win_h, "rivt")) return false;
+    if (!m_platform->create_gl_context()) return false;
+    if (!m_renderer.init(m_config)) return false;
+    m_renderer.set_viewport(m_win_w, m_win_h);
+
+    m_tabs = std::make_unique<TabManager>(m_config, m_loop, m_platform.get());
+    m_tabs->on_needs_render = [this]() { m_needs_render = true; };
+    m_tabs->on_quit = [this]() { if (on_close) on_close(this); };
+
+    const auto &m = m_renderer.metrics();
+    m_tabs->set_cell_size(m.cell_width, m.cell_height);
+    m_win_w = m_config.initial_cols * m.cell_width;
+    m_win_h = m_config.initial_rows * m.cell_height + kBottomPad;
+    m_platform->resize_window(m_win_w, m_win_h);
+    m_renderer.set_viewport(m_win_w, m_win_h);
+    recompute();
+
+    m_picker_rendezvous = rendezvous;
+    m_picker_pane = m_tabs->new_synthetic_tab("connect");
+    if (!m_picker_pane) return false;
+    m_picker_active = true;
+    // Fetch the roster (blocking; small). Then paint the menu.
+    if (!rendezvous.empty()) net::list_devices(rendezvous, m_roster);
+    picker_rebuild();
+    picker_paint();
 
     m_platform->show_window();
     setup_callbacks();
     return true;
+}
+
+void Window::picker_rebuild() {
+    m_pick_entries.clear();
+    auto matches = [&](const std::string &n) {
+        if (m_pick_filter.empty()) return true;
+        return n.find(m_pick_filter) != std::string::npos;
+    };
+    if (matches("local terminal") || m_pick_filter.empty())
+        m_pick_entries.push_back({"local terminal", true, ""});
+    for (const auto &d : m_roster)
+        if (matches(d.name)) m_pick_entries.push_back({d.name, false, d.name});
+    if (m_pick_sel >= (int)m_pick_entries.size()) m_pick_sel = (int)m_pick_entries.size() - 1;
+    if (m_pick_sel < 0) m_pick_sel = 0;
+}
+
+void Window::picker_paint() {
+    if (!m_picker_pane) return;
+    int64_t now = (int64_t)time(nullptr) * 1000;
+    std::string o = "\033[2J\033[H\r\n";
+    o += "  \033[1mrivt\033[0m  \033[2m\u2014 connect\033[0m\r\n\r\n";
+    for (int i = 0; i < (int)m_pick_entries.size(); i++) {
+        const auto &e = m_pick_entries[i];
+        std::string dot, label = e.label;
+        if (e.is_local) dot = "  ";
+        else {
+            bool online = false;
+            for (const auto &d : m_roster)
+                if (d.name == e.name && now - d.last_seen_ms < 90000) online = true;
+            dot = online ? "\033[32m\u25cf\033[0m " : "\033[2m\u25cb\033[0m ";
+        }
+        if (i == m_pick_sel)
+            o += "  \033[7m  " + dot + label + "  \033[0m\r\n";
+        else
+            o += "    " + dot + label + "\r\n";
+    }
+    o += "\r\n  \033[2m\u2191\u2193 select · enter connect · type to filter · esc close\033[0m";
+    if (!m_pick_filter.empty()) o += "\r\n\r\n  filter: " + m_pick_filter;
+    m_picker_pane->feed_data(o.data(), o.size());
+    m_needs_render = true;
+}
+
+void Window::picker_key(const KeyEvent &key) {
+    bool ctrl = key.mods & KeyMod::Ctrl;
+    if (key.keysym == XKB_KEY_Escape) { if (on_close) on_close(this); return; }
+    if (key.keysym == XKB_KEY_Up || (ctrl && (key.keysym == XKB_KEY_p || key.keysym == XKB_KEY_P))) {
+        if (m_pick_sel > 0) m_pick_sel--; picker_paint(); return;
+    }
+    if (key.keysym == XKB_KEY_Down || (ctrl && (key.keysym == XKB_KEY_n || key.keysym == XKB_KEY_N))) {
+        if (m_pick_sel < (int)m_pick_entries.size() - 1) m_pick_sel++; picker_paint(); return;
+    }
+    if (key.keysym == XKB_KEY_Return) { picker_select(); return; }
+    if (key.keysym == XKB_KEY_BackSpace) {
+        if (!m_pick_filter.empty()) m_pick_filter.pop_back();
+        picker_rebuild(); picker_paint(); return;
+    }
+    // Printable text filters the list.
+    if (!key.text.empty() && (unsigned char)key.text[0] >= 0x20) {
+        m_pick_filter += key.text;
+        picker_rebuild(); picker_paint(); return;
+    }
+}
+
+void Window::picker_select() {
+    if (m_pick_sel < 0 || m_pick_sel >= (int)m_pick_entries.size()) return;
+    PickEntry e = m_pick_entries[m_pick_sel];
+    m_picker_active = false;
+    if (e.is_local) {
+        // Turn the picker pane into a real local terminal in place.
+        m_picker_pane->feed_data("\033[2J\033[H", 6);
+        m_picker_pane->spawn_shell(m_loop);
+        m_picker_pane = nullptr;
+        m_needs_render = true;
+    } else {
+        // Hand off to a fresh remote window; close the picker.
+        std::string name = e.name;
+        if (on_pick_remote) on_pick_remote(name);
+        mark_closing();
+    }
 }
 
 
@@ -473,6 +591,8 @@ void Window::handle_key(const KeyEvent &raw_key) {
 #else
     constexpr bool macos_cmd_held = false;
 #endif
+
+    if (m_picker_active) { picker_key(key); return; }
 
     ScreenBuffer &screen = pane->screen();
     bool ctrl  = key.mods & KeyMod::Ctrl;

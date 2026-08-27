@@ -151,6 +151,17 @@ bool TabManager::close_tab_ptr(Tab *tab) {
     return true;
 }
 
+Pane *TabManager::new_synthetic_tab(const std::string &title) {
+    Tab *tab = new_empty_tab(title);
+    Pane *pane = add_pane_to_tab(tab, 80, 24);
+    if (!pane) return nullptr;
+    tab->layout.init(pane);
+    tab->focused_pane = pane;
+    if (m_content_w > 0 && m_content_h > 0)
+        recompute_layout(m_content_x, m_content_y, m_content_w, m_content_h);
+    return pane;
+}
+
 Tab *TabManager::new_empty_tab(const std::string &title) {
     auto tab = std::make_unique<Tab>();
     tab->id = m_next_tab_id++;

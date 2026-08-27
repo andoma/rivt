@@ -287,6 +287,26 @@ bool membership_fetch(const std::string &base_url, const std::string &set_id,
     return true;
 }
 
+bool list_devices(const std::string &base_url, std::vector<RosterDevice> &out) {
+    std::string resp;
+    if (!https_request(base_url, "/dir/devices", "GET", "", resp)) return false;
+    // Flat array of {name, fingerprint, last_seen}; walk by "name":" .
+    size_t p = resp.find("\"devices\"");
+    if (p == std::string::npos) return false;
+    while ((p = resp.find("\"name\":\"", p)) != std::string::npos) {
+        p += 8;
+        size_t e = resp.find('"', p);
+        if (e == std::string::npos) break;
+        RosterDevice d;
+        d.name = resp.substr(p, e - p);
+        size_t ls = resp.find("\"last_seen\":", e);
+        if (ls != std::string::npos) d.last_seen_ms = strtoll(resp.c_str() + ls + 12, nullptr, 10);
+        out.push_back(std::move(d));
+        p = e + 1;
+    }
+    return true;
+}
+
 bool turn_credentials(const std::string &base_url, std::string &user,
                       std::string &pass, std::string &host, uint16_t &port) {
     std::string resp;

@@ -36,6 +36,12 @@ public:
                           const std::vector<net::Candidate> &candidates,
                           const std::string &peer_sig_id = "",
                           const std::string &rendezvous = "");
+    // Attach a remote session into this (already-initialized) window.
+    bool attach_remote(const std::string &display_name,
+                       const std::vector<net::Candidate> &candidates,
+                       const std::string &peer_sig_id, const std::string &rendezvous);
+    // A window that opens showing the device picker (Ctrl-Shift-N).
+    bool init_picker(const std::string &rendezvous);
     void render_if_needed();
     bool reap_dead_panes();
     void toggle_cursor_blink();
@@ -55,6 +61,8 @@ public:
     void adjust_tab_bar_height();
 
     std::function<void()> on_new_window;
+    // Picker chose a remote device by name (host to `rivt --connect`).
+    std::function<void(const std::string &)> on_pick_remote;
     std::function<void(Pane *gateway)> on_new_tmux_window;
     std::function<void(Window *)> on_close;
 
@@ -92,6 +100,20 @@ private:
     std::unique_ptr<RemoteClient> m_remote_client;
     std::unique_ptr<RemoteController> m_remote_controller;
     Pane *m_tmux_gateway_pane = nullptr;  // pane whose PTY carries tmux traffic
+
+    // Attach picker state (a synthetic pane painted with a menu).
+    struct PickEntry { std::string label; bool is_local; std::string name; };
+    bool m_picker_active = false;
+    Pane *m_picker_pane = nullptr;
+    std::string m_picker_rendezvous;
+    std::vector<net::RosterDevice> m_roster;
+    std::vector<PickEntry> m_pick_entries;
+    int m_pick_sel = 0;
+    std::string m_pick_filter;
+    void picker_rebuild();
+    void picker_paint();
+    void picker_key(const KeyEvent &key);
+    void picker_select();
 
     // Deferred destruction — can't destroy while inside feed_data() call stack
     std::unique_ptr<TmuxClient> m_tmux_stale_client;

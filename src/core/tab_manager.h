@@ -29,6 +29,10 @@ public:
     // Add a pane to a tab without spawning a shell (for tmux use)
     Pane *add_pane_to_tab(Tab *tab, int cols, int rows);
 
+    // Create a normal (laid-out) tab holding one PTY-less pane — for the
+    // attach picker, which paints a menu into it via feed_data.
+    Pane *new_synthetic_tab(const std::string &title);
+
     // Remove a specific pane from a tab
     bool remove_pane(Tab *tab, Pane *pane);
 

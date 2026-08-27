@@ -73,6 +73,7 @@ int main(int argc, char *argv[]) {
 
     // Parse global flags
     bool remote = false;      // daemon-backed sessions + resume all (opt-in)
+    bool pick = false;        // open straight to the device picker
     std::string remote_socket;
     std::string connect_host; // QUIC daemon on another machine
     uint16_t connect_port = 7433;
@@ -82,6 +83,8 @@ int main(int argc, char *argv[]) {
             debug_enabled() = true;
         } else if (strcmp(argv[i], "--remote") == 0) {
             remote = true;
+        } else if (strcmp(argv[i], "--pick") == 0) {
+            pick = true;
         } else if (strcmp(argv[i], "--socket") == 0 && i + 1 < argc) {
             remote_socket = argv[++i];
         } else if (strcmp(argv[i], "--connect") == 0 && i + 1 < argc) {
@@ -103,6 +106,8 @@ int main(int argc, char *argv[]) {
     // (attach_sid, persistent): sid 0 creates a session; non-persistent
     // sessions are killed on clean window close.
     std::function<bool(uint32_t, bool)> create_remote_window;
+    std::function<void()> create_picker_window;      // Ctrl-Shift-N -> device picker
+    std::function<bool(const std::string &)> open_remote;  // connect to a named box
 
     create_tmux_window = [&](Pane *gateway) {
         auto win = std::make_unique<Window>(base_config, loop);
@@ -123,9 +128,7 @@ int main(int argc, char *argv[]) {
             raw->platform()->process_events();
         });
         // New windows from a daemon-backed window get the same lifecycle.
-        raw->on_new_window = [&create_remote_window, persistent]() {
-            create_remote_window(0, persistent);
-        };
+        raw->on_new_window = create_picker_window;
         raw->on_new_tmux_window = create_tmux_window;
         raw->on_close = [](Window *w) { w->mark_closing(); };
         windows.push_back(std::move(win));
@@ -139,54 +142,71 @@ int main(int argc, char *argv[]) {
         loop.add_fd(raw->event_fd(), [raw](uint32_t) {
             raw->platform()->process_events();
         });
-        raw->on_new_window = create_window;
+        raw->on_new_window = create_picker_window;
         raw->on_new_tmux_window = create_tmux_window;
         raw->on_close = [](Window *w) { w->mark_closing(); };
         windows.push_back(std::move(win));
     };
 
-    if (!connect_host.empty()) {
-        // A bare name (no dot/colon) resolves through the rendezvous
-        // directory to the device's candidate addresses.
+    // Connect to a device by name (directory lookup) or host[:port].
+    // Returns false if it couldn't be set up.
+    open_remote = [&](const std::string &target) -> bool {
         std::vector<rivt::net::Candidate> candidates;
-        if (connect_host.find('.') == std::string::npos &&
-            connect_host.find(':') == std::string::npos) {
+        std::string sig_id;
+        if (target.find('.') == std::string::npos && target.find(':') == std::string::npos) {
             std::string url = rivt::net::rendezvous_url();
             if (url.empty()) {
-                fprintf(stderr,
-                        "rivt: '%s' looks like a device name but no rendezvous is "
-                        "configured (~/.config/rivt/rendezvous or $RIVT_RENDEZVOUS)\n",
-                        connect_host.c_str());
-                return 1;
+                fprintf(stderr, "rivt: '%s' is a device name but no rendezvous is "
+                                "configured\n", target.c_str());
+                return false;
             }
-            // Refresh our trust bundle from the set log first, so a
-            // device paired-in elsewhere (by any member) is trusted
-            // immediately without waiting for a daemon re-sync.
             if (auto id = rivt::net::Identity::load_or_create())
                 rivt::net::sync_membership(*id, /*found_if_missing=*/false);
             rivt::net::DirEntry e;
-            if (!rivt::net::lookup_device(url, connect_host, e)) {
-                fprintf(stderr, "rivt: device '%s' not found in directory "
-                                "(is rivtd --listen running there?)\n",
-                        connect_host.c_str());
-                return 1;
+            if (!rivt::net::lookup_device(url, target, e)) {
+                fprintf(stderr, "rivt: device '%s' not found (is rivtd --listen "
+                                "running there?)\n", target.c_str());
+                return false;
             }
             candidates = e.candidates;
-            peer_sig_id = e.sig_id;
+            sig_id = e.sig_id;
             fprintf(stderr, "rivt: %s -> %zu candidate(s) from directory\n",
-                    connect_host.c_str(), candidates.size());
+                    target.c_str(), candidates.size());
         } else {
-            candidates.push_back({connect_host, connect_port, "direct"});
+            std::string host = target;
+            uint16_t port = 7433;
+            auto c = target.rfind(':');
+            if (c != std::string::npos) { port = (uint16_t)atoi(target.c_str() + c + 1); host = target.substr(0, c); }
+            candidates.push_back({host, port, "direct"});
         }
         auto win = std::make_unique<Window>(base_config, loop);
-        if (!win->init_remote_quic(connect_host, candidates, peer_sig_id,
-                                   rivt::net::rendezvous_url())) return 1;
+        if (!win->init_remote_quic(target, candidates, sig_id, rivt::net::rendezvous_url()))
+            return false;
         Window *raw = win.get();
-        loop.add_fd(raw->event_fd(), [raw](uint32_t) {
-            raw->platform()->process_events();
-        });
+        loop.add_fd(raw->event_fd(), [raw](uint32_t) { raw->platform()->process_events(); });
+        raw->on_new_window = create_picker_window;
+        raw->on_pick_remote = [&](const std::string &n) { open_remote(n); };
         raw->on_close = [](Window *w) { w->mark_closing(); };
         windows.push_back(std::move(win));
+        return true;
+    };
+
+    create_picker_window = [&]() {
+        auto win = std::make_unique<Window>(base_config, loop);
+        if (!win->init_picker(rivt::net::rendezvous_url())) return;
+        Window *raw = win.get();
+        loop.add_fd(raw->event_fd(), [raw](uint32_t) { raw->platform()->process_events(); });
+        raw->on_new_window = create_picker_window;
+        raw->on_pick_remote = [&](const std::string &n) { open_remote(n); };
+        raw->on_close = [](Window *w) { w->mark_closing(); };
+        windows.push_back(std::move(win));
+    };
+
+    if (!connect_host.empty()) {
+        if (!open_remote(connect_host)) return 1;
+    } else if (pick) {
+        create_picker_window();
+        if (windows.empty()) return 1;
     } else if (remote) {
         // One window per existing session, so a restart resumes all of
         // them; a fresh session when the daemon holds none.
