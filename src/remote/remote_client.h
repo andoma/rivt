@@ -129,8 +129,11 @@ private:
     std::vector<std::unique_ptr<net::QuicEngine>> m_stale_probes;  // parked, freed on fresh stack
     std::string m_pending_out;  // frames sent before a probe won
 
-    // NAT traversal: exchange candidates and punch / relay.
-    std::unique_ptr<net::Signaling> m_signaling;
+    // NAT traversal: exchange candidates and punch / relay. The signaling
+    // socket is process-wide shared (see Signaling::shared); we only borrow
+    // it and unsubscribe our peer on teardown, never own it.
+    net::Signaling *m_signaling = nullptr;
+    std::string m_sig_peer;  // peer id we subscribed, for unsubscribe
     int m_turn_fallback_timer = -1;
     void begin_punch(const RemoteEndpoint &ep);
     void on_answer(const std::vector<net::Candidate> &server_cands);

@@ -3,6 +3,7 @@
 
 #include <openssl/sha.h>
 #include <cstdio>
+#include <memory>
 
 namespace rivt::net {
 
@@ -27,6 +28,21 @@ static std::string jget(const std::string &j, const std::string &key) {
 Signaling::Signaling(EventLoop &loop, const Identity &self)
     : m_loop(loop), m_ws(loop) {
     m_id = sha256_hex(self.spki_der());
+}
+
+Signaling *Signaling::shared(EventLoop &loop, const Identity &self,
+                             const std::string &rendezvous_url) {
+    static std::unique_ptr<Signaling> inst;
+    if (!inst) {
+        inst = std::make_unique<Signaling>(loop, self);
+        if (!inst->start(rendezvous_url)) { inst.reset(); return nullptr; }
+        // Hold the socket open between connects so a later punch doesn't
+        // race a cold reconnect. The DO ignores unknown-type frames.
+        loop.add_timer(20000, [p = inst.get()]() { p->keepalive(); }, true);
+    } else if (!inst->ready()) {
+        inst->start(rendezvous_url);  // idle-closed since last use: reconnect
+    }
+    return inst.get();
 }
 
 bool Signaling::start(const std::string &rendezvous_url) {
@@ -88,7 +104,18 @@ void Signaling::handle(const std::string &frame) {
         c.port = (uint16_t)atoi(ln.c_str() + s2 + 1);
         cands.push_back(std::move(c));
     }
-    if (on_candidates) on_candidates(from, answer, std::move(cands));
+    auto it = m_subs.find(from);
+    if (it != m_subs.end()) it->second(answer, std::move(cands));
+    else if (on_candidates) on_candidates(from, answer, std::move(cands));
+}
+
+void Signaling::subscribe(const std::string &peer_id,
+                          std::function<void(bool, std::vector<Candidate>)> cb) {
+    m_subs[peer_id] = std::move(cb);
+}
+
+void Signaling::unsubscribe(const std::string &peer_id) {
+    m_subs.erase(peer_id);
 }
 
 } // namespace rivt::net

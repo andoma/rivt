@@ -234,12 +234,13 @@ void RemoteClient::begin_punch(const RemoteEndpoint &ep) {
         return;
     }
     fprintf(stderr, "rivt: punch: opening signaling to %.16s...\n", ep.peer_sig_id.c_str());
-    m_signaling = std::make_unique<net::Signaling>(m_loop, *m_identity);
-    m_signaling->on_candidates =
-        [this](const std::string &, bool answer, std::vector<net::Candidate> c) {
+    m_signaling = net::Signaling::shared(m_loop, *m_identity, ep.rendezvous);
+    if (!m_signaling) return;
+    m_sig_peer = ep.peer_sig_id;
+    m_signaling->subscribe(m_sig_peer,
+        [this](bool answer, std::vector<net::Candidate> c) {
             if (answer) on_answer(c);
-        };
-    if (!m_signaling->start(ep.rendezvous)) { m_signaling.reset(); return; }
+        });
 
     std::string bundle = net::Identity::authorized_bundle_path();
     std::string peer = ep.peer_sig_id;
@@ -318,6 +319,7 @@ void RemoteClient::adopt_probe(size_t idx) {
         m_transport = (k == "turn") ? "relay" : (k == "local") ? "lan" : "direct";
     }
     set_link("connected");
+    if (m_signaling) { m_signaling->unsubscribe(m_sig_peer); m_signaling = nullptr; }
     m_quic = std::move(m_probes[idx]);
     m_quic_conn = m_quic->client_conn();
     // Losing probes are parked, never destroyed here — engines must not
@@ -404,7 +406,7 @@ void RemoteClient::close() {
     m_out.clear();
     m_out_off = 0;
     m_write_armed = false;
-    m_signaling.reset();
+    if (m_signaling) { m_signaling->unsubscribe(m_sig_peer); m_signaling = nullptr; }
 }
 
 void RemoteClient::fail() {
