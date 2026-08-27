@@ -325,20 +325,30 @@ void RemoteClient::adopt_probe(size_t idx) {
 
 void RemoteClient::probe_failed() {
     if (m_quic) return;  // race lost after adoption: irrelevant
-    for (auto &p : m_probes)
-        if (p && !p->client_conn()->dead) return;  // others still trying
+    bool cert = false;
+    for (auto &p : m_probes) {
+        if (p && p->client_conn() && !p->client_conn()->dead) return;  // others still trying
+        if (p && p->cert_rejected()) cert = true;
+    }
     // All candidates failed. Park (we're on one of their stacks).
     for (auto &p : m_probes)
         if (p) m_stale_probes.push_back(std::move(p));
     m_probes.clear();
     m_pending_out.clear();
-    fprintf(stderr,
-            "rivt: no candidate address responded — the peer's QUIC port "
-            "(udp/%u) is not reachable from here.\n"
-            "      Likely NAT/firewall between the two networks (direct "
-            "reachability only for now), or rivtd not listening.\n"
-            "      Try RIVT_QUIC_DEBUG=1 to see per-packet send/receive.\n",
-            m_endpoint.candidates.empty() ? 0 : m_endpoint.candidates.front().port);
+    if (cert) {
+        fprintf(stderr,
+                "rivt: reached the peer, but its certificate was rejected.\n"
+                "      The two devices are not in the same set. Pair them:\n"
+                "      on one run `rivt pair` / `rivtd pair`, on the other "
+                "`rivt setup <code>` / `rivtd setup <code>`.\n");
+    } else {
+        fprintf(stderr,
+                "rivt: no candidate address responded — the peer's QUIC port "
+                "(udp/%u) is not reachable from here.\n"
+                "      Likely NAT/firewall between the two networks, or rivtd "
+                "not listening. RIVT_QUIC_DEBUG=1 shows per-packet traffic.\n",
+                m_endpoint.candidates.empty() ? 0 : m_endpoint.candidates.front().port);
+    }
     if (on_disconnect) on_disconnect();
 }
 

@@ -232,6 +232,11 @@ int QuicEngine::handle_event(picoquic_cnx_t *cnx, Conn *conn, uint64_t stream_id
     case picoquic_callback_close:
     case picoquic_callback_application_close:
     case picoquic_callback_stateless_reset:
+        // 0x12e = TLS alert 46 (certificate_unknown): reached the peer
+        // but the cert isn't trusted.
+        if (picoquic_get_local_error(cnx) == 0x12e ||
+            picoquic_get_remote_error(cnx) == 0x12e)
+            m_cert_rejected = true;
         mark_closed(conn);
         picoquic_set_callback(cnx, nullptr, nullptr);
         break;

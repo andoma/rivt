@@ -80,6 +80,10 @@ public:
     void send(Conn *c, const void *data, size_t len);
     void close_conn(Conn *c);
     Conn *client_conn() { return m_client_conn; }  // client mode only
+    // True if a connection closed due to peer-certificate rejection
+    // (TLS certificate_unknown) — i.e. we reached the peer but neither
+    // side trusts the other (not in the same device set).
+    bool cert_rejected() const { return m_cert_rejected; }
 
     // Discover this socket's reflexive (public) transport address via a
     // STUN server (default stun.cloudflare.com:3478). The callback fires
@@ -110,6 +114,7 @@ private:
     struct sockaddr_storage m_local {};
     bool m_want_write = false;
 
+    bool m_cert_rejected = false;
     TurnRelay *m_turn = nullptr;
     std::vector<struct sockaddr_in> m_relayed_peers;  // reached via m_turn
     void feed_relayed(const struct sockaddr_in &peer, const uint8_t *d, size_t n);
