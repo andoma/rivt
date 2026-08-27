@@ -3,6 +3,7 @@
 #include "net/rendezvous.h"
 #include "net/identity.h"
 #include "net/pairing.h"
+#include "net/membership.h"
 #include "core/event_loop.h"
 #include "core/config.h"
 #include "core/debug.h"
@@ -158,6 +159,11 @@ int main(int argc, char *argv[]) {
                         connect_host.c_str());
                 return 1;
             }
+            // Refresh our trust bundle from the set log first, so a
+            // device paired-in elsewhere (by any member) is trusted
+            // immediately without waiting for a daemon re-sync.
+            if (auto id = rivt::net::Identity::load_or_create())
+                rivt::net::sync_membership(*id, /*found_if_missing=*/false);
             rivt::net::DirEntry e;
             if (!rivt::net::lookup_device(url, connect_host, e)) {
                 fprintf(stderr, "rivt: device '%s' not found in directory "
