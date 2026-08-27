@@ -44,6 +44,19 @@ public:
     static std::unique_ptr<QuicEngine> connect(EventLoop &loop, const std::string &host,
                                                uint16_t port, const Identity &id,
                                                const std::string &authorized_bundle);
+
+    // Split form for NAT traversal: create the client engine (binds the
+    // socket, so it can be STUNed) without dialing, then start the
+    // connection to a peer address learned via signaling — from the
+    // same socket whose reflexive address was advertised.
+    static std::unique_ptr<QuicEngine> create_client(EventLoop &loop, const Identity &id,
+                                                     const std::string &authorized_bundle);
+    bool start_connection(const std::string &host, uint16_t port);
+
+    // Send a few small datagrams to addr from the live socket to open a
+    // NAT mapping toward the peer (hole punch). Harmless if it arrives:
+    // not valid QUIC, so the peer's stack ignores it.
+    void punch(const std::string &host, uint16_t port);
     ~QuicEngine();
 
     std::function<void(Conn *)> on_connected;   // handshake complete

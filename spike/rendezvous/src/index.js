@@ -10,6 +10,11 @@
 // be signed by that key. The directory is not part of the E2E trust:
 // clients pin peer certificates, so a hostile directory can only DoS.
 
+async function sha256hex(bytes) {
+  const h = await crypto.subtle.digest("SHA-256", bytes);
+  return [...new Uint8Array(h)].map((b) => b.toString(16).padStart(2, "0")).join("");
+}
+
 function b64ToBytes(b64) {
   const bin = atob(b64.replace(/-/g, "+").replace(/_/g, "/"));
   const out = new Uint8Array(bin.length);
@@ -39,11 +44,10 @@ export default {
       return env.RENDEZVOUS.get(id).fetch(request);
     }
     if (url.pathname === "/ws") {
-      const set = url.searchParams.get("set");
-      const token = url.searchParams.get("token");
-      if (!set || token !== env.SPIKE_TOKEN)
-        return new Response("forbidden", { status: 403 });
-      const id = env.RENDEZVOUS.idFromName(set);
+      // Single signaling instance so any two peers meet; addressed by
+      // device signaling-id (?device=). Not authenticated — QUIC still
+      // pins certs, so the ferry is just a rendezvous point.
+      const id = env.RENDEZVOUS.idFromName("directory");
       return env.RENDEZVOUS.get(id).fetch(request);
     }
     return new Response("rivt rendezvous spike", { status: 200 });
@@ -100,20 +104,21 @@ export class Rendezvous {
         return json({ error: "name is bound to another device key" }, 409);
 
       const observed = request.headers.get("CF-Connecting-IP") ?? "";
+      const sig_id = await sha256hex(b64ToBytes(spki));  // signaling address
       await this.ctx.storage.put(`dev:${name}`, {
-        name, fingerprint, port, spki,
+        name, fingerprint, port, spki, sig_id,
         addrs: Array.isArray(addrs) ? addrs.slice(0, 8) : [],
         observed_ip: observed,
         last_seen: Date.now(),
       });
-      return json({ ok: true, observed_ip: observed });
+      return json({ ok: true, observed_ip: observed, sig_id });
     }
 
     if (url.pathname === "/dir/lookup" && request.method === "GET") {
       const name = url.searchParams.get("name") ?? "";
       const d = await this.ctx.storage.get(`dev:${name}`);
       if (!d) return json({ error: "unknown device" }, 404);
-      const { spki, ...pub } = d;
+      const { spki, ...pub } = d;  // sig_id stays in pub
       return json(pub);
     }
 

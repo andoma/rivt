@@ -49,35 +49,63 @@ std::unique_ptr<QuicEngine> QuicEngine::listen(EventLoop &loop, uint16_t port,
     return e;
 }
 
+std::unique_ptr<QuicEngine> QuicEngine::create_client(EventLoop &loop, const Identity &id,
+                                                      const std::string &bundle) {
+    auto e = std::unique_ptr<QuicEngine>(new QuicEngine(loop));
+    if (!e->init(0, id, bundle, false)) return nullptr;
+    return e;
+}
+
+// Resolve to a v4-mapped v6 sockaddr for our dual-stack socket.
+static bool resolve_v6(const std::string &host, uint16_t port, struct sockaddr_storage *out,
+                       socklen_t *outlen) {
+    struct addrinfo hints {}, *res = nullptr;
+    hints.ai_family = AF_INET6;
+    hints.ai_flags = AI_V4MAPPED | AI_ALL;
+    hints.ai_socktype = SOCK_DGRAM;
+    if (getaddrinfo(host.c_str(), std::to_string(port).c_str(), &hints, &res) != 0 || !res)
+        return false;
+    memcpy(out, res->ai_addr, res->ai_addrlen);
+    *outlen = res->ai_addrlen;
+    freeaddrinfo(res);
+    return true;
+}
+
+bool QuicEngine::start_connection(const std::string &host, uint16_t port) {
+    struct sockaddr_storage ss {};
+    socklen_t sl = 0;
+    if (!resolve_v6(host, port, &ss, &sl)) {
+        fprintf(stderr, "rivt: cannot resolve %s\n", host.c_str());
+        return false;
+    }
+    // No SNI: identity is the pinned certificate, not a hostname.
+    picoquic_cnx_t *cnx = picoquic_create_cnx(
+        m_quic, picoquic_null_connection_id, picoquic_null_connection_id,
+        (struct sockaddr *)&ss, picoquic_current_time(), 0, nullptr, ALPN, 1);
+    if (!cnx) return false;
+    m_client_conn = adopt(cnx);
+    if (picoquic_start_client_cnx(cnx) != 0) return false;
+    pump();
+    return true;
+}
+
 std::unique_ptr<QuicEngine> QuicEngine::connect(EventLoop &loop, const std::string &host,
                                                 uint16_t port, const Identity &id,
                                                 const std::string &bundle) {
-    auto e = std::unique_ptr<QuicEngine>(new QuicEngine(loop));
-    if (!e->init(0, id, bundle, false)) return nullptr;
-
-    // Our socket is dual-stack IPv6; map v4 targets into v6 space so
-    // sendto() on the AF_INET6 socket accepts them.
-    struct addrinfo hints {}, *res = nullptr;
-    hints.ai_family = AF_INET6;
-    hints.ai_flags = AI_V4MAPPED;
-    hints.ai_socktype = SOCK_DGRAM;
-    if (getaddrinfo(host.c_str(), std::to_string(port).c_str(), &hints, &res) != 0 || !res) {
-        fprintf(stderr, "rivt: cannot resolve %s\n", host.c_str());
-        return nullptr;
-    }
-    // No SNI: identity is the pinned certificate, not a hostname, and
-    // picotls enforces hostname/IP checks whenever an SNI is present.
-    picoquic_cnx_t *cnx = picoquic_create_cnx(
-        e->m_quic, picoquic_null_connection_id, picoquic_null_connection_id,
-        res->ai_addr, picoquic_current_time(), 0, nullptr, ALPN, 1);
-    freeaddrinfo(res);
-    if (!cnx) return nullptr;
-
-    Conn *conn = e->adopt(cnx);
-    e->m_client_conn = conn;
-    if (picoquic_start_client_cnx(cnx) != 0) return nullptr;
-    e->pump();
+    auto e = create_client(loop, id, bundle);
+    if (!e || !e->start_connection(host, port)) return nullptr;
     return e;
+}
+
+void QuicEngine::punch(const std::string &host, uint16_t port) {
+    struct sockaddr_storage ss {};
+    socklen_t sl = 0;
+    if (!resolve_v6(host, port, &ss, &sl)) return;
+    // A tiny non-QUIC datagram: opens the NAT mapping; the peer's stack
+    // discards it (fixed-bit clear, not a STUN cookie either).
+    const uint8_t p[1] = {0x00};
+    for (int i = 0; i < 3; i++)
+        sendto(m_fd, p, sizeof p, 0, (struct sockaddr *)&ss, sl);
 }
 
 QuicEngine::~QuicEngine() {

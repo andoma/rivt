@@ -113,6 +113,8 @@ set(RIVT_SOURCES
     src/net/rendezvous.cpp
     src/net/membership.cpp
     src/net/pairing.cpp
+    src/net/signaling.cpp
+    src/net/ws_client.cpp
 )
 
 if(APPLE)
@@ -305,6 +307,8 @@ add_executable(rivtd
     src/net/rendezvous.cpp
     src/net/membership.cpp
     src/net/pairing.cpp
+    src/net/signaling.cpp
+    src/net/ws_client.cpp
 )
 target_include_directories(rivtd PRIVATE src src/third_party ${picoquic_SOURCE_DIR}/picoquic)
 target_compile_options(rivtd PRIVATE -Wall -Wextra -Wpedantic)
@@ -374,4 +378,23 @@ if(CMAKE_BUILD_TYPE STREQUAL "Debug")
     target_link_options(test_membership PRIVATE -fsanitize=address)
 endif()
 add_test(NAME membership COMMAND test_membership)
+endif()
+
+if(RIVT_QUIC AND NOT APPLE)
+add_executable(test_signaling
+    tests/test_signaling.cpp
+    src/net/signaling.cpp
+    src/net/ws_client.cpp
+    src/net/identity.cpp
+    src/net/rendezvous.cpp
+    src/core/event_loop.cpp
+)
+target_include_directories(test_signaling PRIVATE src)
+target_compile_options(test_signaling PRIVATE -Wall -Wextra -Wpedantic)
+target_link_libraries(test_signaling PRIVATE OpenSSL::SSL OpenSSL::Crypto)
+if(CMAKE_BUILD_TYPE STREQUAL "Debug")
+    target_compile_options(test_signaling PRIVATE -Og -ggdb -fsanitize=address)
+    target_link_options(test_signaling PRIVATE -fsanitize=address)
+endif()
+add_test(NAME signaling COMMAND test_signaling)
 endif()

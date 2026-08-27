@@ -225,7 +225,10 @@ void WsClient::encode_frame(int opcode, const std::string &payload) {
     f += payload;
     for (size_t i = 0; i < n; i++) f[base + i] ^= mask[i & 3];
     m_out += f;
-    if (m_state == State::Open) pump_tls();
+    // Don't flush re-entrantly: send_text may be called from inside
+    // pump_tls (via on_message). Just arm write; the event loop (or the
+    // enclosing pump_tls's tail) flushes. Prevents unbounded recursion.
+    if (m_state == State::Open) want(true, true);
 }
 
 void WsClient::send_text(const std::string &msg) {
