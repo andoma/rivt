@@ -108,6 +108,7 @@ int main(int argc, char *argv[]) {
     std::function<bool(uint32_t, bool)> create_remote_window;
     std::function<void()> create_picker_window;      // Ctrl-Shift-N -> device picker
     std::function<bool(const std::string &)> open_remote;  // connect to a named box
+    std::vector<std::string> pending_connect;  // picker selections, opened at loop top
 
     create_tmux_window = [&](Pane *gateway) {
         auto win = std::make_unique<Window>(base_config, loop);
@@ -185,7 +186,7 @@ int main(int argc, char *argv[]) {
         Window *raw = win.get();
         loop.add_fd(raw->event_fd(), [raw](uint32_t) { raw->platform()->process_events(); });
         raw->on_new_window = create_picker_window;
-        raw->on_pick_remote = [&](const std::string &n) { open_remote(n); };
+        raw->on_pick_remote = [&](const std::string &n) { pending_connect.push_back(n); };
         raw->on_close = [](Window *w) { w->mark_closing(); };
         windows.push_back(std::move(win));
         return true;
@@ -197,7 +198,7 @@ int main(int argc, char *argv[]) {
         Window *raw = win.get();
         loop.add_fd(raw->event_fd(), [raw](uint32_t) { raw->platform()->process_events(); });
         raw->on_new_window = create_picker_window;
-        raw->on_pick_remote = [&](const std::string &n) { open_remote(n); };
+        raw->on_pick_remote = [&](const std::string &n) { pending_connect.push_back(n); };
         raw->on_close = [](Window *w) { w->mark_closing(); };
         windows.push_back(std::move(win));
     };
@@ -238,6 +239,17 @@ int main(int argc, char *argv[]) {
     }, true);
 
     while (!loop.should_quit()) {
+        // Picker selections are opened here, at the top of the loop, rather
+        // than inline in the picker's key callback: open_remote does blocking
+        // HTTPS (membership sync + directory lookup) and starts a timing-
+        // sensitive hole-punch, both of which misbehave when run reentrantly
+        // from inside an fd callback. This is the same context --connect uses.
+        if (!pending_connect.empty()) {
+            std::vector<std::string> todo;
+            todo.swap(pending_connect);
+            for (const auto &name : todo) open_remote(name);
+        }
+
         bool any_render = false;
         for (auto &w : windows) {
             if (w->needs_render()) { any_render = true; break; }
