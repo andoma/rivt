@@ -110,10 +110,13 @@ private:
     std::vector<PickEntry> m_pick_entries;
     int m_pick_sel = 0;
     std::string m_pick_filter;
+    int m_picker_refresh_timer = -1;
+    void picker_refresh_roster();
     void picker_rebuild();
     void picker_paint();
     void picker_key(const KeyEvent &key);
     void picker_select();
+    void picker_stop();
 
     // Deferred destruction — can't destroy while inside feed_data() call stack
     std::unique_ptr<TmuxClient> m_tmux_stale_client;

@@ -186,6 +186,14 @@ RemoteController::RemoteController(RemoteClient &client, Window &window, TabMana
     m_status_timer = m_client.loop().add_timer(5000, [this]() { refresh_status(); }, true);
 }
 
+RemoteController::~RemoteController() {
+    // The EventLoop outlives us (shared): drop any timers we registered,
+    // or they'd fire into a freed controller when a window is closed.
+    if (m_status_timer >= 0) m_client.loop().remove_timer(m_status_timer);
+    if (m_reconnect_timer >= 0) m_client.loop().remove_timer(m_reconnect_timer);
+    if (m_resize_timer >= 0) m_client.loop().remove_timer(m_resize_timer);
+}
+
 void RemoteController::initialize(int cols, int rows, int cell_w, int cell_h,
                                   int content_x, int content_y, uint32_t target_sid,
                                   bool kill_on_close) {

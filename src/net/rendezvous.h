@@ -38,6 +38,9 @@ struct RosterDevice {
 
 // All devices registered in the directory (for the attach picker).
 bool list_devices(const std::string &base_url, std::vector<RosterDevice> &out);
+// Remove a device from the directory (signed by our device key).
+bool delete_device(const std::string &base_url, const Identity &self,
+                   const std::string &name);
 
 struct DirEntry {
     std::string fingerprint;

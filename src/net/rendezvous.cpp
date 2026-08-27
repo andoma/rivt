@@ -287,6 +287,18 @@ bool membership_fetch(const std::string &base_url, const std::string &set_id,
     return true;
 }
 
+bool delete_device(const std::string &base_url, const Identity &self,
+                   const std::string &name) {
+    int64_t ts = (int64_t)time(nullptr);
+    std::string payload = "delete|" + name + "|" + std::to_string(ts);
+    std::string sig = self.sign_b64(payload), spki = self.spki_b64();
+    if (sig.empty() || spki.empty()) return false;
+    std::string body = "{\"name\":\"" + json_escape(name) + "\",\"spki\":\"" + spki +
+                       "\",\"sig\":\"" + sig + "\",\"ts\":" + std::to_string(ts) + "}";
+    std::string resp;
+    return https_request(base_url, "/dir/delete", "POST", body, resp);
+}
+
 bool list_devices(const std::string &base_url, std::vector<RosterDevice> &out) {
     std::string resp;
     if (!https_request(base_url, "/dir/devices", "GET", "", resp)) return false;

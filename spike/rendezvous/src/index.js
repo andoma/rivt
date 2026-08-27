@@ -152,6 +152,21 @@ export class Rendezvous {
       return json({ count, ops });
     }
 
+    // Remove a device from the directory. Signed by any device key
+    // (proves a legitimate participant); it only affects discovery, not
+    // membership/trust.
+    if (url.pathname === "/dir/delete" && request.method === "POST") {
+      let b;
+      try { b = await request.json(); } catch { return json({ error: "bad json" }, 400); }
+      const { name, spki, sig, ts } = b;
+      if (!name || !spki || !sig || !ts) return json({ error: "missing fields" }, 400);
+      if (Math.abs(Date.now() / 1000 - ts) > 300) return json({ error: "stale" }, 400);
+      if (!(await verifyDeviceSig(spki, sig, `delete|${name}|${ts}`)))
+        return json({ error: "bad signature" }, 403);
+      await this.ctx.storage.delete(`dev:${name}`);
+      return json({ ok: true });
+    }
+
     if (url.pathname === "/dir/devices" && request.method === "GET") {
       const out = [];
       for (const [, d] of await this.ctx.storage.list({ prefix: "dev:" }))

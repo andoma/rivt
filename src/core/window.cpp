@@ -25,6 +25,8 @@ Window::Window(const Config &base_config, EventLoop &loop)
     : m_config(base_config), m_loop(loop) {}
 
 Window::~Window() {
+    // Drop our loop timer (shared EventLoop outlives the window).
+    if (m_picker_refresh_timer >= 0) m_loop.remove_timer(m_picker_refresh_timer);
     // Replace the gateway pane's override with a drain that swallows remaining
     // tmux protocol (up to the DCS terminator \033\\) before restoring normal
     // operation. Don't touch on_tmux_control_mode — it stays active so the
@@ -426,6 +428,10 @@ bool Window::init_picker(const std::string &rendezvous) {
     if (!rendezvous.empty()) net::list_devices(rendezvous, m_roster);
     picker_rebuild();
     picker_paint();
+    // Refresh the roster periodically so online dots stay current (the
+    // one-shot snapshot goes stale as its last_seen values age out).
+    if (!rendezvous.empty())
+        m_picker_refresh_timer = m_loop.add_timer(15000, [this]() { picker_refresh_roster(); }, true);
 
     m_platform->show_window();
     setup_callbacks();
@@ -489,6 +495,21 @@ void Window::picker_key(const KeyEvent &key) {
         if (m_pick_sel < (int)m_pick_entries.size() - 1) m_pick_sel++; picker_paint(); return;
     }
     if (key.keysym == XKB_KEY_Return) { picker_select(); return; }
+    if (key.keysym == XKB_KEY_D) {  // Shift+D removes the selected device
+        if (m_pick_sel >= 0 && m_pick_sel < (int)m_pick_entries.size()) {
+            const PickEntry &e = m_pick_entries[m_pick_sel];
+            if (!e.is_local && !m_picker_rendezvous.empty()) {
+                auto id = net::Identity::load_or_create();
+                if (id) net::delete_device(m_picker_rendezvous, *id, e.name);
+                m_roster.erase(std::remove_if(m_roster.begin(), m_roster.end(),
+                    [&](const net::RosterDevice &d) { return d.name == e.name; }),
+                    m_roster.end());
+                picker_rebuild();
+                picker_paint();
+            }
+        }
+        return;
+    }
     if (key.keysym == XKB_KEY_BackSpace) {
         if (!m_pick_filter.empty()) m_pick_filter.pop_back();
         picker_rebuild(); picker_paint(); return;
@@ -500,10 +521,28 @@ void Window::picker_key(const KeyEvent &key) {
     }
 }
 
+void Window::picker_refresh_roster() {
+    if (!m_picker_active || m_picker_rendezvous.empty()) return;
+    std::vector<net::RosterDevice> fresh;
+    if (net::list_devices(m_picker_rendezvous, fresh)) {
+        m_roster = std::move(fresh);
+        picker_rebuild();
+        picker_paint();
+    }
+}
+
+void Window::picker_stop() {
+    m_picker_active = false;
+    if (m_picker_refresh_timer >= 0) {
+        m_loop.remove_timer(m_picker_refresh_timer);
+        m_picker_refresh_timer = -1;
+    }
+}
+
 void Window::picker_select() {
     if (m_pick_sel < 0 || m_pick_sel >= (int)m_pick_entries.size()) return;
     PickEntry e = m_pick_entries[m_pick_sel];
-    m_picker_active = false;
+    picker_stop();
     if (e.is_local) {
         // Turn the picker pane into a real local terminal in place.
         m_picker_pane->feed_data("\033[2J\033[H", 6);

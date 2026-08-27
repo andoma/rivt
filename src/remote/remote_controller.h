@@ -19,6 +19,7 @@ class Pane;
 class RemoteController {
 public:
     RemoteController(RemoteClient &client, Window &window, TabManager &tabs);
+    ~RemoteController();
 
     static constexpr uint32_t ATTACH_NEWEST = 0xffffffff;
 
