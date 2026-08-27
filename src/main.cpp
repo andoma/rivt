@@ -288,7 +288,9 @@ int main(int argc, char *argv[]) {
         // windows open. The user reopens via Cmd-N or the dock icon and
         // quits explicitly via Cmd-Q (handled by the app delegate).
 #else
-        if (windows.empty()) { loop.request_quit(); break; }
+        // A picker that just queued a connect closes itself in this same
+        // iteration; don't quit while its replacement window is pending.
+        if (windows.empty() && pending_connect.empty()) { loop.request_quit(); break; }
 #endif
 
         // render_if_needed() calls swap_buffers() which blocks until
