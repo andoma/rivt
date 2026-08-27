@@ -495,7 +495,7 @@ void Window::picker_key(const KeyEvent &key) {
         if (m_pick_sel < (int)m_pick_entries.size() - 1) m_pick_sel++; picker_paint(); return;
     }
     if (key.keysym == XKB_KEY_Return) { picker_select(); return; }
-    if (key.keysym == XKB_KEY_D) {  // Shift+D removes the selected device
+    if (key.keysym == XKB_KEY_Delete) {  // Delete removes the selected device
         if (m_pick_sel >= 0 && m_pick_sel < (int)m_pick_entries.size()) {
             const PickEntry &e = m_pick_entries[m_pick_sel];
             if (!e.is_local && !m_picker_rendezvous.empty()) {
