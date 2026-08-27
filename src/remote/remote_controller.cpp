@@ -391,6 +391,7 @@ void RemoteController::schedule_reconnect_attempt() {
         m_reconnect_timer = -1;
         if (!m_reconnecting) return;
         m_reconnect_attempts++;
+        dbg("rivt: reconnect attempt %d/10", m_reconnect_attempts);
         // No autostart while the daemon execs — a race would spawn a
         // fresh empty daemon over the upgrading one. For QUIC, a true
         // return only means the handshake started; failures arrive via

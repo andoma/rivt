@@ -1,5 +1,6 @@
 #include "net/turn.h"
 #include "net/sock.h"
+#include "core/debug.h"
 
 #include <openssl/evp.h>
 #include <openssl/hmac.h>
@@ -162,6 +163,8 @@ bool TurnRelay::allocate(const std::string &turn_host, uint16_t turn_port,
     setsockopt(m_fd, SOL_SOCKET, SO_RCVTIMEO, &z, sizeof z);
     m_loop.add_fd(m_fd, [this](uint32_t ev) { if (ev & EV_READ) on_socket(); });
     m_refresh_timer = m_loop.add_timer(240000, [this]() { refresh(); }, true);
+    dbg("turn: relay allocated %s:%u (lifetime 600s, refresh 240s)",
+        m_relayed_host.c_str(), m_relayed_port);
     return true;
 }
 
@@ -175,6 +178,11 @@ void TurnRelay::refresh() {
         const uint8_t *nonce = find_attr(resp, rn, A_NONCE, &nl);
         if (nonce) { m_nonce.assign((const char *)nonce, nl); request(0x0004, true, nullptr, resp, &rn); }
     }
+    // Permissions expire at 300s independently of the allocation, so
+    // re-issue CreatePermission for every peer or the relay goes silent
+    // at ~5 min even though the allocation is still alive.
+    for (const auto &p : m_peers) request(0x0008, true, &p, resp, &rn);
+    dbg("turn: refreshed allocation + %zu permission(s)", m_peers.size());
     // Re-arm non-blocking after the blocking refresh.
     struct timeval z = {0, 0};
     setsockopt(m_fd, SOL_SOCKET, SO_RCVTIMEO, &z, sizeof z);
@@ -184,6 +192,14 @@ void TurnRelay::permit(const struct sockaddr_in &peer) {
     uint8_t resp[2048];
     size_t rn = 0;
     request(0x0008, true, &peer, resp, &rn);  // CreatePermission
+    // Remember it so refresh() keeps the permission alive past 300s.
+    bool known = false;
+    for (const auto &p : m_peers)
+        if (p.sin_addr.s_addr == peer.sin_addr.s_addr && p.sin_port == peer.sin_port) { known = true; break; }
+    if (!known) m_peers.push_back(peer);
+    char ip[INET_ADDRSTRLEN] = {0};
+    inet_ntop(AF_INET, &peer.sin_addr, ip, sizeof ip);
+    dbg("turn: permitted peer %s:%u", ip, ntohs(peer.sin_port));
     struct timeval z = {0, 0};
     setsockopt(m_fd, SOL_SOCKET, SO_RCVTIMEO, &z, sizeof z);
 }

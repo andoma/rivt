@@ -3,6 +3,7 @@
 #include <cstdint>
 #include <functional>
 #include <string>
+#include <vector>
 #include <sys/socket.h>
 #include <netinet/in.h>
 
@@ -55,6 +56,9 @@ private:
     uint8_t m_key[16] = {0};
     std::string m_relayed_host;
     uint16_t m_relayed_port = 0;
+    // Permitted peers, re-issued on every refresh: TURN permissions expire
+    // after 300s, so a one-shot permit stalls a relay session at ~5 min.
+    std::vector<struct sockaddr_in> m_peers;
 };
 
 } // namespace rivt::net

@@ -187,6 +187,12 @@ QuicEngine::Conn *QuicEngine::adopt(picoquic_cnx_t *cnx) {
 void QuicEngine::mark_closed(Conn *c) {
     if (c->dead) return;
     c->dead = true;
+    if (c->cnx)
+        dbg("quic: connection closed (state=%d local_err=0x%lx remote_err=0x%lx)%s",
+            (int)picoquic_get_cnx_state(c->cnx),
+            (unsigned long)picoquic_get_local_error(c->cnx),
+            (unsigned long)picoquic_get_remote_error(c->cnx),
+            c->established ? "" : " [never established]");
     if (on_closed) on_closed(c);
 }
 

@@ -237,12 +237,18 @@ export class Rendezvous {
       }
       case "send": {
         // Ferry m.payload to device m.to; this is the signaling path.
+        // Deliver to every socket under the tag, not just [0]: a client
+        // that restarts can leave a not-yet-closed ghost socket under the
+        // same id, and picking [0] would hand the answer to the ghost and
+        // drop it. A dead socket's send() throws — skip it, keep going.
         const targets = this.ctx.getWebSockets(m.to);
-        if (targets.length === 0) {
-          ws.send(JSON.stringify({ type: "error", error: "offline", to: m.to, echo: m.echo }));
-          break;
+        const msg = JSON.stringify({ type: "msg", from, payload: m.payload, echo: m.echo });
+        let delivered = 0;
+        for (const t of targets) {
+          try { t.send(msg); delivered++; } catch (e) { /* stale socket */ }
         }
-        targets[0].send(JSON.stringify({ type: "msg", from, payload: m.payload, echo: m.echo }));
+        if (delivered === 0)
+          ws.send(JSON.stringify({ type: "error", error: "offline", to: m.to, echo: m.echo }));
         break;
       }
       case "turn-creds": {
