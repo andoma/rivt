@@ -73,6 +73,10 @@ public:
     // Returns false if all tabs are gone (caller should quit).
     bool reap_dead_panes();
 
+    // A persistent window-title suffix (e.g. remote connection status).
+    // The window title becomes "<tab title> — <suffix>".
+    void set_title_suffix(const std::string &suffix);
+
     // Callback: request re-render
     std::function<void()> on_needs_render;
 
@@ -93,6 +97,8 @@ private:
     std::vector<std::unique_ptr<Tab>> m_tabs;
     int m_active_index = -1;
     int m_next_tab_id = 1;
+    std::string m_title_suffix;
+    void apply_window_title();
 
     // Layout params (cached from last recompute)
     int m_content_x = 0, m_content_y = 0, m_content_w = 0, m_content_h = 0;

@@ -376,6 +376,7 @@ bool Window::init_remote_quic(const std::string &display_name,
     }
 
     m_remote_controller = std::make_unique<RemoteController>(*m_remote_client, *this, *m_tabs);
+    m_remote_controller->set_peer_name(display_name);
     m_remote_controller->on_exit = [this]() {
         if (on_close) on_close(this);
     };

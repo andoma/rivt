@@ -20,6 +20,21 @@ namespace rivt {
 
 using proto::MsgType;
 
+static int64_t now_ms() {
+    return std::chrono::duration_cast<std::chrono::milliseconds>(
+               std::chrono::steady_clock::now().time_since_epoch()).count();
+}
+
+void RemoteClient::note_rx() { m_last_rx_ms = now_ms(); }
+double RemoteClient::seconds_since_rx() const {
+    return m_last_rx_ms ? (now_ms() - m_last_rx_ms) / 1000.0 : 0.0;
+}
+void RemoteClient::set_link(const std::string &st) {
+    if (m_link_state == st) return;
+    m_link_state = st;
+    if (on_status) on_status();
+}
+
 std::string RemoteClient::default_socket_path() {
     const char *rt = getenv("XDG_RUNTIME_DIR");
     std::string dir = rt ? std::string(rt) + "/rivt"
@@ -186,6 +201,7 @@ bool RemoteClient::connect(const RemoteEndpoint &ep, bool autostart) {
     m_stale_quic.reset();  // fresh stack: safe to dispose parked engines
     m_stale_probes.clear();
     m_probes.clear();
+    m_probe_kinds.clear();
     m_pending_out.clear();
 
     if (!m_identity) {
@@ -206,6 +222,7 @@ bool RemoteClient::connect(const RemoteEndpoint &ep, bool autostart) {
         probe->on_connected = [this, idx](net::QuicEngine::Conn *) { adopt_probe(idx); };
         probe->on_closed = [this](net::QuicEngine::Conn *) { probe_failed(); };
         m_probes.push_back(std::move(probe));
+        m_probe_kinds.push_back(c.kind);
     }
     begin_punch(ep);
     return !m_probes.empty() || m_signaling != nullptr;
@@ -244,6 +261,7 @@ void RemoteClient::begin_punch(const RemoteEndpoint &ep) {
         e->on_closed = [this](net::QuicEngine::Conn *) { probe_failed(); };
         net::QuicEngine *ep_raw = e.get();
         m_probes.push_back(std::move(e));
+        m_probe_kinds.push_back(role == 0 ? "direct" : "turn");
         ep_raw->discover_reflexive([this, ep_raw, reflexives, pending, peer]
                                    (bool ok, const struct sockaddr_storage &sa) {
             (void)ep_raw;
@@ -295,11 +313,18 @@ void RemoteClient::on_answer(const std::vector<net::Candidate> &server_cands) {
         e->on_connected = [this, idx](net::QuicEngine::Conn *) { adopt_probe(idx); };
         e->on_closed = [this](net::QuicEngine::Conn *) { probe_failed(); };
         m_probes.push_back(std::move(e));
+        m_probe_kinds.push_back("local");
     }
 }
 
 void RemoteClient::adopt_probe(size_t idx) {
     if (m_quic) return;  // someone else won already
+    if (idx < m_probe_kinds.size()) {
+        const std::string &k = m_probe_kinds[idx];
+        m_transport = (k == "turn") ? "relay" : (k == "local") ? "lan" : "direct";
+    }
+    note_rx();
+    set_link("connected");
     m_quic = std::move(m_probes[idx]);
     m_quic_conn = m_quic->client_conn();
     // Losing probes are parked, never destroyed here — engines must not
@@ -310,6 +335,7 @@ void RemoteClient::adopt_probe(size_t idx) {
 
     m_quic->on_connected = nullptr;
     m_quic->on_data = [this](net::QuicEngine::Conn *, const uint8_t *d, size_t n) {
+        note_rx();
         m_in.append((const char *)d, n);
         process();
     };

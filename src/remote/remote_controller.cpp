@@ -50,6 +50,7 @@ RemoteController::RemoteController(RemoteClient &client, Window &window, TabMana
         }
         m_fetching.clear();
         m_fetch_done.clear();
+        refresh_status();
     };
 
     m_client.on_window_added = [this](uint32_t sid, uint32_t wid) {
@@ -179,6 +180,10 @@ RemoteController::RemoteController(RemoteClient &client, Window &window, TabMana
         // back without our state — nothing to re-attach to.
         if (m_reconnecting) exit();
     };
+
+    m_client.on_status = [this]() { refresh_status(); };
+    // Re-evaluate staleness periodically (no rx for a while => stale).
+    m_status_timer = m_client.loop().add_timer(5000, [this]() { refresh_status(); }, true);
 }
 
 void RemoteController::initialize(int cols, int rows, int cell_w, int cell_h,
@@ -349,7 +354,20 @@ void RemoteController::begin_reconnect() {
     m_target_sid = m_session_id;  // hello_ok re-attaches to the same session
     m_reconnecting = true;
     m_reconnect_attempts = 0;
+    refresh_status();
     schedule_reconnect_attempt();
+}
+
+void RemoteController::refresh_status() {
+    std::string t = m_client.transport();
+    std::string state;
+    if (m_reconnecting) state = "reconnecting";
+    else if (!m_active) state = "connecting";
+    else if (m_client.seconds_since_rx() > 45) state = "stale";
+    std::string s = m_peer_name.empty() ? "remote" : m_peer_name;
+    if (!t.empty()) s += "  \u00b7  " + t;   // middle dot
+    if (!state.empty()) s += "  \u00b7  " + state;
+    m_tabs.set_title_suffix(s);
 }
 
 void RemoteController::schedule_reconnect_attempt() {
@@ -402,6 +420,8 @@ void RemoteController::exit() {
     m_windows.clear();
     m_fetching.clear();
     m_fetch_done.clear();
+    if (m_status_timer >= 0) { m_client.loop().remove_timer(m_status_timer); m_status_timer = -1; }
+    m_tabs.set_title_suffix("");
     if (on_exit) on_exit();
 }
 

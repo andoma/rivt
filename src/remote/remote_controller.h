@@ -33,6 +33,9 @@ public:
 
     // Called by Window on a clean close (close button, quit).
     void notify_window_closing();
+
+    // Display name of the peer, for the window-title status.
+    void set_peer_name(const std::string &name) { m_peer_name = name; }
     void handle_resize(int cols, int rows, int cell_w, int cell_h,
                        int content_x, int content_y);
 
@@ -57,6 +60,7 @@ private:
     uint32_t focused_pane_id() const;
     void request_scrollback(uint32_t pane_id);
     void reposition_for_tab_bar();
+    void refresh_status();
     void exit();
 
     RemoteClient &m_client;
@@ -89,6 +93,8 @@ private:
     bool m_reconnecting = false;
     int m_reconnect_timer = -1;
     int m_reconnect_attempts = 0;
+    std::string m_peer_name;
+    int m_status_timer = -1;
 
     int m_cols = 80, m_rows = 24;
     int m_cell_w = 0, m_cell_h = 0;

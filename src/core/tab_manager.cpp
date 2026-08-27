@@ -69,9 +69,7 @@ void TabManager::setup_pane(Pane *pane) {
         for (int i = 0; i < (int)m_tabs.size(); i++) {
             if (m_tabs[i]->focused_pane == p) {
                 m_tabs[i]->title = title;
-                // Only update the window title if this is the active tab
-                if (i == m_active_index)
-                    m_platform->set_title(title);
+                if (i == m_active_index) apply_window_title();
                 if (on_needs_render) on_needs_render();
                 break;
             }
@@ -205,8 +203,7 @@ void TabManager::activate_tab(int index) {
     if (index < 0 || index >= (int)m_tabs.size()) return;
     m_active_index = index;
     m_tabs[index]->has_activity = false;
-    if (!m_tabs[index]->title.empty())
-        m_platform->set_title(m_tabs[index]->title);
+    apply_window_title();
     if (on_needs_render) on_needs_render();
 }
 
@@ -383,6 +380,18 @@ bool TabManager::reap_dead_panes() {
     }
 
     return !m_tabs.empty();
+}
+
+void TabManager::set_title_suffix(const std::string &suffix) {
+    m_title_suffix = suffix;
+    apply_window_title();
+}
+
+void TabManager::apply_window_title() {
+    const Tab *tab = active_tab();
+    std::string base = tab && !tab->title.empty() ? tab->title : "rivt";
+    if (m_title_suffix.empty()) m_platform->set_title(base);
+    else m_platform->set_title(base + "  \u2014  " + m_title_suffix);
 }
 
 } // namespace rivt

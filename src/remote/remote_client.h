@@ -7,6 +7,7 @@
 #include "proto/wire.h"
 #include <cstdint>
 #include <functional>
+#include <chrono>
 #include <memory>
 #include <string>
 #include <vector>
@@ -93,6 +94,15 @@ public:
     std::function<void(uint32_t sid)> on_session_closed;
     std::function<void(const std::string &)> on_error;
     std::function<void()> on_disconnect;
+    // Fired when the connection status changes (adopted, reconnecting).
+    std::function<void()> on_status;
+
+    // How we connected, once adopted: "direct", "relay", or "lan".
+    const std::string &transport() const { return m_transport; }
+    // "connecting" | "connected" | "reconnecting".
+    const std::string &link_state() const { return m_link_state; }
+    // Seconds since we last received any bytes (for staleness).
+    double seconds_since_rx() const;
 
 private:
     void on_event(uint32_t ev);
@@ -112,6 +122,12 @@ private:
     // Happy-eyeballs candidate probing: all candidates race, the first
     // established handshake is adopted, the rest are parked.
     std::vector<std::unique_ptr<net::QuicEngine>> m_probes;
+    std::vector<std::string> m_probe_kinds;   // parallel: candidate kind per probe
+    std::string m_transport;                  // winning transport (display)
+    std::string m_link_state = "connecting";
+    int64_t m_last_rx_ms = 0;
+    void note_rx();
+    void set_link(const std::string &st);
     std::vector<std::unique_ptr<net::QuicEngine>> m_stale_probes;  // parked, freed on fresh stack
     std::string m_pending_out;  // frames sent before a probe won
 
