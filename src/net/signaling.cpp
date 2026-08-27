@@ -35,7 +35,12 @@ bool Signaling::start(const std::string &rendezvous_url) {
     else if (url.rfind("http://", 0) == 0) url = "ws://" + url.substr(7);
     url += "/ws?device=" + m_id;
 
-    m_ws.on_open = [this]() { if (on_ready) on_ready(); };
+    m_ws.on_open = [this]() {
+        if (getenv("RIVT_SIG_DEBUG")) fprintf(stderr, "signaling: ws open (id %.16s)\n", m_id.c_str());
+        for (auto &f : m_pending) m_ws.send_text(f);
+        m_pending.clear();
+        if (on_ready) on_ready();
+    };
     m_ws.on_message = [this](const std::string &f) { handle(f); };
     return m_ws.connect(url);
 }
@@ -49,7 +54,13 @@ void Signaling::send(const std::string &to_id, bool answer,
         body += c.kind + " " + c.host + " " + std::to_string(c.port) + "\n";
     std::string frame = "{\"type\":\"send\",\"to\":\"" + to_id +
                         "\",\"payload\":\"" + b64_encode(body) + "\"}";
-    m_ws.send_text(frame);
+    // Queue until the WS handshake completes; sends before open are lost.
+    if (m_ws.is_open()) m_ws.send_text(frame);
+    else m_pending.push_back(frame);
+}
+
+void Signaling::keepalive() {
+    if (m_ws.is_open()) m_ws.send_text("{\"type\":\"ping\"}");
 }
 
 void Signaling::handle(const std::string &frame) {

@@ -3,6 +3,7 @@
 #include "net/identity.h"
 #include "net/quic_engine.h"
 #include "net/rendezvous.h"
+#include "net/signaling.h"
 #include "proto/wire.h"
 #include <cstdint>
 #include <functional>
@@ -17,6 +18,8 @@ namespace rivt {
 struct RemoteEndpoint {
     std::string unix_path;
     std::vector<net::Candidate> candidates;
+    std::string peer_sig_id;    // for NAT-traversal signaling (optional)
+    std::string rendezvous;     // rendezvous URL (optional)
     bool is_quic() const { return !candidates.empty(); }
 };
 
@@ -111,6 +114,12 @@ private:
     std::vector<std::unique_ptr<net::QuicEngine>> m_probes;
     std::vector<std::unique_ptr<net::QuicEngine>> m_stale_probes;  // parked, freed on fresh stack
     std::string m_pending_out;  // frames sent before a probe won
+
+    // NAT traversal: exchange candidates and punch / relay.
+    std::unique_ptr<net::Signaling> m_signaling;
+    int m_turn_fallback_timer = -1;
+    void begin_punch(const RemoteEndpoint &ep);
+    void on_answer(const std::vector<net::Candidate> &server_cands);
     void adopt_probe(size_t idx);
     void probe_failed();
     // close() can run inside m_quic's own callback (on_closed -> fail);

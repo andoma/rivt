@@ -26,6 +26,7 @@ public:
 
     // Send our candidate set to peer `to_id` as an offer or answer.
     void send(const std::string &to_id, bool answer, const std::vector<Candidate> &cands);
+    void keepalive();  // edge-answered ping to hold the NAT/TCP mapping
 
     std::function<void()> on_ready;
     // from_id = peer's signaling id; answer = false for offer.
@@ -38,6 +39,7 @@ private:
     EventLoop &m_loop;
     WsClient m_ws;
     std::string m_id;
+    std::vector<std::string> m_pending;  // frames queued until the WS opens
 };
 
 // SHA-256(data) as lowercase hex.

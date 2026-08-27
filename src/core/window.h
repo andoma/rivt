@@ -33,7 +33,9 @@ public:
     // first handshake wins). Attaches to the newest session there,
     // creating one if none exist.
     bool init_remote_quic(const std::string &display_name,
-                          const std::vector<net::Candidate> &candidates);
+                          const std::vector<net::Candidate> &candidates,
+                          const std::string &peer_sig_id = "",
+                          const std::string &rendezvous = "");
     void render_if_needed();
     bool reap_dead_panes();
     void toggle_cursor_blink();

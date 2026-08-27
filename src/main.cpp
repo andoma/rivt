@@ -75,6 +75,7 @@ int main(int argc, char *argv[]) {
     std::string remote_socket;
     std::string connect_host; // QUIC daemon on another machine
     uint16_t connect_port = 7433;
+    std::string peer_sig_id;
     for (int i = 1; i < argc; i++) {
         if (strcmp(argv[i], "--debug") == 0 || strcmp(argv[i], "-d") == 0) {
             debug_enabled() = true;
@@ -165,13 +166,15 @@ int main(int argc, char *argv[]) {
                 return 1;
             }
             candidates = e.candidates;
+            peer_sig_id = e.sig_id;
             fprintf(stderr, "rivt: %s -> %zu candidate(s) from directory\n",
                     connect_host.c_str(), candidates.size());
         } else {
             candidates.push_back({connect_host, connect_port, "direct"});
         }
         auto win = std::make_unique<Window>(base_config, loop);
-        if (!win->init_remote_quic(connect_host, candidates)) return 1;
+        if (!win->init_remote_quic(connect_host, candidates, peer_sig_id,
+                                   rivt::net::rendezvous_url())) return 1;
         Window *raw = win.get();
         loop.add_fd(raw->event_fd(), [raw](uint32_t) {
             raw->platform()->process_events();

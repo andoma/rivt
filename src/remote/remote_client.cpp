@@ -10,6 +10,7 @@
 #include <fcntl.h>
 #include <libgen.h>
 #include <sys/socket.h>
+#include <arpa/inet.h>
 #include <sys/stat.h>
 #include <sys/un.h>
 #include <sys/wait.h>
@@ -206,7 +207,95 @@ bool RemoteClient::connect(const RemoteEndpoint &ep, bool autostart) {
         probe->on_closed = [this](net::QuicEngine::Conn *) { probe_failed(); };
         m_probes.push_back(std::move(probe));
     }
-    return !m_probes.empty();
+    begin_punch(ep);
+    return !m_probes.empty() || m_signaling != nullptr;
+}
+
+// Open the signaling channel and start a NAT hole punch: STUN two
+// sockets (one for a direct punched path, one for the TURN relay),
+// offer both reflexive addresses, and on the server's answer connect
+// each to the matching server candidate. Runs alongside the direct
+// LAN probes; whichever validates first wins.
+void RemoteClient::begin_punch(const RemoteEndpoint &ep) {
+    if (ep.peer_sig_id.empty() || ep.rendezvous.empty()) {
+        fprintf(stderr, "rivt: punch skipped (sig_id=%zu rdv=%zu)\n",
+                ep.peer_sig_id.size(), ep.rendezvous.size());
+        return;
+    }
+    fprintf(stderr, "rivt: punch: opening signaling to %.16s...\n", ep.peer_sig_id.c_str());
+    m_signaling = std::make_unique<net::Signaling>(m_loop, *m_identity);
+    m_signaling->on_candidates =
+        [this](const std::string &, bool answer, std::vector<net::Candidate> c) {
+            if (answer) on_answer(c);
+        };
+    if (!m_signaling->start(ep.rendezvous)) { m_signaling.reset(); return; }
+
+    std::string bundle = net::Identity::authorized_bundle_path();
+    std::string peer = ep.peer_sig_id;
+    // Two engines: [0]=direct, [1]=turn. Add as probes so on_connected
+    // adopts them like any candidate.
+    auto reflexives = std::make_shared<std::vector<net::Candidate>>();
+    auto pending = std::make_shared<int>(2);
+    for (int role = 0; role < 2; role++) {
+        auto e = net::QuicEngine::create_client(m_loop, *m_identity, bundle);
+        if (!e) { (*pending)--; continue; }
+        size_t idx = m_probes.size();
+        e->on_connected = [this, idx](net::QuicEngine::Conn *) { adopt_probe(idx); };
+        e->on_closed = [this](net::QuicEngine::Conn *) { probe_failed(); };
+        net::QuicEngine *ep_raw = e.get();
+        m_probes.push_back(std::move(e));
+        ep_raw->discover_reflexive([this, ep_raw, reflexives, pending, peer]
+                                   (bool ok, const struct sockaddr_storage &sa) {
+            (void)ep_raw;
+            if (ok) {
+                char ip[64] = {0};
+                uint16_t port = 0;
+                if (sa.ss_family == AF_INET) {
+                    auto *s = (const struct sockaddr_in *)&sa;
+                    inet_ntop(AF_INET, &s->sin_addr, ip, sizeof ip); port = ntohs(s->sin_port);
+                } else {
+                    auto *s = (const struct sockaddr_in6 *)&sa;
+                    inet_ntop(AF_INET6, &s->sin6_addr, ip, sizeof ip); port = ntohs(s->sin6_port);
+                }
+                reflexives->push_back({ip, port, "stun"});
+            }
+            if (--(*pending) == 0 && m_signaling && !reflexives->empty()) {
+                fprintf(stderr, "rivt: punch: sending offer, %zu reflexive candidate(s)\n",
+                        reflexives->size());
+                m_signaling->send(peer, /*answer=*/false, *reflexives);
+            }
+        });
+    }
+}
+
+void RemoteClient::on_answer(const std::vector<net::Candidate> &server_cands) {
+    if (m_quic) return;  // already connected via a direct LAN probe
+    // m_probes[.. last two] are our [direct, turn] engines (created in
+    // begin_punch after the LAN probes).
+    net::QuicEngine *direct = nullptr, *turn = nullptr;
+    size_t n = m_probes.size();
+    if (n >= 2) { direct = m_probes[n - 2].get(); turn = m_probes[n - 1].get(); }
+    const net::Candidate *cstun = nullptr, *cturn = nullptr;
+    std::vector<net::Candidate> locals;
+    for (const auto &c : server_cands) {
+        if (c.kind == "stun" && !cstun) cstun = &c;
+        else if (c.kind == "turn" && !cturn) cturn = &c;
+        else if (c.kind == "local") locals.push_back(c);
+    }
+    fprintf(stderr, "rivt: peer answered (%s%s%zu local); punching\n",
+            cstun ? "stun " : "", cturn ? "turn " : "", locals.size());
+    if (direct && cstun) direct->start_connection(cstun->host, cstun->port);
+    if (turn && cturn) turn->start_connection(cturn->host, cturn->port);
+    // Server-side LAN addresses, in case any is reachable from us.
+    std::string bundle = net::Identity::authorized_bundle_path();
+    for (const auto &c : locals) {
+        auto e = net::QuicEngine::connect(m_loop, c.host, c.port, *m_identity, bundle);
+        if (!e) continue;
+        size_t idx = m_probes.size();
+        e->on_connected = [this, idx](net::QuicEngine::Conn *) { adopt_probe(idx); };
+        e->on_closed = [this](net::QuicEngine::Conn *) { probe_failed(); };
+        m_probes.push_back(std::move(e));
+    }
 }
 
 void RemoteClient::adopt_probe(size_t idx) {
@@ -287,6 +376,7 @@ void RemoteClient::close() {
     m_out.clear();
     m_out_off = 0;
     m_write_armed = false;
+    m_signaling.reset();
 }
 
 void RemoteClient::fail() {

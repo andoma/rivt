@@ -234,6 +234,7 @@ bool lookup_device(const std::string &base_url, const std::string &name, DirEntr
     if (!https_request(base_url, "/dir/lookup?name=" + name, "GET", "", resp))
         return false;
     out.fingerprint = json_str(resp, "fingerprint");
+    out.sig_id = json_str(resp, "sig_id");
     out.port = (uint16_t)json_num(resp, "port");
     out.last_seen_ms = json_num(resp, "last_seen");
     // addrs array = the peer's own interface addresses ("local").

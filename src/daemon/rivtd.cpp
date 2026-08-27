@@ -14,6 +14,9 @@
 #include "net/membership.h"
 #include "net/pairing.h"
 #include "net/rendezvous.h"
+#include "net/signaling.h"
+#include "net/turn.h"
+#include <arpa/inet.h>
 #include "proto/frame.h"
 #include "proto/messages.h"
 #include "proto/snapshot.h"
@@ -178,9 +181,82 @@ public:
                 // Re-sync the set periodically so newly-paired devices
                 // become trusted without a restart.
                 m_loop.add_timer(60000, [this]() { sync_membership(); }, true);
+
+                // Persistent signaling channel so clients behind NAT can
+                // summon us for a hole punch / relay.
+                start_signaling(rdv);
             }
         }
         return true;
+    }
+
+    void start_signaling(const std::string &rdv) {
+        m_signaling = std::make_unique<net::Signaling>(m_loop, *m_identity);
+        m_signaling->on_candidates =
+            [this](const std::string &from, bool answer, std::vector<net::Candidate> cands) {
+                if (!answer) handle_offer(from, cands);
+            };
+        if (!m_signaling->start(rdv)) { m_signaling.reset(); return; }
+        // App-level keepalive: edge-answered, keeps the NAT/TCP mapping
+        // alive without waking the DO.
+        m_loop.add_timer(30000, [this]() { if (m_signaling) m_signaling->keepalive(); }, true);
+    }
+
+    // A client wants to reach us: STUN our listen socket, allocate a TURN
+    // relay + permit the client, answer with our candidates, and punch.
+    void handle_offer(const std::string &from, const std::vector<net::Candidate> &client_cands) {
+        fprintf(stderr, "rivtd: punch offer from %.16s... (%zu candidates)\n",
+                from.c_str(), client_cands.size());
+        if (!m_turn) {  // allocate once, reuse
+            std::string user, pass, thost; uint16_t tport;
+            if (net::turn_credentials(net::rendezvous_url(), user, pass, thost, tport)) {
+                auto t = std::make_unique<net::TurnRelay>(m_loop);
+                if (t->allocate(thost, tport, user, pass)) {
+                    m_turn = std::move(t);
+                    m_quic->enable_turn(m_turn.get());
+                }
+            }
+        }
+        // Permit and punch toward every client candidate.
+        for (const auto &c : client_cands) {
+            struct sockaddr_in sa {};
+            if (inet_pton(AF_INET, c.host.c_str(), &sa.sin_addr) == 1) {
+                sa.sin_family = AF_INET;
+                sa.sin_port = htons(c.port);
+                if (m_turn) m_turn->permit(sa);
+            }
+            m_quic->punch(c.host, c.port);
+        }
+        // Keep punching briefly to cover handshake timing.
+        auto punches = std::make_shared<int>(0);
+        int tid = m_loop.add_timer(200, [this, client_cands, punches]() {
+            for (const auto &c : client_cands) m_quic->punch(c.host, c.port);
+            (*punches)++;
+        }, true);
+        m_loop.add_timer(2500, [this, tid]() { m_loop.remove_timer(tid); }, false);
+
+        // STUN our listen socket, then answer with local+stun+turn.
+        m_quic->discover_reflexive([this, from](bool ok, const struct sockaddr_storage &sa) {
+            std::vector<net::Candidate> mine;
+            for (const auto &a : net::local_addresses())
+                mine.push_back({a, (uint16_t)m_listen_port, "local"});
+            if (ok) {
+                char ip[64] = {0};
+                uint16_t port = 0;
+                if (sa.ss_family == AF_INET) {
+                    auto *s = (const struct sockaddr_in *)&sa;
+                    inet_ntop(AF_INET, &s->sin_addr, ip, sizeof ip); port = ntohs(s->sin_port);
+                } else {
+                    auto *s = (const struct sockaddr_in6 *)&sa;
+                    inet_ntop(AF_INET6, &s->sin6_addr, ip, sizeof ip); port = ntohs(s->sin6_port);
+                }
+                mine.push_back({ip, port, "stun"});
+            }
+            if (m_turn) mine.push_back({m_turn->relayed_host(), m_turn->relayed_port(), "turn"});
+            fprintf(stderr, "rivtd: answering with %zu candidates%s\n", mine.size(),
+                    m_turn ? " (incl turn relay)" : "");
+            if (m_signaling) m_signaling->send(from, /*answer=*/true, mine);
+        });
     }
 
     // Load the membership log (auto-init a single-device set if none),
@@ -976,10 +1052,12 @@ private:
     std::string m_name;
     Config m_config;
     EventLoop m_loop;
-    // Declared after m_loop: the engine unregisters its fd/timer from
-    // the loop in its destructor, so it must be destroyed first.
+    // Declared after m_loop so they're destroyed before it: each
+    // unregisters its fd/timer from the loop in its destructor.
     std::unique_ptr<net::Identity> m_identity;
     std::unique_ptr<net::QuicEngine> m_quic;
+    std::unique_ptr<net::Signaling> m_signaling;
+    std::unique_ptr<net::TurnRelay> m_turn;
     int m_listen_fd = -1;
     int m_sig_fd = -1;
     std::vector<std::unique_ptr<Client>> m_clients;

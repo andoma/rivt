@@ -33,6 +33,7 @@ struct Candidate {
 
 struct DirEntry {
     std::string fingerprint;
+    std::string sig_id;  // peer's signaling id (SHA-256 of its SPKI)
     uint16_t port = 0;
     std::vector<Candidate> candidates;  // local addrs (+ observed public ip)
     int64_t last_seen_ms = 0;
