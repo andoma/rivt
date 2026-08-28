@@ -479,6 +479,7 @@ private:
 
     void kill_client(Client *c) {
         if (c->dead) return;
+        rivt::logmsg("rivtd: client disconnected (attached session %u)\n", c->attached);
         c->dead = true;
         m_sweep_clients = true;
     }
@@ -640,7 +641,8 @@ private:
             uint32_t sid = r.u32();
             auto it = m_sessions.find(sid);
             if (!r.ok || it == m_sessions.end()) return;
-            close_session(it->second);
+            rivt::logmsg("rivtd: KillSession %u from client\n", sid);
+            close_session(it->second, "kill requested by client");
             m_sessions.erase(it);
             break;
         }
@@ -721,6 +723,8 @@ private:
         auto wit = std::find_if(s.windows.begin(), s.windows.end(),
                                 [wid](const SrvWindow &w) { return w.id == wid; });
         if (wit == s.windows.end()) return;
+        rivt::logmsg("rivtd: window %u closed (session %u, %zu window(s) remain)\n",
+                     wid, s.id, s.windows.size() - 1);
         for (auto &[pid, pane] : wit->panes) {
             pane->detach(m_loop);
             pane->pty().close();
@@ -735,7 +739,7 @@ private:
         s.windows.erase(wit);
         if (s.windows.empty()) {
             uint32_t sid = s.id;
-            close_session(s);
+            close_session(s, "last window closed");
             m_sessions.erase(sid);
         }
     }
@@ -847,7 +851,8 @@ private:
                 send_control(c.get(), t, w);
     }
 
-    void close_session(Session &s) {
+    void close_session(Session &s, const char *reason) {
+        rivt::logmsg("rivtd: closing session %u (%s)\n", s.id, reason);
         for (auto &win : s.windows)
             for (auto &[pid, pane] : win.panes) {
                 m_panes.erase(pid);
@@ -875,6 +880,9 @@ private:
                 auto pit = std::find_if(wit->panes.begin(), wit->panes.end(),
                                         [pid](auto &p) { return p.first == pid; });
                 if (pit == wit->panes.end()) continue;
+                rivt::logmsg("rivtd: pane %u exited (session %u window %u, "
+                             "%zu pane(s) remain in window)\n",
+                             pid, s.id, wit->id, wit->panes.size() - 1);
 
                 proto::Writer w;
                 w.u32(pid);
