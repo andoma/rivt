@@ -87,7 +87,7 @@ bool QuicEngine::start_connection(const std::string &host, uint16_t port) {
     struct sockaddr_storage ss {};
     socklen_t sl = 0;
     if (!resolve_v6(host, port, &ss, &sl)) {
-        fprintf(stderr, "rivt: cannot resolve %s\n", host.c_str());
+        rivt::logmsg("rivt: cannot resolve %s\n", host.c_str());
         return false;
     }
     // No SNI: identity is the pinned certificate, not a hostname.
@@ -143,7 +143,7 @@ bool QuicEngine::init(uint16_t bind_port, const Identity &id, const std::string 
                              nullptr, nullptr, picoquic_current_time(), nullptr,
                              nullptr, nullptr, 0);
     if (!m_quic) {
-        fprintf(stderr, "rivt: picoquic_create failed (identity/bundle unreadable?)\n");
+        rivt::logmsg("rivt: picoquic_create failed (identity/bundle unreadable?)\n");
         return false;
     }
     // Mutual auth: both sides present certs, both validate against the
@@ -210,7 +210,7 @@ void QuicEngine::mark_closed(Conn *c) {
 int QuicEngine::handle_event(picoquic_cnx_t *cnx, Conn *conn, uint64_t stream_id,
                              uint8_t *bytes, size_t length, int event) {
     if (qdbg())
-        fprintf(stderr, "quic[%p] event=%d stream=%lu len=%zu state=%d lerr=0x%lx rerr=0x%lx\n",
+        rivt::logmsg("quic[%p] event=%d stream=%lu len=%zu state=%d lerr=0x%lx rerr=0x%lx\n",
                 (void *)this, event, (unsigned long)stream_id, length,
                 (int)picoquic_get_cnx_state(cnx),
                 (unsigned long)picoquic_get_local_error(cnx),
@@ -302,7 +302,7 @@ void QuicEngine::on_socket(uint32_t events) {
             }
             continue;  // never hand STUN to picoquic
         }
-        if (qdbg()) fprintf(stderr, "quic[%p] rx %zd\n", (void *)this, n);
+        if (qdbg()) rivt::logmsg("quic[%p] rx %zd\n", (void *)this, n);
         picoquic_incoming_packet(m_quic, buf, (size_t)n, (struct sockaddr *)&from,
                                  (struct sockaddr *)&m_local, 0, 0,
                                  picoquic_current_time());
@@ -339,7 +339,7 @@ void QuicEngine::discover_reflexive(
     const char *host = stun_host ? stun_host : "stun.cloudflare.com";
     socklen_t sl = 0;
     if (!resolve_v6(host, stun_port, &m_stun_server, &sl)) {
-        fprintf(stderr, "rivt: stun: cannot resolve %s\n", host);
+        rivt::logmsg("rivt: stun: cannot resolve %s\n", host);
         struct sockaddr_storage z {};
         cb(false, z);
         return;
@@ -416,7 +416,7 @@ void QuicEngine::pump() {
         ssize_t sent = sendto(m_fd, buf, send_len, 0, (struct sockaddr *)&to,
                to.ss_family == AF_INET ? sizeof(struct sockaddr_in)
                                        : sizeof(struct sockaddr_in6));
-        if (qdbg()) fprintf(stderr, "quic[%p] tx %zu -> %zd (fam %d)\n",
+        if (qdbg()) rivt::logmsg("quic[%p] tx %zu -> %zd (fam %d)\n",
                             (void *)this, send_len, sent, to.ss_family);
         if (sent < 0 && (errno == EAGAIN || errno == EWOULDBLOCK)) {
             // Kernel buffer full: this packet is lost to us (QUIC will

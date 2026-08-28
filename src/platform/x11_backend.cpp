@@ -630,7 +630,7 @@ bool X11Backend::read_paste_property(std::string &out, xcb_atom_t &type) {
         uint32_t bytes_after = prop->bytes_after;
         if (out.size() + (size_t)len > kMaxPasteBytes) {
             free(prop);
-            fprintf(stderr, "rivt: clipboard paste exceeds %zu bytes, truncating\n",
+            rivt::logmsg("rivt: clipboard paste exceeds %zu bytes, truncating\n",
                     kMaxPasteBytes);
             return true;
         }
@@ -662,7 +662,7 @@ void X11Backend::handle_selection_request(xcb_selection_request_event_t *sr) {
             notify.property = sr->property;
         } else {
             // INCR send not implemented yet — reject oversized transfers
-            fprintf(stderr, "rivt: clipboard image too large for non-INCR transfer (%zu bytes)\n", typed.data.size());
+            rivt::logmsg("rivt: clipboard image too large for non-INCR transfer (%zu bytes)\n", typed.data.size());
             notify.property = XCB_ATOM_NONE;
         }
     } else if (sr->target == m_atom_utf8_string || sr->target == XCB_ATOM_STRING) {

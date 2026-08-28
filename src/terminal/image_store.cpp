@@ -5,6 +5,7 @@
 
 #include "terminal/image_store.h"
 #include "terminal/kitty_graphics.h"
+#include "core/debug.h"
 #include "core/util.h"
 #include <algorithm>
 #include <cstdio>
@@ -33,7 +34,7 @@ bool ImageStore::decode_image(const std::string &base64_payload, int format,
             (const unsigned char *)raw.data(), (int)raw.size(),
             &w, &h, &channels, 4);  // force RGBA
         if (!pixels) {
-            fprintf(stderr, "rivt: failed to decode PNG image: %s\n", stbi_failure_reason());
+            rivt::logmsg("rivt: failed to decode PNG image: %s\n", stbi_failure_reason());
             return false;
         }
         out.width = w;

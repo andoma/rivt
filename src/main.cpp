@@ -63,7 +63,7 @@ int main(int argc, char *argv[]) {
         }
         if (!strcmp(argv[i], "join")) {
             auto id = rivt::net::Identity::load_or_create();
-            if (!id || i + 1 >= argc) { fprintf(stderr, "usage: rivt join <code>\n"); return 1; }
+            if (!id || i + 1 >= argc) { rivt::logmsg("usage: rivt join <code>\n"); return 1; }
             return rivt::net::pair_join(argv[i + 1], *id) ? 0 : 1;
         }
     }
@@ -157,7 +157,7 @@ int main(int argc, char *argv[]) {
         if (target.find('.') == std::string::npos && target.find(':') == std::string::npos) {
             std::string url = rivt::net::rendezvous_url();
             if (url.empty()) {
-                fprintf(stderr, "rivt: '%s' is a device name but no rendezvous is "
+                rivt::logmsg("rivt: '%s' is a device name but no rendezvous is "
                                 "configured\n", target.c_str());
                 return false;
             }
@@ -165,13 +165,13 @@ int main(int argc, char *argv[]) {
                 rivt::net::sync_membership(*id, /*found_if_missing=*/false);
             rivt::net::DirEntry e;
             if (!rivt::net::lookup_device(url, target, e)) {
-                fprintf(stderr, "rivt: device '%s' not found (is rivtd --listen "
+                rivt::logmsg("rivt: device '%s' not found (is rivtd --listen "
                                 "running there?)\n", target.c_str());
                 return false;
             }
             candidates = e.candidates;
             sig_id = e.sig_id;
-            fprintf(stderr, "rivt: %s -> %zu candidate(s) from directory\n",
+            rivt::logmsg("rivt: %s -> %zu candidate(s) from directory\n",
                     target.c_str(), candidates.size());
         } else {
             std::string host = target;

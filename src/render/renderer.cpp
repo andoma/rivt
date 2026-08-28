@@ -82,7 +82,7 @@ static unsigned int compile_shader(GLenum type, const char *src) {
     if (!success) {
         char log[512];
         glGetShaderInfoLog(shader, 512, nullptr, log);
-        fprintf(stderr, "Shader compile error: %s\n", log);
+        rivt::logmsg("Shader compile error: %s\n", log);
     }
     return shader;
 }
@@ -98,7 +98,7 @@ static unsigned int link_program(unsigned int vert, unsigned int frag) {
     if (!success) {
         char log[512];
         glGetProgramInfoLog(prog, 512, nullptr, log);
-        fprintf(stderr, "Shader link error: %s\n", log);
+        rivt::logmsg("Shader link error: %s\n", log);
     }
 
     glDeleteShader(vert);

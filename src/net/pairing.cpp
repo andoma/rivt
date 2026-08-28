@@ -1,4 +1,5 @@
 #include "net/pairing.h"
+#include "core/debug.h"
 #include "net/identity.h"
 #include "net/membership.h"
 #include "net/rendezvous.h"
@@ -101,7 +102,7 @@ static bool poll_mailbox(const std::string &rdv, const std::string &invite,
 bool pair_invite(const Identity &self) {
     std::string rdv = rendezvous_url();
     if (rdv.empty()) {
-        fprintf(stderr, "rivt: no rendezvous configured "
+        rivt::logmsg("rivt: no rendezvous configured "
                         "(~/.config/rivt/rendezvous or $RIVT_RENDEZVOUS)\n");
         return false;
     }
@@ -119,7 +120,7 @@ bool pair_invite(const Identity &self) {
 
     std::string offer_b64;
     if (!poll_mailbox(rdv, invite, "offer", offer_b64, 600)) {
-        fprintf(stderr, "rivt: pairing timed out\n");
+        rivt::logmsg("rivt: pairing timed out\n");
         return false;
     }
     std::string offer = b64_decode(offer_b64);
@@ -129,7 +130,7 @@ bool pair_invite(const Identity &self) {
     std::string tag = jget(offer, "hmac");
     if (pubkey.empty() || cert.empty() ||
         hmac_hex(secret, "offer" + pubkey + name + cert) != tag) {
-        fprintf(stderr, "rivt: pairing offer failed verification (wrong code?)\n");
+        rivt::logmsg("rivt: pairing offer failed verification (wrong code?)\n");
         return false;
     }
 
@@ -143,12 +144,12 @@ bool pair_invite(const Identity &self) {
     } else {
         printf("y (RIVT_PAIR_YES)\n");
     }
-    if (!yes) { fprintf(stderr, "rivt: pairing declined\n"); return false; }
+    if (!yes) { rivt::logmsg("rivt: pairing declined\n"); return false; }
 
     MembershipLog log;
     if (!log.load_file(MembershipLog::default_path())) return false;
     std::string op = log.add_member(self, pubkey, name, cert);
-    if (op.empty()) { fprintf(stderr, "rivt: failed to sign add-op\n"); return false; }
+    if (op.empty()) { rivt::logmsg("rivt: failed to sign add-op\n"); return false; }
     log.save(MembershipLog::default_path());
     // Push the whole log so the DO (and the joiner) get every op.
     std::vector<std::string> have;
@@ -166,7 +167,7 @@ bool pair_invite(const Identity &self) {
     std::string answer = "{\"ops\":[" + ops_json + "],\"hmac\":\"" +
                          hmac_hex(secret, "answer" + set + sha256_hex(concat)) + "\"}";
     if (!pair_put(rdv, invite, "answer", b64_encode(answer))) {
-        fprintf(stderr, "rivt: failed to send approval\n");
+        rivt::logmsg("rivt: failed to send approval\n");
         return false;
     }
     printf("Approved '%s'. It is now a member of the set.\n", name.c_str());
@@ -175,7 +176,7 @@ bool pair_invite(const Identity &self) {
 
 bool interactive_enroll(const std::string &code_arg) {
     auto id = Identity::load_or_create();
-    if (!id) { fprintf(stderr, "cannot create device identity\n"); return false; }
+    if (!id) { rivt::logmsg("cannot create device identity\n"); return false; }
     printf("This device's fingerprint: %s\n\n", id->fingerprint().c_str());
 
     std::string code = code_arg;
@@ -188,7 +189,7 @@ bool interactive_enroll(const std::string &code_arg) {
 
     std::string url = rendezvous_url();
     if (url.empty()) url = prompt_line("Rendezvous URL (https://...): ");
-    if (url.empty()) { fprintf(stderr, "a rendezvous URL is required\n"); return false; }
+    if (url.empty()) { rivt::logmsg("a rendezvous URL is required\n"); return false; }
     set_rendezvous_url(url);
     if (sync_membership(*id, /*found_if_missing=*/true).empty()) return false;
     printf("\nFounded a new set. Pair other devices with `rivtd pair` / `rivt pair`.\n");
@@ -198,7 +199,7 @@ bool interactive_enroll(const std::string &code_arg) {
 bool pair_join(const std::string &code, const Identity &self) {
     std::string rdv, set, invite, secret;
     if (!parse_code(code, rdv, set, invite, secret)) {
-        fprintf(stderr, "rivt: malformed pairing code\n");
+        rivt::logmsg("rivt: malformed pairing code\n");
         return false;
     }
     // The code carries the rendezvous URL, so a joining box needs no
@@ -211,7 +212,7 @@ bool pair_join(const std::string &code, const Identity &self) {
                         b64_encode(cert) + "\",\"name\":\"" + name + "\",\"hmac\":\"" +
                         hmac_hex(secret, "offer" + pubkey + name + cert) + "\"}";
     if (!pair_put(rdv, invite, "offer", b64_encode(offer))) {
-        fprintf(stderr, "rivt: cannot reach rendezvous\n");
+        rivt::logmsg("rivt: cannot reach rendezvous\n");
         return false;
     }
     printf("Sent join request as '%s' (fingerprint %s).\n"
@@ -221,7 +222,7 @@ bool pair_join(const std::string &code, const Identity &self) {
 
     std::string answer_b64;
     if (!poll_mailbox(rdv, invite, "answer", answer_b64, 600)) {
-        fprintf(stderr, "rivt: pairing timed out (not approved)\n");
+        rivt::logmsg("rivt: pairing timed out (not approved)\n");
         return false;
     }
     std::string answer = b64_decode(answer_b64);
@@ -241,13 +242,13 @@ bool pair_join(const std::string &code, const Identity &self) {
     std::string concat;
     for (auto &o : ops) concat += o;
     if (hmac_hex(secret, "answer" + set + sha256_hex(concat)) != tag) {
-        fprintf(stderr, "rivt: approval failed verification\n");
+        rivt::logmsg("rivt: approval failed verification\n");
         return false;
     }
 
     MembershipLog log;
     if (!log.load(ops) || log.set_id() != set || !log.is_member(pubkey)) {
-        fprintf(stderr, "rivt: received an invalid membership log\n");
+        rivt::logmsg("rivt: received an invalid membership log\n");
         return false;
     }
     log.save(MembershipLog::default_path());

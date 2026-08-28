@@ -34,7 +34,7 @@ RemoteController::RemoteController(RemoteClient &client, Window &window, TabMana
 
     m_client.on_session_created = [this](uint32_t sid, uint32_t pane, const std::string &err) {
         if (pane == 0) {
-            fprintf(stderr, "rivt: remote session failed: %s\n", err.c_str());
+            rivt::logmsg("rivt: remote session failed: %s\n", err.c_str());
             exit();
             return;
         }
@@ -46,7 +46,7 @@ RemoteController::RemoteController(RemoteClient &client, Window &window, TabMana
         m_active = true;
         m_sent_cols = m_sent_rows = 0;  // new attach: size not negotiated yet
         if (m_reconnecting) {
-            fprintf(stderr, "rivt: re-attached to session %u\n", sid);
+            rivt::logmsg("rivt: re-attached to session %u\n", sid);
             m_reconnecting = false;
         }
         m_fetching.clear();
@@ -95,7 +95,7 @@ RemoteController::RemoteController(RemoteClient &client, Window &window, TabMana
         Pane *p = it->second.pane;
         int cols = p->screen().cols(), rows = p->screen().rows();
         if (!proto::Snapshot::deserialize(p->screen(), p->parser(), data, len)) {
-            fprintf(stderr, "rivt: bad snapshot for pane %u\n", pane_id);
+            rivt::logmsg("rivt: bad snapshot for pane %u\n", pane_id);
             return;
         }
         // The snapshot may predate the layout we already applied; the
@@ -167,16 +167,16 @@ RemoteController::RemoteController(RemoteClient &client, Window &window, TabMana
         if (m_active && m_session_id) {
             // A daemon upgrade (exec) drops all sockets but keeps the
             // sessions. Try to reconnect and re-attach before giving up.
-            fprintf(stderr, "rivt: rivtd connection lost, reconnecting...\n");
+            rivt::logmsg("rivt: rivtd connection lost, reconnecting...\n");
             begin_reconnect();
         } else {
-            fprintf(stderr, "rivt: lost connection to rivtd\n");
+            rivt::logmsg("rivt: lost connection to rivtd\n");
             exit();
         }
     };
 
     m_client.on_error = [this](const std::string &e) {
-        fprintf(stderr, "rivt: rivtd error: %s\n", e.c_str());
+        rivt::logmsg("rivt: rivtd error: %s\n", e.c_str());
         // During a reconnect, "no such session" means the daemon came
         // back without our state — nothing to re-attach to.
         if (m_reconnecting) exit();
@@ -406,7 +406,7 @@ void RemoteController::schedule_reconnect_attempt() {
     // 0.5s to 5s between attempts, before declaring the session gone.
     if (m_reconnect_attempts >= 40) {
         m_reconnecting = false;
-        fprintf(stderr, "rivt: rivtd did not come back\n");
+        rivt::logmsg("rivt: rivtd did not come back\n");
         exit();
         return;
     }

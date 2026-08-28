@@ -55,22 +55,22 @@ Window::~Window() {
 bool Window::init() {
     m_platform = Platform::create();
     if (!m_platform) {
-        fprintf(stderr, "Failed to create platform\n");
+        rivt::logmsg("Failed to create platform\n");
         return false;
     }
 
     if (!m_platform->create_window(m_win_w, m_win_h, "rivt")) {
-        fprintf(stderr, "Failed to create window\n");
+        rivt::logmsg("Failed to create window\n");
         return false;
     }
 
     if (!m_platform->create_gl_context()) {
-        fprintf(stderr, "Failed to create GL context\n");
+        rivt::logmsg("Failed to create GL context\n");
         return false;
     }
 
     if (!m_renderer.init(m_config, m_platform->get_dpi_scale() * 96.0f)) {
-        fprintf(stderr, "Failed to initialize renderer\n");
+        rivt::logmsg("Failed to initialize renderer\n");
         return false;
     }
 
@@ -90,7 +90,7 @@ bool Window::init() {
     m_renderer.set_viewport(m_win_w, m_win_h);
 
     if (!m_tabs->new_tab()) {
-        fprintf(stderr, "Failed to spawn initial shell\n");
+        rivt::logmsg("Failed to spawn initial shell\n");
         return false;
     }
     recompute();
@@ -315,7 +315,7 @@ bool Window::init_remote(const std::string &socket_path, uint32_t attach_sid,
     std::string path = socket_path.empty() ? RemoteClient::default_socket_path()
                                            : socket_path;
     if (!m_remote_client->connect(path, /*autostart=*/true)) {
-        fprintf(stderr, "rivt: cannot reach rivtd at %s\n", path.c_str());
+        rivt::logmsg("rivt: cannot reach rivtd at %s\n", path.c_str());
         return false;
     }
 
@@ -383,7 +383,7 @@ bool Window::attach_remote(const std::string &display_name,
     ep.peer_sig_id = peer_sig_id;
     ep.rendezvous = rendezvous;
     if (!m_remote_client->connect(ep, false)) {
-        fprintf(stderr, "rivt: cannot reach %s\n", display_name.c_str());
+        rivt::logmsg("rivt: cannot reach %s\n", display_name.c_str());
         return false;
     }
     m_remote_controller = std::make_unique<RemoteController>(*m_remote_client, *this, *m_tabs);

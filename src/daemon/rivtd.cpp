@@ -6,6 +6,7 @@
 // from inside its own fd callback. Deaths are recorded and swept after
 // each poll iteration.
 #include "core/config.h"
+#include "core/debug.h"
 #include "core/event_loop.h"
 #include "core/layout.h"
 #include "core/pane.h"
@@ -123,7 +124,7 @@ public:
 
         if (m_listen_port > 0) {
             m_identity = net::Identity::load_or_create();
-            if (!m_identity) { fprintf(stderr, "rivtd: cannot create identity\n"); return false; }
+            if (!m_identity) { rivt::logmsg("rivtd: cannot create identity\n"); return false; }
             // Membership drives trust: load the set (auto-init a
             // single-device set if none), sync it, and write the QUIC
             // bundle from it — before the engine reads the bundle.
@@ -132,8 +133,7 @@ public:
             m_quic = net::QuicEngine::listen(m_loop, (uint16_t)m_listen_port,
                                              *m_identity, bundle);
             if (!m_quic) return false;
-            fprintf(stderr,
-                    "rivtd: QUIC on udp/%d\n"
+            rivt::logmsg(                    "rivtd: QUIC on udp/%d\n"
                     "rivtd: fingerprint %s\n"
                     "rivtd: authorized peers: %s\n",
                     m_listen_port, m_identity->fingerprint().c_str(), bundle.c_str());
@@ -174,7 +174,7 @@ public:
                                          (uint16_t)m_listen_port);
                     _exit(0);
                 };
-                fprintf(stderr, "rivtd: publishing '%s' to %s\n", m_name.c_str(),
+                rivt::logmsg("rivtd: publishing '%s' to %s\n", m_name.c_str(),
                         rdv.c_str());
                 publish();
                 m_loop.add_timer(60000, publish, true);
@@ -197,19 +197,19 @@ public:
                 if (!answer) handle_offer(from, cands);
             };
         m_signaling->on_ready = []() {
-            fprintf(stderr, "rivtd: signaling connected (ready for hole punch / relay)\n");
+            rivt::logmsg("rivtd: signaling connected (ready for hole punch / relay)\n");
         };
         // Reconnect on detectable transport loss (edge idle-close, RST).
         // Deferred to a timer: restarting the WS from inside its own
         // close callback would re-enter the client.
         m_signaling->on_close = [this]() {
-            fprintf(stderr, "rivtd: signaling lost, reconnecting in 2s\n");
+            rivt::logmsg("rivtd: signaling lost, reconnecting in 2s\n");
             m_loop.add_timer(2000, [this]() {
                 if (m_signaling && !m_signaling->ready()) m_signaling->restart();
             }, false);
         };
         if (!m_signaling->start(rdv)) {
-            fprintf(stderr, "rivtd: signaling failed to start\n");
+            rivt::logmsg("rivtd: signaling failed to start\n");
             m_signaling.reset();
             return;
         }
@@ -222,7 +222,7 @@ public:
             if (!m_signaling) return;
             double idle = m_signaling->seconds_since_rx();
             if (!m_signaling->ready() || idle > 95.0) {
-                fprintf(stderr, "rivtd: signaling stale (open=%d, last rx %.0fs ago), "
+                rivt::logmsg("rivtd: signaling stale (open=%d, last rx %.0fs ago), "
                         "reconnecting\n", m_signaling->ready(), idle);
                 m_signaling->restart();
             } else {
@@ -234,7 +234,7 @@ public:
     // A client wants to reach us: STUN our listen socket, allocate a TURN
     // relay + permit the client, answer with our candidates, and punch.
     void handle_offer(const std::string &from, const std::vector<net::Candidate> &client_cands) {
-        fprintf(stderr, "rivtd: punch offer from %.16s... (%zu candidates)\n",
+        rivt::logmsg("rivtd: punch offer from %.16s... (%zu candidates)\n",
                 from.c_str(), client_cands.size());
         if (!m_turn) {  // allocate once, reuse
             std::string user, pass, thost; uint16_t tport;
@@ -255,7 +255,7 @@ public:
                 sa.sin_port = htons(c.port);
                 if (m_turn) { m_turn->permit(sa); permitted = true; }
             }
-            fprintf(stderr, "rivtd:   punching [%-8s] %s:%u%s\n", c.kind.c_str(),
+            rivt::logmsg("rivtd:   punching [%-8s] %s:%u%s\n", c.kind.c_str(),
                     c.host.c_str(), c.port, permitted ? " (relay permit)" : "");
             m_quic->punch(c.host, c.port);
         }
@@ -285,10 +285,10 @@ public:
                 mine.push_back({ip, port, "stun"});
             }
             if (m_turn) mine.push_back({m_turn->relayed_host(), m_turn->relayed_port(), "turn"});
-            fprintf(stderr, "rivtd: answering %.16s... with %zu candidate(s):\n",
+            rivt::logmsg("rivtd: answering %.16s... with %zu candidate(s):\n",
                     from.c_str(), mine.size());
             for (const auto &c : mine)
-                fprintf(stderr, "rivtd:   [%-8s] %s:%u\n", c.kind.c_str(), c.host.c_str(), c.port);
+                rivt::logmsg("rivtd:   [%-8s] %s:%u\n", c.kind.c_str(), c.host.c_str(), c.port);
             if (m_signaling) m_signaling->send(from, /*answer=*/true, mine);
         });
     }
@@ -311,7 +311,7 @@ private:
         struct sockaddr_un addr {};
         addr.sun_family = AF_UNIX;
         if (m_path.size() >= sizeof(addr.sun_path)) {
-            fprintf(stderr, "socket path too long: %s\n", m_path.c_str());
+            rivt::logmsg("socket path too long: %s\n", m_path.c_str());
             return false;
         }
         strcpy(addr.sun_path, m_path.c_str());
@@ -326,7 +326,7 @@ private:
             bool live = connect(probe, (struct sockaddr *)&addr, sizeof(addr)) == 0;
             close(probe);
             if (live) {
-                fprintf(stderr, "rivtd already running on %s\n", m_path.c_str());
+                rivt::logmsg("rivtd already running on %s\n", m_path.c_str());
                 return false;
             }
             unlink(m_path.c_str());
@@ -944,7 +944,7 @@ private:
 
     void upgrade() {
         if (m_exe.empty()) {
-            fprintf(stderr, "rivtd: upgrade: /proc/self/exe unknown\n");
+            rivt::logmsg("rivtd: upgrade: /proc/self/exe unknown\n");
             return;
         }
         proto::Writer w;
@@ -981,7 +981,7 @@ private:
         std::string file = m_path + ".handover";
         int fd = open(file.c_str(), O_WRONLY | O_CREAT | O_TRUNC, 0600);
         if (fd < 0 || ::write(fd, w.buf.data(), w.buf.size()) != (ssize_t)w.buf.size()) {
-            fprintf(stderr, "rivtd: upgrade: cannot write %s\n", file.c_str());
+            rivt::logmsg("rivtd: upgrade: cannot write %s\n", file.c_str());
             if (fd >= 0) close(fd);
             return;
         }
@@ -994,7 +994,7 @@ private:
             for (auto &c : m_clients)
                 if (c->quic) m_quic->close_conn(c->quic);
 
-        fprintf(stderr, "rivtd: upgrading via exec (%zu sessions)\n", m_sessions.size());
+        rivt::logmsg("rivtd: upgrading via exec (%zu sessions)\n", m_sessions.size());
         std::string port = std::to_string(m_listen_port);
         if (m_listen_port > 0)
             execl(m_exe.c_str(), "rivtd", "--socket", m_path.c_str(),
@@ -1020,7 +1020,7 @@ private:
 
         proto::Reader r(data.data(), data.size());
         if (r.u32() != 0x444E4852 || r.u32() != HANDOVER_VERSION || !r.ok) {
-            fprintf(stderr, "rivtd: incompatible handover file, starting fresh\n");
+            rivt::logmsg("rivtd: incompatible handover file, starting fresh\n");
             return;
         }
         m_next_sid = r.u32();
@@ -1050,7 +1050,7 @@ private:
                     auto pane = std::make_unique<Pane>(sess.cols, sess.rows, m_config);
                     if (!proto::Snapshot::deserialize(pane->screen(), pane->parser(),
                                                       r.p, bl)) {
-                        fprintf(stderr, "rivtd: handover: bad snapshot for pane %u\n", pid);
+                        rivt::logmsg("rivtd: handover: bad snapshot for pane %u\n", pid);
                         close(pfd);
                         r.skip(bl);
                         continue;
@@ -1076,7 +1076,7 @@ private:
             }
             if (!sess.windows.empty()) m_sessions.emplace(sess.id, std::move(sess));
         }
-        fprintf(stderr, "rivtd: handover restored %zu session(s)\n", m_sessions.size());
+        rivt::logmsg("rivtd: handover restored %zu session(s)\n", m_sessions.size());
     }
 
     std::string m_path;
@@ -1131,7 +1131,7 @@ static std::string prompt(const char *msg) {
 static bool install_systemd_unit() {
     char exe[4096];
     ssize_t n = readlink("/proc/self/exe", exe, sizeof(exe) - 1);
-    if (n <= 0) { fprintf(stderr, "cannot resolve own path\n"); return false; }
+    if (n <= 0) { rivt::logmsg("cannot resolve own path\n"); return false; }
     exe[n] = 0;
 
     const char *cfg = getenv("XDG_CONFIG_HOME");
@@ -1145,7 +1145,7 @@ static bool install_systemd_unit() {
     }
     std::string path = dir + "/rivtd.service";
     FILE *f = fopen(path.c_str(), "w");
-    if (!f) { fprintf(stderr, "cannot write %s\n", path.c_str()); return false; }
+    if (!f) { rivt::logmsg("cannot write %s\n", path.c_str()); return false; }
     fprintf(f,
             "[Unit]\nDescription=rivt terminal session daemon\n"
             "After=network-online.target\nWants=network-online.target\n\n"
@@ -1156,15 +1156,14 @@ static bool install_systemd_unit() {
 
     if (system("systemctl --user daemon-reload") != 0 ||
         system("systemctl --user enable --now rivtd") != 0) {
-        fprintf(stderr,
-                "\nInstalled %s but could not enable it (no systemd --user session?).\n"
+        rivt::logmsg(                "\nInstalled %s but could not enable it (no systemd --user session?).\n"
                 "Enable manually: systemctl --user enable --now rivtd\n",
                 path.c_str());
         return false;
     }
     // Best-effort: keep it running across logout / at boot.
     if (system("loginctl enable-linger \"$USER\" >/dev/null 2>&1") != 0)
-        fprintf(stderr, "note: run `loginctl enable-linger` to start at boot without login\n");
+        rivt::logmsg("note: run `loginctl enable-linger` to start at boot without login\n");
     return true;
 }
 
@@ -1201,7 +1200,7 @@ static int request_upgrade(const std::string &path) {
     strcpy(addr.sun_path, path.c_str());
     int fd = socket(AF_UNIX, SOCK_STREAM, 0);
     if (connect(fd, (struct sockaddr *)&addr, sizeof(addr)) < 0) {
-        fprintf(stderr, "rivtd: no daemon at %s\n", path.c_str());
+        rivt::logmsg("rivtd: no daemon at %s\n", path.c_str());
         return 1;
     }
     uint8_t hdr[rivt::proto::FRAME_HEADER_SIZE];
@@ -1246,7 +1245,7 @@ int main(int argc, char **argv) {
             if (!strcmp(argv[i], "pair")) return rivt::net::pair_invite(*id) ? 0 : 1;
             if (!strcmp(argv[i], "init"))
                 return rivt::net::sync_membership(*id, true).empty() ? 1 : 0;
-            if (i + 1 >= argc) { fprintf(stderr, "usage: rivtd join <code>\n"); return 1; }
+            if (i + 1 >= argc) { rivt::logmsg("usage: rivtd join <code>\n"); return 1; }
             return rivt::net::pair_join(argv[i + 1], *id) ? 0 : 1;
         }
     }
@@ -1261,8 +1260,11 @@ int main(int argc, char **argv) {
         if (dot != std::string::npos) name.resize(dot);
     }
 
+    // Daemon mode from here on: copy every log line to syslog. stderr
+    // stays active too (it points at the .log file when spawned detached).
+    rivt::log_to_syslog("rivtd");
     rivt::Daemon d(path, handover, listen_port, name);
     if (!d.init()) return 1;
-    fprintf(stderr, "rivtd: listening on %s\n", path.c_str());
+    rivt::logmsg("rivtd: listening on %s\n", path.c_str());
     return d.run();
 }

@@ -1,4 +1,5 @@
 #include "net/membership.h"
+#include "core/debug.h"
 #include "net/identity.h"
 #include "net/rendezvous.h"
 #include "proto/wire.h"
@@ -301,17 +302,17 @@ std::string sync_membership(const Identity &self, bool found_if_missing) {
     MembershipLog log;
     if (!log.load_file(path)) {
         if (!found_if_missing) {
-            fprintf(stderr, "rivt: this device is not a member of any set "
+            rivt::logmsg("rivt: this device is not a member of any set "
                             "(join one with `rivt join <code>`)\n");
             return {};
         }
         std::string g = MembershipLog::genesis(self);
         if (g.empty() || !log.load({g})) {
-            fprintf(stderr, "rivt: failed to create device set\n");
+            rivt::logmsg("rivt: failed to create device set\n");
             return {};
         }
         log.save(path);
-        fprintf(stderr, "rivt: founded device set %s\n", log.set_id().c_str());
+        rivt::logmsg("rivt: founded device set %s\n", log.set_id().c_str());
     }
 
     std::string rdv = rendezvous_url();
@@ -332,7 +333,7 @@ std::string sync_membership(const Identity &self, bool found_if_missing) {
     }
 
     if (!log.write_bundle(Identity::authorized_bundle_path(), (int64_t)time(nullptr)))
-        fprintf(stderr, "rivt: failed to write trust bundle\n");
+        rivt::logmsg("rivt: failed to write trust bundle\n");
     return log.set_id();
 }
 
