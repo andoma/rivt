@@ -45,6 +45,7 @@ public:
     int font_count() const { return (int)m_faces.size(); }
 
     const FontMetrics &metrics() const { return m_metrics; }
+    float dpi() const { return m_dpi; }
 
     // Find glyph in fallback chain, returns (font_index, glyph_id)
     // May load new fallback fonts on demand via fontconfig

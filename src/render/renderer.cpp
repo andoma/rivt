@@ -116,7 +116,7 @@ Renderer::~Renderer() {
     if (m_image_shader) glDeleteProgram(m_image_shader);
 }
 
-bool Renderer::init(const Config &config) {
+bool Renderer::init(const Config &config, float dpi) {
     // Give the terminal library its GPU hooks (kitty graphics textures).
     g_image_texture_upload = [](unsigned int tex, int w, int h, const uint8_t *rgba) -> unsigned int {
         if (!tex) glGenTextures(1, &tex);
@@ -131,7 +131,7 @@ bool Renderer::init(const Config &config) {
     };
     g_image_texture_delete = [](unsigned int tex) { glDeleteTextures(1, &tex); };
 
-    if (!m_font.init(config.font_family, config.font_size))
+    if (!m_font.init(config.font_family, config.font_size, dpi))
         return false;
 
     if (!m_atlas.init(1024))

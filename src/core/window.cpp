@@ -69,7 +69,7 @@ bool Window::init() {
         return false;
     }
 
-    if (!m_renderer.init(m_config)) {
+    if (!m_renderer.init(m_config, m_platform->get_dpi_scale() * 96.0f)) {
         fprintf(stderr, "Failed to initialize renderer\n");
         return false;
     }
@@ -239,7 +239,7 @@ bool Window::init_tmux_pty(Pane *gateway_pane) {
     if (!m_platform) return false;
     if (!m_platform->create_window(m_win_w, m_win_h, "rivt [tmux]")) return false;
     if (!m_platform->create_gl_context()) return false;
-    if (!m_renderer.init(m_config)) return false;
+    if (!m_renderer.init(m_config, m_platform->get_dpi_scale() * 96.0f)) return false;
 
     m_renderer.set_viewport(m_win_w, m_win_h);
 
@@ -294,7 +294,7 @@ bool Window::init_remote(const std::string &socket_path, uint32_t attach_sid,
     if (!m_platform) return false;
     if (!m_platform->create_window(m_win_w, m_win_h, "rivt [rivtd]")) return false;
     if (!m_platform->create_gl_context()) return false;
-    if (!m_renderer.init(m_config)) return false;
+    if (!m_renderer.init(m_config, m_platform->get_dpi_scale() * 96.0f)) return false;
 
     m_renderer.set_viewport(m_win_w, m_win_h);
 
@@ -350,7 +350,7 @@ bool Window::init_remote_quic(const std::string &display_name,
     std::string title = "rivt [" + display_name + "]";
     if (!m_platform->create_window(m_win_w, m_win_h, title.c_str())) return false;
     if (!m_platform->create_gl_context()) return false;
-    if (!m_renderer.init(m_config)) return false;
+    if (!m_renderer.init(m_config, m_platform->get_dpi_scale() * 96.0f)) return false;
 
     m_renderer.set_viewport(m_win_w, m_win_h);
 
@@ -405,7 +405,7 @@ bool Window::init_picker(const std::string &rendezvous) {
     if (!m_platform) return false;
     if (!m_platform->create_window(m_win_w, m_win_h, "rivt")) return false;
     if (!m_platform->create_gl_context()) return false;
-    if (!m_renderer.init(m_config)) return false;
+    if (!m_renderer.init(m_config, m_platform->get_dpi_scale() * 96.0f)) return false;
     m_renderer.set_viewport(m_win_w, m_win_h);
 
     m_tabs = std::make_unique<TabManager>(m_config, m_loop, m_platform.get());
@@ -583,6 +583,12 @@ void Window::handle_resize(int w, int h) {
         (void*)m_tmux_gateway_pane);
     m_win_w = w;
     m_win_h = h;
+    // The window may have moved to a screen with a different backing
+    // scale (retina <-> non-retina); the font must be re-rasterized at
+    // the new DPI or the grid comes out at the old scale.
+    float want_dpi = m_platform->get_dpi_scale() * 96.0f;
+    if (want_dpi != m_renderer.font().dpi())
+        m_renderer.set_font_size(m_config.font_size, want_dpi);
     m_last_bar_h = tab_bar_height();
     m_renderer.set_viewport(w, h);
     const auto &m = m_renderer.metrics();

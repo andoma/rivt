@@ -16,7 +16,7 @@ public:
     Renderer();
     ~Renderer();
 
-    bool init(const Config &config);
+    bool init(const Config &config, float dpi = 96.0f);
     void set_viewport(int width, int height);
     void set_focused(bool focused) { m_focused = focused; }
 
