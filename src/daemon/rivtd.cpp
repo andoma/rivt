@@ -358,8 +358,27 @@ private:
                 m_loop.request_quit();
             if (si.ssi_signo == SIGUSR1)
                 upgrade();
-            if (si.ssi_signo == SIGCHLD)
-                while (waitpid(-1, nullptr, WNOHANG) > 0) {}
+            if (si.ssi_signo == SIGCHLD) {
+                int status;
+                pid_t pid;
+                while ((pid = waitpid(-1, &status, WNOHANG)) > 0) {
+                    // How a pane's shell died is the difference between
+                    // "user logged out" and "something killed it" — log
+                    // it. Non-pane children (publish forks) stay silent.
+                    for (const auto &[pane_id, ref] : m_panes) {
+                        if (ref.pane->pty().child_pid() != pid) continue;
+                        if (WIFEXITED(status))
+                            rivt::logmsg("rivtd: pane %u shell (pid %d) exited "
+                                         "with status %d\n",
+                                         pane_id, pid, WEXITSTATUS(status));
+                        else if (WIFSIGNALED(status))
+                            rivt::logmsg("rivtd: pane %u shell (pid %d) killed "
+                                         "by signal %d\n",
+                                         pane_id, pid, WTERMSIG(status));
+                        break;
+                    }
+                }
+            }
         }
     }
 
