@@ -73,6 +73,14 @@ const uint8_t *find_attr(const uint8_t *buf, size_t n, uint16_t want, uint16_t *
     return nullptr;
 }
 
+// STUN ERROR-CODE attribute -> numeric code (e.g. 438), 0 if absent.
+int stun_error_code(const uint8_t *buf, size_t n) {
+    uint16_t vl;
+    const uint8_t *v = find_attr(buf, n, 0x0009, &vl);
+    if (!v || vl < 4) return 0;
+    return (v[2] & 0x07) * 100 + v[3];
+}
+
 bool get_xor_addr(const uint8_t *buf, size_t n, uint16_t type, struct sockaddr_in *out) {
     uint16_t vl;
     const uint8_t *v = find_attr(buf, n, type, &vl);
@@ -161,7 +169,10 @@ bool TurnRelay::allocate(const std::string &turn_host, uint16_t turn_port,
     uint8_t resp[2048];
     size_t rn = 0;
     // Unauthenticated Allocate -> 401 with realm+nonce.
-    if (!request(0x0003, false, nullptr, resp, &rn)) return false;
+    if (!request(0x0003, false, nullptr, resp, &rn)) {
+        rivt::logmsg("turn: allocate: no response from %s\n", turn_host.c_str());
+        return false;
+    }
     uint16_t rl, nl;
     const uint8_t *realm = find_attr(resp, rn, A_REALM, &rl);
     const uint8_t *nonce = find_attr(resp, rn, A_NONCE, &nl);
@@ -173,8 +184,14 @@ bool TurnRelay::allocate(const std::string &turn_host, uint16_t turn_port,
     EVP_Digest(cat.data(), cat.size(), m_key, &kl, EVP_md5(), nullptr);
 
     // Authenticated Allocate.
-    if (!request(0x0003, true, nullptr, resp, &rn)) return false;
-    if (!(resp[0] == 0x01 && resp[1] == 0x03)) return false;  // Allocate Success
+    if (!request(0x0003, true, nullptr, resp, &rn)) {
+        rivt::logmsg("turn: allocate: no response to authenticated request\n");
+        return false;
+    }
+    if (!(resp[0] == 0x01 && resp[1] == 0x03)) {  // Allocate Success
+        rivt::logmsg("turn: allocate rejected (error %d)\n", stun_error_code(resp, rn));
+        return false;
+    }
     struct sockaddr_in relayed {};
     if (!get_xor_addr(resp, rn, A_XRELAY, &relayed)) return false;
     char ip[INET_ADDRSTRLEN];
@@ -185,8 +202,8 @@ bool TurnRelay::allocate(const std::string &turn_host, uint16_t turn_port,
     // Steady state: async Data indications; periodic refresh.
     m_loop.add_fd(m_fd, [this](uint32_t ev) { if (ev & EV_READ) on_socket(); });
     m_refresh_timer = m_loop.add_timer(240000, [this]() { refresh(); }, true);
-    dbg("turn: relay allocated %s:%u (lifetime 600s, refresh 240s)",
-        m_relayed_host.c_str(), m_relayed_port);
+    rivt::logmsg("turn: relay allocated %s:%u (lifetime 600s, refresh 240s)\n",
+                 m_relayed_host.c_str(), m_relayed_port);
     return true;
 }
 
@@ -195,18 +212,27 @@ void TurnRelay::refresh() {
     size_t rn = 0;
     // Refresh the allocation; on an error response (438 nonce rotation
     // being the expected one) re-auth once with the fresh nonce.
-    bool ok = request(0x0004, true, nullptr, resp, &rn);
-    if (ok && resp[0] == 0x01 && resp[1] == 0x14) {  // Refresh error response
+    bool got = request(0x0004, true, nullptr, resp, &rn);
+    bool ok = got;
+    if (got && resp[0] == 0x01 && resp[1] == 0x14) {  // Refresh error response
+        int err = stun_error_code(resp, rn);
         uint16_t nl;
         const uint8_t *nonce = find_attr(resp, rn, A_NONCE, &nl);
+        rivt::logmsg("turn: refresh rejected (error %d)%s\n", err,
+                     nonce ? ", re-authenticating with fresh nonce" : "");
         ok = false;
         if (nonce) {
             m_nonce.assign((const char *)nonce, nl);
-            ok = request(0x0004, true, nullptr, resp, &rn);
+            got = request(0x0004, true, nullptr, resp, &rn);
+            ok = got;
         }
     }
     if (ok) ok = resp[0] == 0x01 && resp[1] == 0x04;  // Refresh Success
     if (!ok) {
+        if (!got)
+            rivt::logmsg("turn: refresh got no response (server unreachable?)\n");
+        else if (!(resp[0] == 0x01 && resp[1] == 0x04))
+            rivt::logmsg("turn: refresh rejected (error %d)\n", stun_error_code(resp, rn));
         // The allocation is gone (or the server is unreachable): the
         // relayed address is dead and must never be advertised again.
         // A silent failure here once left a daemon advertising a dead
@@ -221,8 +247,12 @@ void TurnRelay::refresh() {
     // Permissions expire at 300s independently of the allocation, so
     // re-issue CreatePermission for every peer or the relay goes silent
     // at ~5 min even though the allocation is still alive.
-    for (const auto &p : m_peers) request(0x0008, true, &p, resp, &rn);
-    dbg("turn: refreshed allocation + %zu permission(s)", m_peers.size());
+    size_t renewed = 0;
+    for (const auto &p : m_peers)
+        if (request(0x0008, true, &p, resp, &rn) && resp[0] == 0x01 && resp[1] == 0x08)
+            renewed++;
+    rivt::logmsg("turn: allocation refreshed, %zu/%zu permission(s) renewed\n",
+                 renewed, m_peers.size());
 }
 
 void TurnRelay::permit(const struct sockaddr_in &peer) {
@@ -234,16 +264,19 @@ void TurnRelay::permit(const struct sockaddr_in &peer) {
     bool known = false;
     for (const auto &p : m_peers)
         if (p.sin_addr.s_addr == peer.sin_addr.s_addr) { known = true; break; }
-    uint8_t resp[2048];
-    size_t rn = 0;
     if (!known) {
-        request(0x0008, true, &peer, resp, &rn);  // CreatePermission
+        uint8_t resp[2048];
+        size_t rn = 0;
+        char ip[INET_ADDRSTRLEN] = {0};
+        inet_ntop(AF_INET, &peer.sin_addr, ip, sizeof ip);
+        bool got = request(0x0008, true, &peer, resp, &rn);  // CreatePermission
+        bool ok = got && resp[0] == 0x01 && resp[1] == 0x08;
+        rivt::logmsg("turn: permission for %s: %s\n", ip,
+                     ok ? "granted"
+                        : got ? "rejected" : "no response");
         // Remember it so refresh() keeps the permission alive past 300s.
         m_peers.push_back(peer);
     }
-    char ip[INET_ADDRSTRLEN] = {0};
-    inet_ntop(AF_INET, &peer.sin_addr, ip, sizeof ip);
-    dbg("turn: permitted peer %s:%u", ip, ntohs(peer.sin_port));
 }
 
 void TurnRelay::send_to(const struct sockaddr_in &peer, const uint8_t *data, size_t len) {
