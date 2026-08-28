@@ -216,6 +216,10 @@ endif()
 endif() # RIVT_UI
 
 if(RIVT_UI AND APPLE)
+    # rivt.icns is checked in; regenerate from rivt.svg with data/make-icns.sh.
+    target_sources(rivt PRIVATE data/rivt.icns)
+    set_source_files_properties(data/rivt.icns PROPERTIES
+        MACOSX_PACKAGE_LOCATION "Resources")
     set_target_properties(rivt PROPERTIES
         MACOSX_BUNDLE TRUE
         MACOSX_BUNDLE_INFO_PLIST "${CMAKE_SOURCE_DIR}/data/Info.plist.in"
@@ -223,6 +227,7 @@ if(RIVT_UI AND APPLE)
         MACOSX_BUNDLE_GUI_IDENTIFIER "org.rivt.terminal"
         MACOSX_BUNDLE_BUNDLE_VERSION "${PROJECT_VERSION}"
         MACOSX_BUNDLE_SHORT_VERSION_STRING "${PROJECT_VERSION}"
+        MACOSX_BUNDLE_ICON_FILE "rivt.icns"
     )
 endif()
 
