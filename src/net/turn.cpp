@@ -9,6 +9,7 @@
 #include <arpa/inet.h>
 #include <cstring>
 #include <netdb.h>
+#include <poll.h>
 #include <unistd.h>
 
 namespace rivt::net {
@@ -90,7 +91,13 @@ TurnRelay::~TurnRelay() {
     if (m_fd >= 0) { m_loop.remove_fd(m_fd); ::close(m_fd); }
 }
 
-// Blocking send + await matching response (3 tries, 2s each).
+// Blocking send + await matching response (3 tries, 2s each). The
+// socket is always O_NONBLOCK; poll() does the waiting. (SO_RCVTIMEO
+// was used before, which is a no-op on a non-blocking socket — after
+// allocate() flipped the socket non-blocking, every recv failed
+// instantly with EAGAIN and all refresh/permit responses were lost.)
+// Relayed traffic shares this socket: non-matching Data indications are
+// dispatched, not eaten.
 bool TurnRelay::request(uint16_t type, bool with_auth, const struct sockaddr_in *peer,
                         uint8_t *resp, size_t *resp_len) {
     Msg m;
@@ -106,15 +113,32 @@ bool TurnRelay::request(uint16_t type, bool with_auth, const struct sockaddr_in 
     }
     for (int attempt = 0; attempt < 3; attempt++) {
         sendto(m_fd, m.buf, m.len, 0, (struct sockaddr *)&m_server, sizeof m_server);
-        struct timeval tv = {2, 0};
-        setsockopt(m_fd, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof tv);
-        for (;;) {
-            ssize_t n = recv(m_fd, resp, 2048, 0);
-            if (n < 0) break;
-            if (n >= 20 && !memcmp(resp + 8, m.buf + 8, 12)) { *resp_len = n; return true; }
+        for (int waited_ms = 0; waited_ms < 2000;) {
+            struct pollfd pf = {m_fd, POLLIN, 0};
+            int pr = poll(&pf, 1, 100);
+            waited_ms += 100;
+            if (pr < 0) break;
+            if (pr == 0) continue;
+            for (;;) {
+                ssize_t n = recv(m_fd, resp, 2048, 0);
+                if (n < 0) break;
+                if (n >= 20 && !memcmp(resp + 8, m.buf + 8, 12)) { *resp_len = n; return true; }
+                dispatch_data_indication(resp, (size_t)n);
+            }
         }
     }
     return false;
+}
+
+// Inbound Data indication -> on_data. Shared by the async read path and
+// request()'s wait loop (relayed QUIC arrives on the same socket).
+void TurnRelay::dispatch_data_indication(const uint8_t *buf, size_t n) {
+    if (n < 20 || buf[0] != 0x00 || buf[1] != 0x17) return;
+    struct sockaddr_in peer {};
+    uint16_t dl;
+    const uint8_t *d = find_attr(buf, n, A_DATA, &dl);
+    if (d && get_xor_addr(buf, n, A_XPEER, &peer) && on_data)
+        on_data(peer, d, dl);
 }
 
 bool TurnRelay::allocate(const std::string &turn_host, uint16_t turn_port,
@@ -129,7 +153,9 @@ bool TurnRelay::allocate(const std::string &turn_host, uint16_t turn_port,
     memcpy(&m_server, res->ai_addr, sizeof m_server);
     freeaddrinfo(res);
 
-    m_fd = socket_cloexec(AF_INET, SOCK_DGRAM, 0);
+    // Non-blocking from the start: request() waits via poll(), and the
+    // steady-state Data-indication reads must never block the loop.
+    m_fd = socket_cloexec(AF_INET, SOCK_DGRAM, 0, /*nonblock=*/true);
     if (m_fd < 0) return false;
 
     uint8_t resp[2048];
@@ -157,10 +183,6 @@ bool TurnRelay::allocate(const std::string &turn_host, uint16_t turn_port,
     m_relayed_port = ntohs(relayed.sin_port);
 
     // Steady state: async Data indications; periodic refresh.
-    int fl = fcntl(m_fd, F_GETFL);
-    fcntl(m_fd, F_SETFL, fl | O_NONBLOCK);
-    struct timeval z = {0, 0};
-    setsockopt(m_fd, SOL_SOCKET, SO_RCVTIMEO, &z, sizeof z);
     m_loop.add_fd(m_fd, [this](uint32_t ev) { if (ev & EV_READ) on_socket(); });
     m_refresh_timer = m_loop.add_timer(240000, [this]() { refresh(); }, true);
     dbg("turn: relay allocated %s:%u (lifetime 600s, refresh 240s)",
@@ -194,8 +216,6 @@ void TurnRelay::refresh() {
                      m_relayed_host.c_str(), m_relayed_port);
         m_alive = false;
         if (m_refresh_timer >= 0) { m_loop.remove_timer(m_refresh_timer); m_refresh_timer = -1; }
-        struct timeval z = {0, 0};
-        setsockopt(m_fd, SOL_SOCKET, SO_RCVTIMEO, &z, sizeof z);
         return;
     }
     // Permissions expire at 300s independently of the allocation, so
@@ -203,9 +223,6 @@ void TurnRelay::refresh() {
     // at ~5 min even though the allocation is still alive.
     for (const auto &p : m_peers) request(0x0008, true, &p, resp, &rn);
     dbg("turn: refreshed allocation + %zu permission(s)", m_peers.size());
-    // Re-arm non-blocking after the blocking refresh.
-    struct timeval z = {0, 0};
-    setsockopt(m_fd, SOL_SOCKET, SO_RCVTIMEO, &z, sizeof z);
 }
 
 void TurnRelay::permit(const struct sockaddr_in &peer) {
@@ -227,8 +244,6 @@ void TurnRelay::permit(const struct sockaddr_in &peer) {
     char ip[INET_ADDRSTRLEN] = {0};
     inet_ntop(AF_INET, &peer.sin_addr, ip, sizeof ip);
     dbg("turn: permitted peer %s:%u", ip, ntohs(peer.sin_port));
-    struct timeval z = {0, 0};
-    setsockopt(m_fd, SOL_SOCKET, SO_RCVTIMEO, &z, sizeof z);
 }
 
 void TurnRelay::send_to(const struct sockaddr_in &peer, const uint8_t *data, size_t len) {
@@ -244,12 +259,7 @@ void TurnRelay::on_socket() {
     for (;;) {
         ssize_t n = recv(m_fd, buf, sizeof buf, 0);
         if (n < 0) break;
-        if (n < 20 || buf[0] != 0x00 || buf[1] != 0x17) continue;  // Data indication only
-        struct sockaddr_in peer {};
-        uint16_t dl;
-        const uint8_t *d = find_attr(buf, n, A_DATA, &dl);
-        if (d && get_xor_addr(buf, n, A_XPEER, &peer) && on_data)
-            on_data(peer, d, dl);
+        dispatch_data_indication(buf, (size_t)n);
     }
 }
 

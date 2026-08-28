@@ -52,6 +52,7 @@ private:
     void refresh();
     bool request(uint16_t type, bool with_auth, const struct sockaddr_in *peer,
                  uint8_t *resp, size_t *resp_len);
+    void dispatch_data_indication(const uint8_t *buf, size_t n);
 
     EventLoop &m_loop;
     int m_fd = -1;
