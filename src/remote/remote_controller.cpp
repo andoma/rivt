@@ -4,6 +4,7 @@
 #include "core/tab_manager.h"
 #include "core/window.h"
 #include "proto/snapshot.h"
+#include <algorithm>
 
 namespace rivt {
 
@@ -380,13 +381,17 @@ void RemoteController::refresh_status() {
 
 void RemoteController::schedule_reconnect_attempt() {
     if (m_reconnect_timer >= 0) return;  // one pending attempt at a time
-    if (m_reconnect_attempts >= 10) {    // ~1 min worst case with 5 s handshakes
+    // Roaming laptops disappear for a while (network switch, lid close,
+    // captive portal); keep trying for several minutes, backing off from
+    // 0.5s to 5s between attempts, before declaring the session gone.
+    if (m_reconnect_attempts >= 40) {
         m_reconnecting = false;
         fprintf(stderr, "rivt: rivtd did not come back\n");
         exit();
         return;
     }
-    m_reconnect_timer = m_client.loop().add_timer(500, [this]() {
+    int delay = std::min(500 * (1 + m_reconnect_attempts), 5000);
+    m_reconnect_timer = m_client.loop().add_timer(delay, [this]() {
         m_client.loop().remove_timer(m_reconnect_timer);
         m_reconnect_timer = -1;
         if (!m_reconnecting) return;

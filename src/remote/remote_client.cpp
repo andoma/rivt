@@ -244,6 +244,20 @@ void RemoteClient::begin_punch(const RemoteEndpoint &ep) {
     fprintf(stderr, "rivt: punch: opening signaling to %.16s...\n", ep.peer_sig_id.c_str());
     m_signaling = net::Signaling::shared(m_loop, *m_identity, ep.rendezvous);
     if (!m_signaling) return;
+    // Final give-up for the punched/relayed path: the answer plus a
+    // punched handshake comfortably fit in this window; past it the
+    // punch has genuinely failed. (probe_failed defers to this timer
+    // while the signaling subscription is live.)
+    if (m_turn_fallback_timer >= 0) m_loop.remove_timer(m_turn_fallback_timer);
+    m_turn_fallback_timer = m_loop.add_timer(20000, [this]() {
+        m_loop.remove_timer(m_turn_fallback_timer);
+        m_turn_fallback_timer = -1;
+        if (m_quic || !m_signaling) return;
+        fprintf(stderr, "rivt: punch: no punched/relayed path after 20s, giving up\n");
+        m_signaling->unsubscribe(m_sig_peer);
+        m_signaling = nullptr;
+        probe_failed();
+    }, true);
     m_sig_peer = ep.peer_sig_id;
     m_signaling->subscribe(m_sig_peer,
         [this](bool answer, std::vector<net::Candidate> c) {
@@ -298,13 +312,13 @@ void RemoteClient::on_answer(const std::vector<net::Candidate> &server_cands) {
     if (n >= 2) { direct = m_probes[n - 2].get(); turn = m_probes[n - 1].get(); }
     const net::Candidate *cstun = nullptr, *cturn = nullptr;
     std::vector<net::Candidate> locals;
+    fprintf(stderr, "rivt: peer answered with %zu candidate(s):\n", server_cands.size());
     for (const auto &c : server_cands) {
+        fprintf(stderr, "rivt:   [%-8s] %s:%u\n", c.kind.c_str(), c.host.c_str(), c.port);
         if (c.kind == "stun" && !cstun) cstun = &c;
         else if (c.kind == "turn" && !cturn) cturn = &c;
         else if (c.kind == "local") locals.push_back(c);
     }
-    fprintf(stderr, "rivt: peer answered (%s%s%zu local); punching\n",
-            cstun ? "stun " : "", cturn ? "turn " : "", locals.size());
     if (direct && cstun) direct->start_connection(cstun->host, cstun->port);
     if (turn && cturn) turn->start_connection(cturn->host, cturn->port);
     // Server-side LAN addresses, in case any is reachable from us.
@@ -327,6 +341,10 @@ void RemoteClient::adopt_probe(size_t idx) {
         m_transport = (k == "turn") ? "relay" : (k == "local") ? "lan" : "direct";
     }
     set_link("connected");
+    if (m_turn_fallback_timer >= 0) {
+        m_loop.remove_timer(m_turn_fallback_timer);
+        m_turn_fallback_timer = -1;
+    }
     if (m_signaling) { m_signaling->unsubscribe(m_sig_peer); m_signaling = nullptr; }
     m_quic = std::move(m_probes[idx]);
     m_quic_conn = m_quic->client_conn();
@@ -358,6 +376,12 @@ void RemoteClient::probe_failed() {
         if (p && p->client_conn() && !p->client_conn()->dead) return;  // others still trying
         if (p && p->cert_rejected()) cert = true;
     }
+    // The punch is still waiting for the peer's answer (its engines have
+    // no connection yet, so the loop above can't see them as "trying").
+    // The addressed candidates dying must not kill it — over cellular
+    // CGNAT they always die and the punched/relayed path is the only one
+    // that can work. The punch deadline timer does the final give-up.
+    if (m_signaling) return;
     // All candidates failed. Park (we're on one of their stacks).
     for (auto &p : m_probes)
         if (p) m_stale_probes.push_back(std::move(p));
@@ -399,6 +423,11 @@ bool RemoteClient::connect(const std::string &path, bool autostart) {
 }
 
 void RemoteClient::close() {
+    disarm_ack_probe();
+    if (m_turn_fallback_timer >= 0) {
+        m_loop.remove_timer(m_turn_fallback_timer);
+        m_turn_fallback_timer = -1;
+    }
     if (m_quic) {
         m_quic_conn = nullptr;
         // Never destroy the engine here — we may be on its own callback
@@ -415,6 +444,38 @@ void RemoteClient::close() {
     m_out_off = 0;
     m_write_armed = false;
     if (m_signaling) { m_signaling->unsubscribe(m_sig_peer); m_signaling = nullptr; }
+}
+
+// A dead path (network switch, sleep/wake, expired NAT mapping) shows up
+// exactly when the user types: the key goes out, picoquic retransmits the
+// unacked data — each retransmit is a probe — and no datagram ever comes
+// back. Waiting for the 60s idle timeout freezes the terminal for a
+// minute, and punched/relayed paths can't migrate anyway, so declare the
+// link dead after 5s of post-send silence and let the controller
+// reconnect through a fresh candidate race.
+void RemoteClient::arm_ack_probe() {
+    if (m_ack_probe_timer >= 0) return;  // already awaiting a reply
+    m_await_since = std::chrono::steady_clock::now();
+    m_ack_probe_timer = m_loop.add_timer(1000, [this]() {
+        if (!m_quic || !m_quic_conn) { disarm_ack_probe(); return; }
+        double waited = std::chrono::duration<double>(
+            std::chrono::steady_clock::now() - m_await_since).count();
+        if (m_quic->seconds_since_rx() < waited) {
+            disarm_ack_probe();  // something arrived since the send
+            return;
+        }
+        if (waited > 5.0) {
+            fprintf(stderr, "rivt: no reply %.0fs after send, link presumed dead\n", waited);
+            disarm_ack_probe();
+            fail();
+        }
+    }, true);
+}
+
+void RemoteClient::disarm_ack_probe() {
+    if (m_ack_probe_timer < 0) return;
+    m_loop.remove_timer(m_ack_probe_timer);
+    m_ack_probe_timer = -1;
 }
 
 void RemoteClient::fail() {
@@ -563,6 +624,7 @@ void RemoteClient::send_frame(uint16_t channel, uint16_t type, const void *data,
     if (m_quic_conn) {
         m_quic->send(m_quic_conn, hdr, sizeof hdr);
         if (len) m_quic->send(m_quic_conn, data, len);
+        arm_ack_probe();
         return;
     }
     if (!m_probes.empty()) {
