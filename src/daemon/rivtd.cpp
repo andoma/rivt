@@ -249,11 +249,14 @@ public:
         // Permit and punch toward every client candidate.
         for (const auto &c : client_cands) {
             struct sockaddr_in sa {};
+            bool permitted = false;
             if (inet_pton(AF_INET, c.host.c_str(), &sa.sin_addr) == 1) {
                 sa.sin_family = AF_INET;
                 sa.sin_port = htons(c.port);
-                if (m_turn) m_turn->permit(sa);
+                if (m_turn) { m_turn->permit(sa); permitted = true; }
             }
+            fprintf(stderr, "rivtd:   punching [%-8s] %s:%u%s\n", c.kind.c_str(),
+                    c.host.c_str(), c.port, permitted ? " (relay permit)" : "");
             m_quic->punch(c.host, c.port);
         }
         // Keep punching briefly to cover handshake timing.
@@ -282,8 +285,10 @@ public:
                 mine.push_back({ip, port, "stun"});
             }
             if (m_turn) mine.push_back({m_turn->relayed_host(), m_turn->relayed_port(), "turn"});
-            fprintf(stderr, "rivtd: answering with %zu candidates%s\n", mine.size(),
-                    m_turn ? " (incl turn relay)" : "");
+            fprintf(stderr, "rivtd: answering %.16s... with %zu candidate(s):\n",
+                    from.c_str(), mine.size());
+            for (const auto &c : mine)
+                fprintf(stderr, "rivtd:   [%-8s] %s:%u\n", c.kind.c_str(), c.host.c_str(), c.port);
             if (m_signaling) m_signaling->send(from, /*answer=*/true, mine);
         });
     }
