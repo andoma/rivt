@@ -39,13 +39,16 @@ Signaling *Signaling::shared(EventLoop &loop, const Identity &self,
         // Hold the socket open between connects so a later punch doesn't
         // race a cold reconnect. The DO ignores unknown-type frames.
         loop.add_timer(20000, [p = inst.get()]() { p->keepalive(); }, true);
-    } else if (!inst->ready()) {
-        inst->start(rendezvous_url);  // idle-closed since last use: reconnect
+    } else if (!inst->ready() || inst->seconds_since_rx() > 95.0) {
+        // Idle-closed since last use, or open-but-dead (silent TCP loss:
+        // the keepalive pongs stopped coming back): reconnect.
+        inst->restart();
     }
     return inst.get();
 }
 
 bool Signaling::start(const std::string &rendezvous_url) {
+    m_url = rendezvous_url;
     std::string url = rendezvous_url;
     if (url.rfind("https://", 0) == 0) url = "wss://" + url.substr(8);
     else if (url.rfind("http://", 0) == 0) url = "ws://" + url.substr(7);
@@ -53,12 +56,28 @@ bool Signaling::start(const std::string &rendezvous_url) {
 
     m_ws.on_open = [this]() {
         if (getenv("RIVT_SIG_DEBUG")) fprintf(stderr, "signaling: ws open (id %.16s)\n", m_id.c_str());
+        m_last_rx = std::chrono::steady_clock::now();
         for (auto &f : m_pending) m_ws.send_text(f);
         m_pending.clear();
         if (on_ready) on_ready();
     };
     m_ws.on_message = [this](const std::string &f) { handle(f); };
+    m_ws.on_close = [this]() {
+        if (getenv("RIVT_SIG_DEBUG")) fprintf(stderr, "signaling: ws closed\n");
+        if (on_close) on_close();
+    };
     return m_ws.connect(url);
+}
+
+void Signaling::restart() {
+    // close() doesn't fire on_close, so no reconnect-from-reconnect loop.
+    m_ws.close();
+    start(m_url);
+}
+
+double Signaling::seconds_since_rx() const {
+    if (m_last_rx == std::chrono::steady_clock::time_point{}) return 0.0;
+    return std::chrono::duration<double>(std::chrono::steady_clock::now() - m_last_rx).count();
 }
 
 // Payload (before base64): line 0 = "offer"/"answer", then one line per
@@ -80,6 +99,7 @@ void Signaling::keepalive() {
 }
 
 void Signaling::handle(const std::string &frame) {
+    m_last_rx = std::chrono::steady_clock::now();  // any frame counts (pongs included)
     if (jget(frame, "type") != "msg") return;  // ignore roster/joined/etc.
     std::string from = jget(frame, "from");
     std::string body = b64_decode(jget(frame, "payload"));

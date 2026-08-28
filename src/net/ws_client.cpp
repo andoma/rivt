@@ -36,6 +36,15 @@ void WsClient::want(bool rd, bool wr) {
 }
 
 bool WsClient::connect(const std::string &url) {
+    // Reset so a dead client can reconnect: drop any half-written or
+    // half-parsed bytes from the previous transport.
+    close();
+    m_out.clear();
+    m_in.clear();
+    m_http.clear();
+    m_armed_write = false;
+    m_state = State::Idle;
+
     std::string u = url;
     if (u.rfind("wss://", 0) == 0) u = u.substr(6);
     else if (u.rfind("https://", 0) == 0) u = u.substr(8);

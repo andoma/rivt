@@ -199,14 +199,36 @@ public:
         m_signaling->on_ready = []() {
             fprintf(stderr, "rivtd: signaling connected (ready for hole punch / relay)\n");
         };
+        // Reconnect on detectable transport loss (edge idle-close, RST).
+        // Deferred to a timer: restarting the WS from inside its own
+        // close callback would re-enter the client.
+        m_signaling->on_close = [this]() {
+            fprintf(stderr, "rivtd: signaling lost, reconnecting in 2s\n");
+            m_loop.add_timer(2000, [this]() {
+                if (m_signaling && !m_signaling->ready()) m_signaling->restart();
+            }, false);
+        };
         if (!m_signaling->start(rdv)) {
             fprintf(stderr, "rivtd: signaling failed to start\n");
             m_signaling.reset();
             return;
         }
         // App-level keepalive: edge-answered, keeps the NAT/TCP mapping
-        // alive without waking the DO.
-        m_loop.add_timer(30000, [this]() { if (m_signaling) m_signaling->keepalive(); }, true);
+        // alive without waking the DO. The edge answers every ping with a
+        // pong, so a healthy link receives at least one frame per tick;
+        // silence across three ticks means the TCP path died without
+        // telling us (dropped NAT mapping, DO eviction) — reconnect.
+        m_loop.add_timer(30000, [this]() {
+            if (!m_signaling) return;
+            double idle = m_signaling->seconds_since_rx();
+            if (!m_signaling->ready() || idle > 95.0) {
+                fprintf(stderr, "rivtd: signaling stale (open=%d, last rx %.0fs ago), "
+                        "reconnecting\n", m_signaling->ready(), idle);
+                m_signaling->restart();
+            } else {
+                m_signaling->keepalive();
+            }
+        }, true);
     }
 
     // A client wants to reach us: STUN our listen socket, allocate a TURN

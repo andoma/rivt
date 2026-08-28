@@ -2,6 +2,7 @@
 #include "core/event_loop.h"
 #include "net/rendezvous.h"   // net::Candidate
 #include "net/ws_client.h"
+#include <chrono>
 #include <functional>
 #include <map>
 #include <string>
@@ -39,6 +40,15 @@ public:
     void send(const std::string &to_id, bool answer, const std::vector<Candidate> &cands);
     void keepalive();  // edge-answered ping to hold the NAT/TCP mapping
 
+    // Tear down the transport and reconnect to the url given to start().
+    // Queued frames and subscriptions survive.
+    void restart();
+
+    // Seconds since the last inbound frame (any type; the edge answers
+    // each keepalive ping with a pong, so a healthy connection ticks at
+    // least every keepalive interval). 0 until the first open.
+    double seconds_since_rx() const;
+
     // Route candidates from peer_id to cb until unsubscribe(peer_id).
     // Replaces any prior handler for that peer. Used by the client, which
     // multiplexes several peers over the one shared socket.
@@ -47,6 +57,7 @@ public:
     void unsubscribe(const std::string &peer_id);
 
     std::function<void()> on_ready;
+    std::function<void()> on_close;  // transport lost (owner decides when to restart)
     // Catch-all for peers with no subscription (the daemon answers offers
     // from anyone). from_id = peer's signaling id; answer = false = offer.
     std::function<void(const std::string &from_id, bool answer,
@@ -58,6 +69,8 @@ private:
     EventLoop &m_loop;
     WsClient m_ws;
     std::string m_id;
+    std::string m_url;  // as given to start(), for restart()
+    std::chrono::steady_clock::time_point m_last_rx{};
     std::vector<std::string> m_pending;  // frames queued until the WS opens
     std::map<std::string, std::function<void(bool, std::vector<Candidate>)>> m_subs;
 };
