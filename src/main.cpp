@@ -231,7 +231,7 @@ int main(int argc, char *argv[]) {
     // Process-wide handlers used by macOS for menu items and the dock
     // (Cmd-N from the menu, Cmd-Q routed through our cleanup, dock-icon
     // reopen). On Linux these are stored but never called.
-    Platform::set_new_window_handler(create_window);
+    Platform::set_new_window_handler(create_picker_window);
     Platform::set_quit_handler([&]() { loop.request_quit(); });
 
     loop.add_timer(600, [&]() {
