@@ -1,4 +1,5 @@
 #include "net/signaling.h"
+#include "core/debug.h"
 #include "net/identity.h"
 
 #include <openssl/sha.h>
@@ -55,7 +56,7 @@ bool Signaling::start(const std::string &rendezvous_url) {
     url += "/ws?device=" + m_id;
 
     m_ws.on_open = [this]() {
-        if (getenv("RIVT_SIG_DEBUG")) fprintf(stderr, "signaling: ws open (id %.16s)\n", m_id.c_str());
+        if (getenv("RIVT_SIG_DEBUG")) rivt::logmsg("signaling: ws open (id %.16s)\n", m_id.c_str());
         m_last_rx = std::chrono::steady_clock::now();
         for (auto &f : m_pending) m_ws.send_text(f);
         m_pending.clear();
@@ -63,7 +64,7 @@ bool Signaling::start(const std::string &rendezvous_url) {
     };
     m_ws.on_message = [this](const std::string &f) { handle(f); };
     m_ws.on_close = [this]() {
-        if (getenv("RIVT_SIG_DEBUG")) fprintf(stderr, "signaling: ws closed\n");
+        if (getenv("RIVT_SIG_DEBUG")) rivt::logmsg("signaling: ws closed\n");
         if (on_close) on_close();
     };
     return m_ws.connect(url);
@@ -96,6 +97,11 @@ void Signaling::send(const std::string &to_id, bool answer,
 
 void Signaling::keepalive() {
     if (m_ws.is_open()) m_ws.send_text("{\"type\":\"ping\"}");
+}
+
+void Signaling::probe() {
+    if (m_ws.is_open()) m_ws.send_text("{\"type\":\"whoami\"}");
+    else m_pending.push_back("{\"type\":\"whoami\"}");
 }
 
 void Signaling::handle(const std::string &frame) {

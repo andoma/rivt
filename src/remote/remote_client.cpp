@@ -124,7 +124,7 @@ static QueryResult query_once(const std::string &path, std::vector<RemoteSession
                 if (e.rfind("protocol version mismatch", 0) == 0)
                     res = QueryResult::Mismatch;
                 else
-                    fprintf(stderr, "rivt: rivtd: %s\n", e.c_str());
+                    rivt::logmsg("rivt: rivtd: %s\n", e.c_str());
                 done = true;
             } else if (h.channel == 0 && h.type == (uint16_t)MsgType::SessionList) {
                 uint32_t cnt = r.u32();
@@ -173,7 +173,7 @@ bool RemoteClient::query_sessions(const std::string &path, bool autostart,
         // An older daemon is running. Ask it to upgrade itself in place
         // (sessions survive the exec) and retry. Daemons older than the
         // upgrade mechanism ignore this; they must be killed by hand.
-        fprintf(stderr, "rivt: rivtd runs an older protocol, upgrading it in place...\n");
+        rivt::logmsg("rivt: rivtd runs an older protocol, upgrading it in place...\n");
         request_daemon_upgrade(path);
         for (int i = 0; i < 40; i++) {
             usleep(100000);
@@ -181,8 +181,7 @@ bool RemoteClient::query_sessions(const std::string &path, bool autostart,
             q = query_once(path, out);
             if (q == QueryResult::Ok) return true;
         }
-        fprintf(stderr,
-                "rivt: daemon did not upgrade (too old?) — kill it by pid: pgrep -a rivtd\n");
+        rivt::logmsg(                "rivt: daemon did not upgrade (too old?) — kill it by pid: pgrep -a rivtd\n");
         return false;
     }
     return q == QueryResult::Ok;
@@ -201,23 +200,23 @@ bool RemoteClient::connect(const RemoteEndpoint &ep, bool autostart) {
     if (!m_identity) {
         m_identity = net::Identity::load_or_create();
         if (!m_identity) {
-            fprintf(stderr, "rivt: cannot create device identity\n");
+            rivt::logmsg("rivt: cannot create device identity\n");
             return false;
         }
     }
     std::string bundle = net::Identity::authorized_bundle_path();
-    fprintf(stderr, "rivt: connecting, racing %zu candidate(s):\n",
+    rivt::logmsg("rivt: connecting, racing %zu candidate(s):\n",
             ep.candidates.size());
     for (const auto &c : ep.candidates) {
         // IPv6 candidates are skipped: we run IPv4-only on the wire (see
         // resolve_v6 in quic_engine.cpp), and older rivtd still
         // advertises v6 addresses.
         if (c.host.find(':') != std::string::npos) {
-            fprintf(stderr, "rivt:   [%-8s] %s:%u (ipv6, skipped)\n",
+            rivt::logmsg("rivt:   [%-8s] %s:%u (ipv6, skipped)\n",
                     c.kind.c_str(), c.host.c_str(), c.port);
             continue;
         }
-        fprintf(stderr, "rivt:   [%-8s] %s:%u\n", c.kind.c_str(), c.host.c_str(), c.port);
+        rivt::logmsg("rivt:   [%-8s] %s:%u\n", c.kind.c_str(), c.host.c_str(), c.port);
         auto probe = net::QuicEngine::connect(m_loop, c.host, c.port, *m_identity, bundle);
         if (!probe) continue;
         size_t idx = m_probes.size();
@@ -237,11 +236,11 @@ bool RemoteClient::connect(const RemoteEndpoint &ep, bool autostart) {
 // LAN probes; whichever validates first wins.
 void RemoteClient::begin_punch(const RemoteEndpoint &ep) {
     if (ep.peer_sig_id.empty() || ep.rendezvous.empty()) {
-        fprintf(stderr, "rivt: punch skipped (sig_id=%zu rdv=%zu)\n",
+        rivt::logmsg("rivt: punch skipped (sig_id=%zu rdv=%zu)\n",
                 ep.peer_sig_id.size(), ep.rendezvous.size());
         return;
     }
-    fprintf(stderr, "rivt: punch: opening signaling to %.16s...\n", ep.peer_sig_id.c_str());
+    rivt::logmsg("rivt: punch: opening signaling to %.16s...\n", ep.peer_sig_id.c_str());
     m_signaling = net::Signaling::shared(m_loop, *m_identity, ep.rendezvous);
     if (!m_signaling) return;
     // Final give-up for the punched/relayed path: the answer plus a
@@ -253,7 +252,7 @@ void RemoteClient::begin_punch(const RemoteEndpoint &ep) {
         m_loop.remove_timer(m_turn_fallback_timer);
         m_turn_fallback_timer = -1;
         if (m_quic || !m_signaling) return;
-        fprintf(stderr, "rivt: punch: no punched/relayed path after 20s, giving up\n");
+        rivt::logmsg("rivt: punch: no punched/relayed path after 20s, giving up\n");
         m_signaling->unsubscribe(m_sig_peer);
         m_signaling = nullptr;
         probe_failed();
@@ -295,26 +294,39 @@ void RemoteClient::begin_punch(const RemoteEndpoint &ep) {
                 reflexives->push_back({ip, port, "stun"});
             }
             if (--(*pending) == 0 && m_signaling && !reflexives->empty()) {
-                fprintf(stderr, "rivt: punch: sending offer, %zu reflexive candidate(s)\n",
+                rivt::logmsg("rivt: punch: sending offer, %zu reflexive candidate(s)\n",
                         reflexives->size());
                 m_signaling->send(peer, /*answer=*/false, *reflexives);
                 // The shared signaling socket may be silently dead (a
                 // network switch kills the TCP without telling us, and a
-                // send has no delivery feedback). If no answer arrives,
-                // don't sit out the 20s deadline: reconnect the socket
-                // and resend the offer. Re-offers are idempotent — the
-                // server just punches and answers again.
+                // send has no delivery feedback). Probe with whoami — the
+                // DO answers on this socket within one RTT — and watch
+                // rx: a socket with nothing inbound 2s after the probe is
+                // dead, so reconnect it and resend the offer (re-offers
+                // are idempotent: the server punches and answers again).
+                // A live socket with no answer after 6s means the loss is
+                // elsewhere (server signaling, DO routing): resend too.
+                m_signaling->probe();
+                auto offered = std::make_shared<std::chrono::steady_clock::time_point>(
+                    std::chrono::steady_clock::now());
                 if (m_offer_retry_timer >= 0) m_loop.remove_timer(m_offer_retry_timer);
-                m_offer_retry_timer = m_loop.add_timer(5000, [this, peer, reflexives]() {
+                m_offer_retry_timer = m_loop.add_timer(1000, [this, peer, reflexives, offered]() {
                     if (m_quic || !m_signaling) {
                         m_loop.remove_timer(m_offer_retry_timer);
                         m_offer_retry_timer = -1;
                         return;
                     }
-                    fprintf(stderr, "rivt: punch: no answer, reconnecting signaling "
-                            "and resending offer\n");
+                    double since = std::chrono::duration<double>(
+                        std::chrono::steady_clock::now() - *offered).count();
+                    bool dead = since > 2.0 && m_signaling->seconds_since_rx() > since;
+                    if (!dead && since <= 6.0) return;
+                    rivt::logmsg("rivt: punch: %s, reconnecting signaling and "
+                            "resending offer\n",
+                            dead ? "signaling socket dead" : "no answer on live socket");
                     m_signaling->restart();
                     m_signaling->send(peer, /*answer=*/false, *reflexives);
+                    m_signaling->probe();
+                    *offered = std::chrono::steady_clock::now();
                 }, true);
             }
         });
@@ -334,9 +346,9 @@ void RemoteClient::on_answer(const std::vector<net::Candidate> &server_cands) {
     if (n >= 2) { direct = m_probes[n - 2].get(); turn = m_probes[n - 1].get(); }
     const net::Candidate *cstun = nullptr, *cturn = nullptr;
     std::vector<net::Candidate> locals;
-    fprintf(stderr, "rivt: peer answered with %zu candidate(s):\n", server_cands.size());
+    rivt::logmsg("rivt: peer answered with %zu candidate(s):\n", server_cands.size());
     for (const auto &c : server_cands) {
-        fprintf(stderr, "rivt:   [%-8s] %s:%u\n", c.kind.c_str(), c.host.c_str(), c.port);
+        rivt::logmsg("rivt:   [%-8s] %s:%u\n", c.kind.c_str(), c.host.c_str(), c.port);
         if (c.kind == "stun" && !cstun) cstun = &c;
         else if (c.kind == "turn" && !cturn) cturn = &c;
         else if (c.kind == "local") locals.push_back(c);
@@ -410,14 +422,12 @@ void RemoteClient::probe_failed() {
     m_probes.clear();
     m_pending_out.clear();
     if (cert) {
-        fprintf(stderr,
-                "rivt: reached the peer, but its certificate was rejected.\n"
+        rivt::logmsg(                "rivt: reached the peer, but its certificate was rejected.\n"
                 "      The two devices are not in the same set. Pair them:\n"
                 "      on one run `rivt pair` / `rivtd pair`, on the other "
                 "`rivt setup <code>` / `rivtd setup <code>`.\n");
     } else {
-        fprintf(stderr,
-                "rivt: no candidate address responded — the peer's QUIC port "
+        rivt::logmsg(                "rivt: no candidate address responded — the peer's QUIC port "
                 "(udp/%u) is not reachable from here.\n"
                 "      Likely NAT/firewall between the two networks, or rivtd "
                 "not listening. RIVT_QUIC_DEBUG=1 shows per-packet traffic.\n",
@@ -491,7 +501,7 @@ void RemoteClient::arm_ack_probe() {
             return;
         }
         if (waited > 5.0) {
-            fprintf(stderr, "rivt: no reply %.0fs after send, link presumed dead\n", waited);
+            rivt::logmsg("rivt: no reply %.0fs after send, link presumed dead\n", waited);
             disarm_ack_probe();
             fail();
         }
@@ -565,8 +575,7 @@ void RemoteClient::dispatch_control(uint16_t type, const uint8_t *data, size_t l
         if (r.ok && ver == proto::PROTO_VERSION) {
             if (on_hello_ok) on_hello_ok();
         } else {
-            fprintf(stderr,
-                    "rivt: rivtd protocol version mismatch (daemon %u, client %u) — "
+            rivt::logmsg(                    "rivt: rivtd protocol version mismatch (daemon %u, client %u) — "
                     "restart the daemon: pkill -x rivtd\n",
                     ver, proto::PROTO_VERSION);
             fail();

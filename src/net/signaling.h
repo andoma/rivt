@@ -40,6 +40,11 @@ public:
     void send(const std::string &to_id, bool answer, const std::vector<Candidate> &cands);
     void keepalive();  // edge-answered ping to hold the NAT/TCP mapping
 
+    // Liveness probe: the DO answers whoami immediately on this socket,
+    // so seconds_since_rx() resets within one RTT if the transport is
+    // alive. A socket that stays silent after a probe is dead.
+    void probe();
+
     // Tear down the transport and reconnect to the url given to start().
     // Queued frames and subscriptions survive.
     void restart();
