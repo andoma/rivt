@@ -241,6 +241,7 @@ int main(int argc, char *argv[]) {
         for (auto &w : windows) w->toggle_cursor_blink();
     }, true);
 
+    bool quit_requested = false;
     while (!loop.should_quit()) {
         // Picker selections are opened here, at the top of the loop, rather
         // than inline in the picker's key callback: open_remote does blocking
@@ -274,6 +275,10 @@ int main(int argc, char *argv[]) {
         if (got_term) {
             got_term = 0;
             for (auto &w : windows) w->mark_closing();
+            // Unlike closing the last window (which on macOS keeps the
+            // app alive for Cmd-N / dock reopen), ^C or SIGTERM is an
+            // explicit terminate: exit once the windows have drained.
+            quit_requested = true;
         }
 
         if (got_sigchld) {
@@ -289,7 +294,9 @@ int main(int argc, char *argv[]) {
 #ifdef __APPLE__
         // Standard macOS behavior: keep the app running even with no
         // windows open. The user reopens via Cmd-N or the dock icon and
-        // quits explicitly via Cmd-Q (handled by the app delegate).
+        // quits explicitly via Cmd-Q (handled by the app delegate) or
+        // ^C/SIGTERM (quit_requested above).
+        if (quit_requested && windows.empty()) { loop.request_quit(); break; }
 #else
         // A picker that just queued a connect closes itself in this same
         // iteration; don't quit while its replacement window is pending.
