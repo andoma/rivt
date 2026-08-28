@@ -298,6 +298,24 @@ void RemoteClient::begin_punch(const RemoteEndpoint &ep) {
                 fprintf(stderr, "rivt: punch: sending offer, %zu reflexive candidate(s)\n",
                         reflexives->size());
                 m_signaling->send(peer, /*answer=*/false, *reflexives);
+                // The shared signaling socket may be silently dead (a
+                // network switch kills the TCP without telling us, and a
+                // send has no delivery feedback). If no answer arrives,
+                // don't sit out the 20s deadline: reconnect the socket
+                // and resend the offer. Re-offers are idempotent — the
+                // server just punches and answers again.
+                if (m_offer_retry_timer >= 0) m_loop.remove_timer(m_offer_retry_timer);
+                m_offer_retry_timer = m_loop.add_timer(5000, [this, peer, reflexives]() {
+                    if (m_quic || !m_signaling) {
+                        m_loop.remove_timer(m_offer_retry_timer);
+                        m_offer_retry_timer = -1;
+                        return;
+                    }
+                    fprintf(stderr, "rivt: punch: no answer, reconnecting signaling "
+                            "and resending offer\n");
+                    m_signaling->restart();
+                    m_signaling->send(peer, /*answer=*/false, *reflexives);
+                }, true);
             }
         });
     }
@@ -305,6 +323,10 @@ void RemoteClient::begin_punch(const RemoteEndpoint &ep) {
 
 void RemoteClient::on_answer(const std::vector<net::Candidate> &server_cands) {
     if (m_quic) return;  // already connected via a direct LAN probe
+    if (m_offer_retry_timer >= 0) {
+        m_loop.remove_timer(m_offer_retry_timer);
+        m_offer_retry_timer = -1;
+    }
     // m_probes[.. last two] are our [direct, turn] engines (created in
     // begin_punch after the LAN probes).
     net::QuicEngine *direct = nullptr, *turn = nullptr;
@@ -427,6 +449,10 @@ void RemoteClient::close() {
     if (m_turn_fallback_timer >= 0) {
         m_loop.remove_timer(m_turn_fallback_timer);
         m_turn_fallback_timer = -1;
+    }
+    if (m_offer_retry_timer >= 0) {
+        m_loop.remove_timer(m_offer_retry_timer);
+        m_offer_retry_timer = -1;
     }
     if (m_quic) {
         m_quic_conn = nullptr;

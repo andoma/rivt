@@ -145,6 +145,7 @@ private:
     net::Signaling *m_signaling = nullptr;
     std::string m_sig_peer;  // peer id we subscribed, for unsubscribe
     int m_turn_fallback_timer = -1;
+    int m_offer_retry_timer = -1;
     int m_ack_probe_timer = -1;
     std::chrono::steady_clock::time_point m_await_since{};
     void begin_punch(const RemoteEndpoint &ep);
