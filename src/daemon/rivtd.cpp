@@ -236,13 +236,23 @@ public:
     void handle_offer(const std::string &from, const std::vector<net::Candidate> &client_cands) {
         rivt::logmsg("rivtd: punch offer from %.16s... (%zu candidates)\n",
                 from.c_str(), client_cands.size());
-        if (!m_turn) {  // allocate once, reuse
+        if (m_turn && !m_turn->alive()) {
+            // A refresh failed since the last offer: the relayed address
+            // is dead at the TURN server. Drop it and allocate fresh —
+            // holding on to it advertises a black hole forever.
+            rivt::logmsg("rivtd: turn relay died, allocating a fresh one\n");
+            m_quic->enable_turn(nullptr);
+            m_turn.reset();
+        }
+        if (!m_turn) {  // allocate once, reuse while alive
             std::string user, pass, thost; uint16_t tport;
             if (net::turn_credentials(net::rendezvous_url(), user, pass, thost, tport)) {
                 auto t = std::make_unique<net::TurnRelay>(m_loop);
                 if (t->allocate(thost, tport, user, pass)) {
                     m_turn = std::move(t);
                     m_quic->enable_turn(m_turn.get());
+                } else {
+                    rivt::logmsg("rivtd: turn allocation failed — answering without relay\n");
                 }
             }
         }
@@ -284,7 +294,8 @@ public:
                 }
                 mine.push_back({ip, port, "stun"});
             }
-            if (m_turn) mine.push_back({m_turn->relayed_host(), m_turn->relayed_port(), "turn"});
+            if (m_turn && m_turn->alive())
+                mine.push_back({m_turn->relayed_host(), m_turn->relayed_port(), "turn"});
             rivt::logmsg("rivtd: answering %.16s... with %zu candidate(s):\n",
                     from.c_str(), mine.size());
             for (const auto &c : mine)

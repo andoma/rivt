@@ -33,6 +33,11 @@ public:
     const std::string &relayed_host() const { return m_relayed_host; }
     uint16_t relayed_port() const { return m_relayed_port; }
 
+    // False once an allocation refresh has failed: the relayed address
+    // is (or will shortly be) dead at the TURN server, and the owner
+    // must allocate a fresh relay. Never flips back to true.
+    bool alive() const { return m_alive; }
+
     // Allow a peer (its reflexive address) to reach our relay.
     void permit(const struct sockaddr_in &peer);
 
@@ -56,6 +61,7 @@ private:
     uint8_t m_key[16] = {0};
     std::string m_relayed_host;
     uint16_t m_relayed_port = 0;
+    bool m_alive = true;
     // Permitted peers, re-issued on every refresh: TURN permissions expire
     // after 300s, so a one-shot permit stalls a relay session at ~5 min.
     std::vector<struct sockaddr_in> m_peers;

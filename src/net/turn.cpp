@@ -171,12 +171,32 @@ bool TurnRelay::allocate(const std::string &turn_host, uint16_t turn_port,
 void TurnRelay::refresh() {
     uint8_t resp[2048];
     size_t rn = 0;
-    // Refresh allocation and (implicitly) re-auth if nonce rotated.
-    if (request(0x0004, true, nullptr, resp, &rn) &&
-        resp[0] == 0x01 && resp[1] == 0x14) {  // 438 stale nonce style error
+    // Refresh the allocation; on an error response (438 nonce rotation
+    // being the expected one) re-auth once with the fresh nonce.
+    bool ok = request(0x0004, true, nullptr, resp, &rn);
+    if (ok && resp[0] == 0x01 && resp[1] == 0x14) {  // Refresh error response
         uint16_t nl;
         const uint8_t *nonce = find_attr(resp, rn, A_NONCE, &nl);
-        if (nonce) { m_nonce.assign((const char *)nonce, nl); request(0x0004, true, nullptr, resp, &rn); }
+        ok = false;
+        if (nonce) {
+            m_nonce.assign((const char *)nonce, nl);
+            ok = request(0x0004, true, nullptr, resp, &rn);
+        }
+    }
+    if (ok) ok = resp[0] == 0x01 && resp[1] == 0x04;  // Refresh Success
+    if (!ok) {
+        // The allocation is gone (or the server is unreachable): the
+        // relayed address is dead and must never be advertised again.
+        // A silent failure here once left a daemon advertising a dead
+        // relay for hours — and blocking its event loop for minutes per
+        // refresh cycle timing out permission requests against it.
+        rivt::logmsg("turn: allocation refresh failed — relay %s:%u is dead\n",
+                     m_relayed_host.c_str(), m_relayed_port);
+        m_alive = false;
+        if (m_refresh_timer >= 0) { m_loop.remove_timer(m_refresh_timer); m_refresh_timer = -1; }
+        struct timeval z = {0, 0};
+        setsockopt(m_fd, SOL_SOCKET, SO_RCVTIMEO, &z, sizeof z);
+        return;
     }
     // Permissions expire at 300s independently of the allocation, so
     // re-issue CreatePermission for every peer or the relay goes silent
@@ -189,14 +209,21 @@ void TurnRelay::refresh() {
 }
 
 void TurnRelay::permit(const struct sockaddr_in &peer) {
-    uint8_t resp[2048];
-    size_t rn = 0;
-    request(0x0008, true, &peer, resp, &rn);  // CreatePermission
-    // Remember it so refresh() keeps the permission alive past 300s.
+    if (!m_alive) return;
+    // TURN permissions are per IP, port-agnostic (RFC 5766 §9): dedup by
+    // address only, or a reconnecting client (two fresh ports per punch)
+    // grows this list without bound and refresh() re-issues hundreds of
+    // blocking CreatePermissions.
     bool known = false;
     for (const auto &p : m_peers)
-        if (p.sin_addr.s_addr == peer.sin_addr.s_addr && p.sin_port == peer.sin_port) { known = true; break; }
-    if (!known) m_peers.push_back(peer);
+        if (p.sin_addr.s_addr == peer.sin_addr.s_addr) { known = true; break; }
+    uint8_t resp[2048];
+    size_t rn = 0;
+    if (!known) {
+        request(0x0008, true, &peer, resp, &rn);  // CreatePermission
+        // Remember it so refresh() keeps the permission alive past 300s.
+        m_peers.push_back(peer);
+    }
     char ip[INET_ADDRSTRLEN] = {0};
     inet_ntop(AF_INET, &peer.sin_addr, ip, sizeof ip);
     dbg("turn: permitted peer %s:%u", ip, ntohs(peer.sin_port));

@@ -376,6 +376,7 @@ void QuicEngine::discover_reflexive(
 
 void QuicEngine::enable_turn(TurnRelay *turn) {
     m_turn = turn;
+    if (!turn) return;  // detach (relay died; owner is replacing it)
     turn->on_data = [this](const struct sockaddr_in &peer, const uint8_t *d, size_t n) {
         feed_relayed(peer, d, n);
     };
