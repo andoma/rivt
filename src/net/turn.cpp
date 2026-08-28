@@ -4,11 +4,11 @@
 
 #include <openssl/evp.h>
 #include <openssl/hmac.h>
+#include <openssl/rand.h>
 
 #include <arpa/inet.h>
 #include <cstring>
 #include <netdb.h>
-#include <sys/random.h>
 #include <unistd.h>
 
 namespace rivt::net {
@@ -27,7 +27,7 @@ struct Msg {
         buf[0] = type >> 8; buf[1] = type & 0xff;
         uint32_t m = htonl(MAGIC);
         memcpy(buf + 4, &m, 4);
-        if (getrandom(buf + 8, 12, 0) != 12)
+        if (RAND_bytes(buf + 8, 12) != 1)
             for (int i = 0; i < 12; i++) buf[8 + i] = (uint8_t)(i * 7 + 3);
         len = 20;
     }

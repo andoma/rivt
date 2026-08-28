@@ -33,6 +33,7 @@
 #define XKB_KEY_E            0x0045
 #define XKB_KEY_F            0x0046
 #define XKB_KEY_N            0x004e
+#define XKB_KEY_P            0x0050
 #define XKB_KEY_T            0x0054
 #define XKB_KEY_V            0x0056
 #define XKB_KEY_W            0x0057
@@ -48,6 +49,7 @@
 #define XKB_KEY_e            0x0065
 #define XKB_KEY_f            0x0066
 #define XKB_KEY_n            0x006e
+#define XKB_KEY_p            0x0070
 #define XKB_KEY_t            0x0074
 #define XKB_KEY_v            0x0076
 #define XKB_KEY_w            0x0077
