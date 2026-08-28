@@ -79,7 +79,7 @@ bool Window::init() {
     m_tabs = std::make_unique<TabManager>(m_config, m_loop, m_platform.get());
     m_tabs->on_needs_render = [this]() { m_needs_render = true; };
     m_tabs->on_quit = [this]() {
-        if (on_close) on_close(this);
+        request_close("last tab closed");
     };
 
     const auto &m = m_renderer.metrics();
@@ -198,7 +198,7 @@ void Window::setup_callbacks() {
         if (m_tmux_controller && m_tmux_controller->is_active()) {
             m_tmux_controller->detach();
         }
-        mark_closing();  // notifies a remote session (kill-on-clean-close)
+        mark_closing("window manager close");  // notifies remote (kill-on-clean-close)
     };
 
     // Native menu actions (Cmd-N / Cmd-W / Cmd-C / Cmd-V on macOS).
@@ -209,7 +209,7 @@ void Window::setup_callbacks() {
     };
     m_platform->on_menu_close_window = [this]() {
         if (m_tabs && !m_tabs->close_focused_pane()) {
-            if (on_close) on_close(this);
+            request_close("menu close, last pane");
         }
     };
     m_platform->on_menu_copy = [this]() {
@@ -246,7 +246,7 @@ bool Window::init_tmux_pty(Pane *gateway_pane) {
     m_tabs = std::make_unique<TabManager>(m_config, m_loop, m_platform.get());
     m_tabs->on_needs_render = [this]() { m_needs_render = true; };
     m_tabs->on_quit = [this]() {
-        if (on_close) on_close(this);
+        request_close("last tab closed");
     };
 
     const auto &m = m_renderer.metrics();
@@ -301,7 +301,7 @@ bool Window::init_remote(const std::string &socket_path, uint32_t attach_sid,
     m_tabs = std::make_unique<TabManager>(m_config, m_loop, m_platform.get());
     m_tabs->on_needs_render = [this]() { m_needs_render = true; };
     m_tabs->on_quit = [this]() {
-        if (on_close) on_close(this);
+        request_close("last tab closed");
     };
 
     const auto &m = m_renderer.metrics();
@@ -321,7 +321,7 @@ bool Window::init_remote(const std::string &socket_path, uint32_t attach_sid,
 
     m_remote_controller = std::make_unique<RemoteController>(*m_remote_client, *this, *m_tabs);
     m_remote_controller->on_exit = [this]() {
-        if (on_close) on_close(this);
+        request_close("remote session ended");
     };
 
     int bar_h = tab_bar_height();
@@ -335,8 +335,15 @@ bool Window::init_remote(const std::string &socket_path, uint32_t attach_sid,
     return true;
 }
 
-void Window::mark_closing() {
+void Window::request_close(const char *reason) {
+    rivt::logmsg("window(%p): close requested (%s)\n", (void *)this, reason);
+    if (on_close) on_close(this);
+}
+
+void Window::mark_closing(const char *reason) {
     if (m_closing) return;
+    // A window disappearing must never be silent — always say why.
+    rivt::logmsg("window(%p): closing (%s)\n", (void *)this, reason);
     if (m_remote_controller) m_remote_controller->notify_window_closing();
     m_closing = true;
 }
@@ -357,7 +364,7 @@ bool Window::init_remote_quic(const std::string &display_name,
     m_tabs = std::make_unique<TabManager>(m_config, m_loop, m_platform.get());
     m_tabs->on_needs_render = [this]() { m_needs_render = true; };
     m_tabs->on_quit = [this]() {
-        if (on_close) on_close(this);
+        request_close("last tab closed");
     };
 
     const auto &m = m_renderer.metrics();
@@ -389,7 +396,7 @@ bool Window::attach_remote(const std::string &display_name,
     m_remote_controller = std::make_unique<RemoteController>(*m_remote_client, *this, *m_tabs);
     m_remote_controller->set_peer_name(display_name);
     m_remote_controller->on_exit = [this]() {
-        if (on_close) on_close(this);
+        request_close("remote session ended");
     };
     const auto &m = m_renderer.metrics();
     int bar_h = tab_bar_height();
@@ -410,7 +417,7 @@ bool Window::init_picker(const std::string &rendezvous) {
 
     m_tabs = std::make_unique<TabManager>(m_config, m_loop, m_platform.get());
     m_tabs->on_needs_render = [this]() { m_needs_render = true; };
-    m_tabs->on_quit = [this]() { if (on_close) on_close(this); };
+    m_tabs->on_quit = [this]() { request_close("last tab closed"); };
 
     const auto &m = m_renderer.metrics();
     m_tabs->set_cell_size(m.cell_width, m.cell_height);
@@ -487,7 +494,7 @@ void Window::picker_paint() {
 
 void Window::picker_key(const KeyEvent &key) {
     bool ctrl = key.mods & KeyMod::Ctrl;
-    if (key.keysym == XKB_KEY_Escape) { if (on_close) on_close(this); return; }
+    if (key.keysym == XKB_KEY_Escape) { request_close("picker: escape"); return; }
     if (key.keysym == XKB_KEY_Up || (ctrl && (key.keysym == XKB_KEY_p || key.keysym == XKB_KEY_P))) {
         if (m_pick_sel > 0) m_pick_sel--; picker_paint(); return;
     }
@@ -556,7 +563,7 @@ void Window::picker_select() {
         // Hand off to a fresh remote window; close the picker.
         std::string name = e.name;
         if (on_pick_remote) on_pick_remote(name);
-        mark_closing();
+        mark_closing("picker: handing off to remote window");
     }
 }
 
@@ -785,7 +792,7 @@ void Window::handle_key(const KeyEvent &raw_key) {
                     m_remote_controller->close_focused_pane();
                 } else {
                     if (!m_tabs->close_focused_pane()) {
-                        if (on_close) on_close(this);
+                        request_close("last pane closed by key");
                     }
                 }
                 m_needs_render = true;
@@ -921,7 +928,7 @@ void Window::handle_mouse(const MouseEvent &mouse) {
                     m_remote_controller->request_close_tab(m_tabs->tabs()[close_hit].get())) {
                     // Teardown happens when WindowClosed arrives.
                 } else if (!m_tabs->close_tab(close_hit)) {
-                    if (on_close) on_close(this);
+                    request_close("last tab closed by mouse");
                 }
                 m_hover_close_tab = -1;
                 recompute();
@@ -938,7 +945,7 @@ void Window::handle_mouse(const MouseEvent &mouse) {
                         m_remote_controller->request_close_tab(m_tabs->tabs()[hit].get())) {
                         // Teardown happens when WindowClosed arrives.
                     } else if (!m_tabs->close_tab(hit)) {
-                        if (on_close) on_close(this);
+                        request_close("last tab closed by mouse");
                     }
                 }
                 recompute();

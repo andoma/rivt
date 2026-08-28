@@ -49,7 +49,10 @@ public:
     Platform *platform() { return m_platform.get(); }
     int event_fd() const { return m_platform->get_event_fd(); }
     bool is_closing() const { return m_closing; }
-    void mark_closing();  // notifies a remote session before teardown
+    // Notifies a remote session before teardown; logs the reason.
+    void mark_closing(const char *reason = "unspecified");
+    // Log why, then fire on_close (owner marks us closing).
+    void request_close(const char *reason);
     void set_awake(bool awake);  // sleep/wake + network-change hook
     bool needs_render() const { return m_needs_render; }
     TabManager *tab_manager() { return m_tabs.get(); }

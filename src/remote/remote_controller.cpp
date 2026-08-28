@@ -154,7 +154,10 @@ RemoteController::RemoteController(RemoteClient &client, Window &window, TabMana
     };
 
     m_client.on_session_closed = [this](uint32_t sid) {
-        if (sid == m_session_id) exit();
+        if (sid == m_session_id) {
+            rivt::logmsg("rivt: session %u closed by rivtd\n", sid);
+            exit();
+        }
     };
 
     m_client.on_disconnect = [this]() {

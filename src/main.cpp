@@ -274,7 +274,8 @@ int main(int argc, char *argv[]) {
 
         if (got_term) {
             got_term = 0;
-            for (auto &w : windows) w->mark_closing();
+            rivt::logmsg("rivt: SIGINT/SIGTERM — closing all windows\n");
+            for (auto &w : windows) w->mark_closing("SIGINT/SIGTERM");
             // Unlike closing the last window (which on macOS keeps the
             // app alive for Cmd-N / dock reopen), ^C or SIGTERM is an
             // explicit terminate: exit once the windows have drained.
@@ -285,6 +286,8 @@ int main(int argc, char *argv[]) {
             got_sigchld = 0;
             for (int i = (int)windows.size() - 1; i >= 0; i--) {
                 if (!windows[i]->reap_dead_panes()) {
+                    rivt::logmsg("window(%p): closing (all panes exited)\n",
+                                 (void *)windows[i].get());
                     loop.remove_fd(windows[i]->event_fd());
                     windows.erase(windows.begin() + i);
                 }
