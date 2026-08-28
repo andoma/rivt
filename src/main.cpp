@@ -233,6 +233,9 @@ int main(int argc, char *argv[]) {
     // reopen). On Linux these are stored but never called.
     Platform::set_new_window_handler(create_picker_window);
     Platform::set_quit_handler([&]() { loop.request_quit(); });
+    Platform::set_connectivity_handler([&](bool awake) {
+        for (auto &w : windows) w->set_awake(awake);
+    });
 
     loop.add_timer(600, [&]() {
         for (auto &w : windows) w->toggle_cursor_blink();

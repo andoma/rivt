@@ -660,6 +660,12 @@ void RemoteClient::flush() {
     }
 }
 
+void RemoteClient::verify_link() {
+    if (!m_quic_conn) return;
+    proto::Writer w;
+    send_control((uint16_t)MsgType::Ping, w);  // send_frame arms the ACK probe
+}
+
 void RemoteClient::hello() {
     proto::Writer w;
     w.u32(proto::PROTO_VERSION);

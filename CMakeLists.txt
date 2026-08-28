@@ -67,6 +67,7 @@ if(APPLE)
     find_library(CORETEXT_FRAMEWORK  CoreText)
     find_library(COREFOUNDATION_FRAMEWORK CoreFoundation)
     find_library(COREGRAPHICS_FRAMEWORK CoreGraphics)
+    find_library(NETWORK_FRAMEWORK   Network)
 else()
     pkg_check_modules(FONTCONFIG REQUIRED fontconfig)
     pkg_check_modules(XCB REQUIRED xcb)
@@ -184,6 +185,7 @@ if(APPLE)
         ${CORETEXT_FRAMEWORK}
         ${COREFOUNDATION_FRAMEWORK}
         ${COREGRAPHICS_FRAMEWORK}
+        ${NETWORK_FRAMEWORK}
     )
 else()
     target_link_libraries(rivt PRIVATE

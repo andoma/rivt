@@ -63,6 +63,14 @@ public:
 
     // Commands
     void hello();
+
+    // Wake / network-change hooks. suspend_probes() parks the link
+    // watchdog (lid closed: don't declare anything dead while frozen);
+    // verify_link() sends a Ping so the ACK probe either confirms the
+    // path within seconds or triggers a reconnect — without waiting for
+    // the user to type.
+    void suspend_probes() { disarm_ack_probe(); }
+    void verify_link();
     void list_sessions();
     void create_session(const std::string &name, const std::string &cwd, int cols, int rows);
     void attach(uint32_t session_id);

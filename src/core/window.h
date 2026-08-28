@@ -50,6 +50,7 @@ public:
     int event_fd() const { return m_platform->get_event_fd(); }
     bool is_closing() const { return m_closing; }
     void mark_closing();  // notifies a remote session before teardown
+    void set_awake(bool awake);  // sleep/wake + network-change hook
     bool needs_render() const { return m_needs_render; }
     TabManager *tab_manager() { return m_tabs.get(); }
 

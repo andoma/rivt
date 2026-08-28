@@ -39,6 +39,10 @@ enum class MsgType : uint16_t {
                           //   protocol versions (it exists to upgrade
                           //   mismatched daemons): re-exec with sessions
                           //   preserved
+    Ping = 14,            // - ; no reply. Exists to elicit a QUIC ACK
+                          //   datagram: the client's link watchdog sends
+                          //   it after wake / network change to verify
+                          //   the path. Old daemons ignore unknown types.
 
     // daemon -> client
     HelloOk = 64,        // u32 proto_version

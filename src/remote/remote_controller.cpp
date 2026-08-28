@@ -358,6 +358,26 @@ void RemoteController::detach() {
 // The tab bar appears at 2 tabs and disappears at 1. Grow/shrink the
 // window so the terminal grid is unchanged, and shift existing pane
 // rects by the content-origin delta (same dance as TmuxController).
+void RemoteController::set_awake(bool awake) {
+    if (!awake) {
+        m_client.suspend_probes();
+        if (m_reconnect_timer >= 0) {
+            m_client.loop().remove_timer(m_reconnect_timer);
+            m_reconnect_timer = -1;
+        }
+        return;
+    }
+    if (m_reconnecting) {
+        // Fresh budget: the outage was the machine being asleep or
+        // between networks, not the peer being gone.
+        m_reconnect_attempts = 0;
+        schedule_reconnect_attempt();
+    } else if (m_active) {
+        m_client.verify_link();
+    }
+    refresh_status();
+}
+
 void RemoteController::begin_reconnect() {
     m_active = false;
     m_target_sid = m_session_id;  // hello_ok re-attaches to the same session

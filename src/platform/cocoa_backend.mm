@@ -10,6 +10,7 @@
 #import <CoreText/CoreText.h>
 #import <CoreFoundation/CoreFoundation.h>
 #import <OpenGL/gl3.h>
+#import <Network/Network.h>
 
 #include "platform/cocoa_backend.h"
 #include "platform/keysym.h"
@@ -125,6 +126,28 @@ void CocoaApp::ensure_initialized() {
     [NSApp setDelegate:delegate];
 
     build_menu();
+
+    // Sleep/wake + network-path changes drive the remote-link watchdog:
+    // passive while the lid is closed, verify-or-reconnect immediately on
+    // wake or when the route changes (wifi <-> tethering), instead of
+    // waiting for the user to type into a dead session. Both callbacks
+    // arrive on the main runloop, which our poll() pumps.
+    NSNotificationCenter *nc = [[NSWorkspace sharedWorkspace] notificationCenter];
+    [nc addObserverForName:NSWorkspaceWillSleepNotification object:nil queue:nil
+        usingBlock:^(NSNotification *) {
+        if (const auto &h = rivt::Platform::connectivity_handler()) h(false);
+    }];
+    [nc addObserverForName:NSWorkspaceDidWakeNotification object:nil queue:nil
+        usingBlock:^(NSNotification *) {
+        if (const auto &h = rivt::Platform::connectivity_handler()) h(true);
+    }];
+    nw_path_monitor_t mon = nw_path_monitor_create();
+    nw_path_monitor_set_queue(mon, dispatch_get_main_queue());
+    nw_path_monitor_set_update_handler(mon, ^(nw_path_t path) {
+        bool up = nw_path_get_status(path) == nw_path_status_satisfied;
+        if (const auto &h = rivt::Platform::connectivity_handler()) h(up);
+    });
+    nw_path_monitor_start(mon);
 
     [NSApp finishLaunching];
     [NSApp activateIgnoringOtherApps:YES];

@@ -51,6 +51,11 @@ public:
     // requested from the daemon (teardown happens on WindowClosed).
     bool request_close_tab(Tab *tab);
 
+    // System sleep/wake and network-change hook. false = go passive
+    // (lid closed): stop probing and pause reconnect attempts. true =
+    // verify the link now / retry reconnecting with a fresh budget.
+    void set_awake(bool awake);
+
     // Fired when the session ends or the daemon goes away.
     std::function<void()> on_exit;
 

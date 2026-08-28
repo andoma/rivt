@@ -576,6 +576,10 @@ void Window::stop_tmux_pty_mode() {
     m_closing = true;
 }
 
+void Window::set_awake(bool awake) {
+    if (m_remote_controller) m_remote_controller->set_awake(awake);
+}
+
 void Window::handle_resize(int w, int h) {
     dbg("window(%p): handle_resize %dx%d tmux=%d gateway=%p",
         (void*)this, w, h,
