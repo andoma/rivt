@@ -861,10 +861,14 @@ void Window::handle_key(const KeyEvent &raw_key) {
     }
 
     // Alt+1..9 (Linux) or Cmd+1..9 (macOS): switch to tab by index.
-    bool alt = key.mods & KeyMod::Alt;
-    bool tab_index_combo = alt;
+    // On macOS, Option is a character-composition key (AltGr-style:
+    // Option+4 is $ on a Swedish layout), so it must never double as a
+    // tab shortcut there.
+    bool tab_index_combo;
 #ifdef __APPLE__
-    if (macos_cmd_held) tab_index_combo = true;
+    tab_index_combo = macos_cmd_held;
+#else
+    tab_index_combo = key.mods & KeyMod::Alt;
 #endif
     if (tab_index_combo && key.keysym >= XKB_KEY_1 && key.keysym <= XKB_KEY_9) {
         int idx = key.keysym - XKB_KEY_1;

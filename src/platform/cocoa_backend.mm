@@ -546,6 +546,20 @@ uint32_t modifier_keysym_from_keycode(unsigned short kc) {
     if (chars.length > 0) {
         ke.text = std::string([chars UTF8String]);
     }
+    // On macOS, Option composes characters (AltGr-style): a Swedish
+    // layout types $ | { } via Option. When the layout translated the
+    // key into different text than the bare key would give, deliver it
+    // as plain text — keeping Alt set would route it into Alt-as-Meta
+    // ESC-prefixing (or a shortcut) and shadow characters the layout
+    // needs. This matches Terminal.app's default (Option is not Meta).
+    if ((ke.mods & rivt::KeyMod::Alt) && !(ke.mods & rivt::KeyMod::Ctrl) &&
+        chars.length > 0 && ![chars isEqualToString:charsNoMods]) {
+        unichar c = [chars characterAtIndex:0];
+        bool printable = c >= 0x20 && c != 0x7f && (c < 0xF700 || c > 0xF8FF);
+        if (printable)
+            ke.mods = static_cast<rivt::KeyMod>(
+                static_cast<uint8_t>(ke.mods) & ~static_cast<uint8_t>(rivt::KeyMod::Alt));
+    }
     ke.pressed = pressed ? true : false;
     _backend->on_key(ke);
 }
