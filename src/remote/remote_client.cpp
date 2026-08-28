@@ -209,6 +209,14 @@ bool RemoteClient::connect(const RemoteEndpoint &ep, bool autostart) {
     fprintf(stderr, "rivt: connecting, racing %zu candidate(s):\n",
             ep.candidates.size());
     for (const auto &c : ep.candidates) {
+        // IPv6 candidates are skipped: we run IPv4-only on the wire (see
+        // resolve_v6 in quic_engine.cpp), and older rivtd still
+        // advertises v6 addresses.
+        if (c.host.find(':') != std::string::npos) {
+            fprintf(stderr, "rivt:   [%-8s] %s:%u (ipv6, skipped)\n",
+                    c.kind.c_str(), c.host.c_str(), c.port);
+            continue;
+        }
         fprintf(stderr, "rivt:   [%-8s] %s:%u\n", c.kind.c_str(), c.host.c_str(), c.port);
         auto probe = net::QuicEngine::connect(m_loop, c.host, c.port, *m_identity, bundle);
         if (!probe) continue;

@@ -176,27 +176,20 @@ static int64_t json_num(const std::string &j, const std::string &key) {
     return strtoll(j.c_str() + k + key.size() + 3, nullptr, 10);
 }
 
+// IPv4 only: we don't speak IPv6 on the wire (clients skip v6
+// candidates; see resolve_v6 in quic_engine.cpp).
 std::vector<std::string> local_addresses() {
-    std::vector<std::string> v4, v6;
+    std::vector<std::string> v4;
     struct ifaddrs *ifs = nullptr;
     if (getifaddrs(&ifs) != 0) return {};
     for (struct ifaddrs *i = ifs; i; i = i->ifa_next) {
-        if (!i->ifa_addr) continue;
+        if (!i->ifa_addr || i->ifa_addr->sa_family != AF_INET) continue;
         char buf[INET6_ADDRSTRLEN];
-        if (i->ifa_addr->sa_family == AF_INET) {
-            auto *sa = (struct sockaddr_in *)i->ifa_addr;
-            if (ntohl(sa->sin_addr.s_addr) >> 24 == 127) continue;
-            if (inet_ntop(AF_INET, &sa->sin_addr, buf, sizeof buf)) v4.push_back(buf);
-        } else if (i->ifa_addr->sa_family == AF_INET6) {
-            auto *sa = (struct sockaddr_in6 *)i->ifa_addr;
-            if (IN6_IS_ADDR_LOOPBACK(&sa->sin6_addr) ||
-                IN6_IS_ADDR_LINKLOCAL(&sa->sin6_addr))
-                continue;
-            if (inet_ntop(AF_INET6, &sa->sin6_addr, buf, sizeof buf)) v6.push_back(buf);
-        }
+        auto *sa = (struct sockaddr_in *)i->ifa_addr;
+        if (ntohl(sa->sin_addr.s_addr) >> 24 == 127) continue;
+        if (inet_ntop(AF_INET, &sa->sin_addr, buf, sizeof buf)) v4.push_back(buf);
     }
     freeifaddrs(ifs);
-    v4.insert(v4.end(), v6.begin(), v6.end());
     return v4;
 }
 

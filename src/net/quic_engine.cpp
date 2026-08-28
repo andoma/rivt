@@ -57,18 +57,29 @@ std::unique_ptr<QuicEngine> QuicEngine::create_client(EventLoop &loop, const Ide
     return e;
 }
 
-// Resolve to a v4-mapped v6 sockaddr for our dual-stack socket.
+// Resolve IPv4 only, into a v4-mapped v6 sockaddr for our dual-stack
+// socket. We never speak IPv6 on the wire: on typical eyeball networks a
+// host often has v6 addresses but no working v6 route, so sends succeed
+// and replies never come — the connection blackholes instead of failing
+// fast. (AI_V4MAPPED with AF_INET6 also returns native v6 first, which
+// is how STUN used to pick a dead address.)
 static bool resolve_v6(const std::string &host, uint16_t port, struct sockaddr_storage *out,
                        socklen_t *outlen) {
     struct addrinfo hints {}, *res = nullptr;
-    hints.ai_family = AF_INET6;
-    hints.ai_flags = AI_V4MAPPED | AI_ALL;
+    hints.ai_family = AF_INET;
     hints.ai_socktype = SOCK_DGRAM;
     if (getaddrinfo(host.c_str(), std::to_string(port).c_str(), &hints, &res) != 0 || !res)
         return false;
-    memcpy(out, res->ai_addr, res->ai_addrlen);
-    *outlen = res->ai_addrlen;
+    auto *v4 = (const struct sockaddr_in *)res->ai_addr;
+    struct sockaddr_in6 sa {};
+    sa.sin6_family = AF_INET6;
+    sa.sin6_port = v4->sin_port;
+    sa.sin6_addr.s6_addr[10] = 0xff;
+    sa.sin6_addr.s6_addr[11] = 0xff;
+    memcpy(&sa.sin6_addr.s6_addr[12], &v4->sin_addr, 4);
     freeaddrinfo(res);
+    memcpy(out, &sa, sizeof sa);
+    *outlen = sizeof sa;
     return true;
 }
 
@@ -325,19 +336,14 @@ void QuicEngine::discover_reflexive(
     std::function<void(bool, const struct sockaddr_storage &)> cb,
     const char *stun_host, uint16_t stun_port) {
     if (m_stun_active) { struct sockaddr_storage z {}; cb(false, z); return; }
-    // Resolve into a v4-mapped v6 address to match our dual-stack socket.
-    struct addrinfo hints {}, *res = nullptr;
-    hints.ai_family = AF_INET6;
-    hints.ai_flags = AI_V4MAPPED | AI_ALL;
-    hints.ai_socktype = SOCK_DGRAM;
     const char *host = stun_host ? stun_host : "stun.cloudflare.com";
-    if (getaddrinfo(host, std::to_string(stun_port).c_str(), &hints, &res) != 0 || !res) {
+    socklen_t sl = 0;
+    if (!resolve_v6(host, stun_port, &m_stun_server, &sl)) {
+        fprintf(stderr, "rivt: stun: cannot resolve %s\n", host);
         struct sockaddr_storage z {};
         cb(false, z);
         return;
     }
-    memcpy(&m_stun_server, res->ai_addr, res->ai_addrlen);
-    freeaddrinfo(res);
 
     m_stun_active = true;
     m_stun_tries = 0;
