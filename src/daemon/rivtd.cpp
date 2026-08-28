@@ -899,9 +899,20 @@ private:
                 auto pit = std::find_if(wit->panes.begin(), wit->panes.end(),
                                         [pid](auto &p) { return p.first == pid; });
                 if (pit == wit->panes.end()) continue;
-                rivt::logmsg("rivtd: pane %u exited (session %u window %u, "
+                // Reap here if we beat the signalfd handler to it, so the
+                // exit status always lands next to the pane-exit line.
+                char how[64] = "not yet reaped";
+                pid_t cpid = pit->second->pty().child_pid();
+                int status = 0;
+                if (cpid > 0 && waitpid(cpid, &status, WNOHANG) == cpid) {
+                    if (WIFEXITED(status))
+                        snprintf(how, sizeof how, "exit status %d", WEXITSTATUS(status));
+                    else if (WIFSIGNALED(status))
+                        snprintf(how, sizeof how, "killed by signal %d", WTERMSIG(status));
+                }
+                rivt::logmsg("rivtd: pane %u exited (%s; session %u window %u, "
                              "%zu pane(s) remain in window)\n",
-                             pid, s.id, wit->id, wit->panes.size() - 1);
+                             pid, how, s.id, wit->id, wit->panes.size() - 1);
 
                 proto::Writer w;
                 w.u32(pid);

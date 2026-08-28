@@ -2,6 +2,7 @@
 #include "core/debug.h"
 #include "core/event_loop.h"
 #include "platform/platform.h"
+#include <cerrno>
 #include <cstring>
 
 namespace rivt {
@@ -92,10 +93,12 @@ void Pane::register_pty(EventLoop &loop) {
                 m_screen.find_matches_incremental();
             }
             if (n < 0) {
+                dbg("pane: pty read failed (errno %d) — marking dead", errno);
                 if (on_dead) on_dead(this);
             }
         }
         if (events & (EV_HUP | EV_ERR)) {
+            dbg("pane: pty %s — marking dead", (events & EV_ERR) ? "error" : "hangup");
             if (on_dead) on_dead(this);
         }
     });
