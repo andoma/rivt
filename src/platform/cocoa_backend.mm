@@ -112,6 +112,15 @@ void CocoaApp::ensure_initialized() {
     [NSApplication sharedApplication];
     [NSApp setActivationPolicy:NSApplicationActivationPolicyRegular];
 
+    // Launched from a terminal (not via LaunchServices), the Dock and
+    // cmd-tab show the generic executable icon even though the bundle
+    // has one — set it explicitly.
+    NSString *icns = [[NSBundle mainBundle] pathForResource:@"rivt" ofType:@"icns"];
+    if (icns) {
+        NSImage *icon = [[NSImage alloc] initWithContentsOfFile:icns];
+        if (icon) [NSApp setApplicationIconImage:icon];
+    }
+
     delegate = [[RivtAppDelegate alloc] init];
     [NSApp setDelegate:delegate];
 
