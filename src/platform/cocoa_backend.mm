@@ -135,16 +135,25 @@ void CocoaApp::ensure_initialized() {
     NSNotificationCenter *nc = [[NSWorkspace sharedWorkspace] notificationCenter];
     [nc addObserverForName:NSWorkspaceWillSleepNotification object:nil queue:nil
         usingBlock:^(NSNotification *) {
+        rivt::logmsg("rivt: system sleep — parking remote links\n");
         if (const auto &h = rivt::Platform::connectivity_handler()) h(false);
     }];
     [nc addObserverForName:NSWorkspaceDidWakeNotification object:nil queue:nil
         usingBlock:^(NSNotification *) {
+        rivt::logmsg("rivt: system wake — verifying remote links\n");
         if (const auto &h = rivt::Platform::connectivity_handler()) h(true);
     }];
     nw_path_monitor_t mon = nw_path_monitor_create();
     nw_path_monitor_set_queue(mon, dispatch_get_main_queue());
     nw_path_monitor_set_update_handler(mon, ^(nw_path_t path) {
         bool up = nw_path_get_status(path) == nw_path_status_satisfied;
+        // Log transitions only; path re-evaluations with the same status
+        // are frequent and uninteresting.
+        static int last = -1;
+        if ((int)up != last) {
+            last = (int)up;
+            rivt::logmsg("rivt: network path %s\n", up ? "up" : "down");
+        }
         if (const auto &h = rivt::Platform::connectivity_handler()) h(up);
     });
     nw_path_monitor_start(mon);

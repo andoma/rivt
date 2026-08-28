@@ -90,6 +90,7 @@ bool QuicEngine::start_connection(const std::string &host, uint16_t port) {
         rivt::logmsg("rivt: cannot resolve %s\n", host.c_str());
         return false;
     }
+    m_label = host + ":" + std::to_string(port);
     // No SNI: identity is the pinned certificate, not a hostname.
     picoquic_cnx_t *cnx = picoquic_create_cnx(
         m_quic, picoquic_null_connection_id, picoquic_null_connection_id,
@@ -254,6 +255,13 @@ int QuicEngine::handle_event(picoquic_cnx_t *cnx, Conn *conn, uint64_t stream_id
         if (picoquic_get_local_error(cnx) == 0x12e ||
             picoquic_get_remote_error(cnx) == 0x12e)
             m_cert_rejected = true;
+        // Close reasons are the one thing post-mortem debugging always
+        // needs; log them unconditionally, not just under RIVT_QUIC_DEBUG.
+        rivt::logmsg("quic: %s closed (%s, ev=%d lerr=0x%lx rerr=0x%lx, last rx %.1fs ago)\n",
+                m_label.empty() ? "conn" : m_label.c_str(),
+                conn->established ? "established" : "never established", event,
+                (unsigned long)picoquic_get_local_error(cnx),
+                (unsigned long)picoquic_get_remote_error(cnx), seconds_since_rx());
         mark_closed(conn);
         picoquic_set_callback(cnx, nullptr, nullptr);
         break;

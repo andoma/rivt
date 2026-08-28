@@ -370,6 +370,7 @@ void RemoteController::set_awake(bool awake) {
     if (m_reconnecting) {
         // Fresh budget: the outage was the machine being asleep or
         // between networks, not the peer being gone.
+        rivt::logmsg("rivt: connectivity change while reconnecting — budget reset\n");
         m_reconnect_attempts = 0;
         schedule_reconnect_attempt();
     } else if (m_active) {

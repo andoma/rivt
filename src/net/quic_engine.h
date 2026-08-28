@@ -119,6 +119,7 @@ private:
     bool m_want_write = false;
 
     bool m_cert_rejected = false;
+    std::string m_label;  // "host:port" of an outbound target, for logs
     uint64_t m_last_rx_us = 0;  // picoquic_current_time() of last datagram
     TurnRelay *m_turn = nullptr;
     std::vector<struct sockaddr_in> m_relayed_peers;  // reached via m_turn
