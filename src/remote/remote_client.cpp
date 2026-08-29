@@ -206,18 +206,18 @@ bool RemoteClient::connect(const RemoteEndpoint &ep, bool autostart) {
         }
     }
     std::string bundle = net::Identity::authorized_bundle_path();
-    rivt::logmsg("rivt: connecting, racing %zu candidate(s):\n",
+    dbg("rivt: connecting, racing %zu candidate(s):\n",
             ep.candidates.size());
     for (const auto &c : ep.candidates) {
         // IPv6 candidates are skipped: we run IPv4-only on the wire (see
         // resolve_v6 in quic_engine.cpp), and older rivtd still
         // advertises v6 addresses.
         if (c.host.find(':') != std::string::npos) {
-            rivt::logmsg("rivt:   [%-8s] %s:%u (ipv6, skipped)\n",
+            dbg("rivt:   [%-8s] %s:%u (ipv6, skipped)\n",
                     c.kind.c_str(), c.host.c_str(), c.port);
             continue;
         }
-        rivt::logmsg("rivt:   [%-8s] %s:%u\n", c.kind.c_str(), c.host.c_str(), c.port);
+        dbg("rivt:   [%-8s] %s:%u\n", c.kind.c_str(), c.host.c_str(), c.port);
         auto probe = net::QuicEngine::connect(m_loop, c.host, c.port, *m_identity, bundle);
         if (!probe) continue;
         size_t idx = m_probes.size();
@@ -241,7 +241,7 @@ void RemoteClient::begin_punch(const RemoteEndpoint &ep) {
                 ep.peer_sig_id.size(), ep.rendezvous.size());
         return;
     }
-    rivt::logmsg("rivt: punch: opening signaling to %.16s...\n", ep.peer_sig_id.c_str());
+    dbg("rivt: punch: opening signaling to %.16s...\n", ep.peer_sig_id.c_str());
     m_signaling = net::Signaling::shared(m_loop, *m_identity, ep.rendezvous);
     if (!m_signaling) return;
     // Final give-up for the punched/relayed path: the answer plus a
@@ -295,7 +295,7 @@ void RemoteClient::begin_punch(const RemoteEndpoint &ep) {
                 reflexives->push_back({ip, port, "stun"});
             }
             if (--(*pending) == 0 && m_signaling && !reflexives->empty()) {
-                rivt::logmsg("rivt: punch: sending offer, %zu reflexive candidate(s)\n",
+                dbg("rivt: punch: sending offer, %zu reflexive candidate(s)\n",
                         reflexives->size());
                 m_signaling->send(peer, /*answer=*/false, *reflexives);
                 // The shared signaling socket may be silently dead (a
@@ -347,9 +347,9 @@ void RemoteClient::on_answer(const std::vector<net::Candidate> &server_cands) {
     if (n >= 2) { direct = m_probes[n - 2].get(); turn = m_probes[n - 1].get(); }
     const net::Candidate *cstun = nullptr, *cturn = nullptr;
     std::vector<net::Candidate> locals;
-    rivt::logmsg("rivt: peer answered with %zu candidate(s):\n", server_cands.size());
+    dbg("rivt: peer answered with %zu candidate(s):\n", server_cands.size());
     for (const auto &c : server_cands) {
-        rivt::logmsg("rivt:   [%-8s] %s:%u\n", c.kind.c_str(), c.host.c_str(), c.port);
+        dbg("rivt:   [%-8s] %s:%u\n", c.kind.c_str(), c.host.c_str(), c.port);
         if (c.kind == "stun" && !cstun) cstun = &c;
         else if (c.kind == "turn" && !cturn) cturn = &c;
         else if (c.kind == "local") locals.push_back(c);

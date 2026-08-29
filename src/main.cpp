@@ -171,7 +171,7 @@ int main(int argc, char *argv[]) {
             }
             candidates = e.candidates;
             sig_id = e.sig_id;
-            rivt::logmsg("rivt: %s -> %zu candidate(s) from directory\n",
+            dbg("rivt: %s -> %zu candidate(s) from directory\n",
                     target.c_str(), candidates.size());
         } else {
             std::string host = target;

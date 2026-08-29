@@ -347,7 +347,7 @@ void TurnRelay::refresh() {
     for (const auto &p : m_peers)
         if (request(0x0008, true, &p, resp, &rn) && resp[0] == 0x01 && resp[1] == 0x08)
             renewed++;
-    rivt::logmsg("turn: allocation refreshed, %zu/%zu permission(s) renewed\n",
+    dbg("turn: allocation refreshed, %zu/%zu permission(s) renewed\n",
                  renewed, m_peers.size());
     // Control-plane success proves nothing about the data path: the
     // owner self-probes through the relayed address every minute, so
@@ -378,9 +378,11 @@ void TurnRelay::permit(const struct sockaddr_in &peer) {
         inet_ntop(AF_INET, &peer.sin_addr, ip, sizeof ip);
         bool got = request(0x0008, true, &peer, resp, &rn);  // CreatePermission
         bool ok = got && resp[0] == 0x01 && resp[1] == 0x08;
-        rivt::logmsg("turn: permission for %s: %s\n", ip,
-                     ok ? "granted"
-                        : got ? "rejected" : "no response");
+        if (ok)
+            dbg("turn: permission for %s: granted", ip);
+        else
+            rivt::logmsg("turn: permission for %s: %s\n", ip,
+                         got ? "rejected" : "no response");
         // Remember it so refresh() keeps the permission alive past 300s.
         m_peers.push_back(peer);
     }

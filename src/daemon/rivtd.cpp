@@ -247,7 +247,7 @@ public:
     // A client wants to reach us: STUN our listen socket, allocate a TURN
     // relay + permit the client, answer with our candidates, and punch.
     void handle_offer(const std::string &from, const std::vector<net::Candidate> &client_cands) {
-        rivt::logmsg("rivtd: punch offer from %.16s... (%zu candidates)\n",
+        dbg("rivtd: punch offer from %.16s... (%zu candidates)\n",
                 from.c_str(), client_cands.size());
         // Rotate the advertised relay when: none yet, the current one is
         // dead (refresh failure or probe silence), or it has served
@@ -281,7 +281,7 @@ public:
                 sa.sin_port = htons(c.port);
                 if (m_turn) { m_turn->permit(sa); permitted = true; }
             }
-            rivt::logmsg("rivtd:   punching [%-8s] %s:%u%s\n", c.kind.c_str(),
+            dbg("rivtd:   punching [%-8s] %s:%u%s\n", c.kind.c_str(),
                     c.host.c_str(), c.port, permitted ? " (relay permit)" : "");
             m_quic->punch(c.host, c.port);
         }
@@ -319,10 +319,10 @@ public:
             }
             if (m_turn && m_turn->alive())
                 mine.push_back({m_turn->relayed_host(), m_turn->relayed_port(), "turn"});
-            rivt::logmsg("rivtd: answering %.16s... with %zu candidate(s):\n",
+            dbg("rivtd: answering %.16s... with %zu candidate(s):\n",
                     from.c_str(), mine.size());
             for (const auto &c : mine)
-                rivt::logmsg("rivtd:   [%-8s] %s:%u\n", c.kind.c_str(), c.host.c_str(), c.port);
+                dbg("rivtd:   [%-8s] %s:%u\n", c.kind.c_str(), c.host.c_str(), c.port);
             if (m_signaling) m_signaling->send(from, /*answer=*/true, mine);
         });
     }

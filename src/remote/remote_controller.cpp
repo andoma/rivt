@@ -385,7 +385,7 @@ void RemoteController::connectivity_event(Platform::ConnEvent e) {
         if (m_reconnecting) {
             // Fresh budget: the outage was sleep or a network change,
             // not the peer being gone.
-            rivt::logmsg("rivt: resuming reconnect (budget reset)\n");
+            dbg("rivt: resuming reconnect (budget reset)\n");
             m_reconnect_attempts = 0;
             schedule_reconnect_attempt();
         } else if (m_active) {

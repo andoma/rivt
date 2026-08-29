@@ -136,7 +136,7 @@ void CocoaApp::ensure_initialized() {
     using CE = rivt::Platform::ConnEvent;
     NSNotificationCenter *nc = [[NSWorkspace sharedWorkspace] notificationCenter];
     auto emit = [](CE e, const char *what) {
-        rivt::logmsg("rivt: power/net event: %s\n", what);
+        rivt::dbg("rivt: power/net event: %s", what);
         if (const auto &h = rivt::Platform::connectivity_handler()) h(e);
     };
     [nc addObserverForName:NSWorkspaceWillSleepNotification object:nil queue:nil

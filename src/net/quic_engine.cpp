@@ -255,11 +255,20 @@ int QuicEngine::handle_event(picoquic_cnx_t *cnx, Conn *conn, uint64_t stream_id
         if (picoquic_get_local_error(cnx) == 0x12e ||
             picoquic_get_remote_error(cnx) == 0x12e)
             m_cert_rejected = true;
-        // Close reasons are the one thing post-mortem debugging always
-        // needs; log them unconditionally, not just under RIVT_QUIC_DEBUG.
-        rivt::logmsg("quic: %s closed (%s, ev=%d lerr=0x%lx rerr=0x%lx, last rx %.1fs ago)\n",
-                m_label.empty() ? "conn" : m_label.c_str(),
-                conn->established ? "established" : "never established", event,
+        // Close reasons of real connections are the one thing post-mortem
+        // debugging always needs — log those unconditionally. Raced
+        // candidates that never established close by the handful on every
+        // connect; those go under --debug.
+        if (conn->established)
+            rivt::logmsg("quic: %s closed (established, ev=%d lerr=0x%lx rerr=0x%lx, "
+                    "last rx %.1fs ago)\n",
+                    m_label.empty() ? "conn" : m_label.c_str(), event,
+                    (unsigned long)picoquic_get_local_error(cnx),
+                    (unsigned long)picoquic_get_remote_error(cnx), seconds_since_rx());
+        else
+            dbg("quic: %s closed (never established, ev=%d lerr=0x%lx rerr=0x%lx, "
+                "last rx %.1fs ago)",
+                m_label.empty() ? "conn" : m_label.c_str(), event,
                 (unsigned long)picoquic_get_local_error(cnx),
                 (unsigned long)picoquic_get_remote_error(cnx), seconds_since_rx());
         mark_closed(conn);
