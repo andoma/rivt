@@ -374,36 +374,47 @@ void QuicEngine::discover_reflexive(
     }, true);
 }
 
-void QuicEngine::enable_turn(TurnRelay *turn) {
-    m_turn = turn;
-    if (!turn) return;  // detach (relay died; owner is replacing it)
-    turn->on_data = [this](const struct sockaddr_in &peer, const uint8_t *d, size_t n) {
-        feed_relayed(peer, d, n);
+void QuicEngine::add_turn(TurnRelay *turn) {
+    turn->on_data = [this, turn](const struct sockaddr_in &peer, const uint8_t *d, size_t n) {
+        feed_relayed(turn, peer, d, n);
     };
 }
 
-void QuicEngine::feed_relayed(const struct sockaddr_in &peer, const uint8_t *d, size_t n) {
+void QuicEngine::remove_turn(TurnRelay *turn) {
+    std::erase_if(m_relayed_peers, [turn](const auto &e) { return e.second == turn; });
+}
+
+void QuicEngine::feed_relayed(TurnRelay *turn, const struct sockaddr_in &peer,
+                              const uint8_t *d, size_t n) {
     m_last_rx_us = picoquic_current_time();
-    // Remember this peer so pump() routes replies back through TURN.
+    // Remember which relay this peer arrived through so pump() routes
+    // replies back the same way (a reconnecting peer may show up via a
+    // newer relay: update the mapping).
     bool known = false;
-    for (auto &p : m_relayed_peers)
-        if (p.sin_addr.s_addr == peer.sin_addr.s_addr && p.sin_port == peer.sin_port) {
-            known = true; break;
+    for (auto &e : m_relayed_peers)
+        if (e.first.sin_addr.s_addr == peer.sin_addr.s_addr &&
+            e.first.sin_port == peer.sin_port) {
+            e.second = turn;
+            known = true;
+            break;
         }
-    if (!known) m_relayed_peers.push_back(peer);
+    if (!known) m_relayed_peers.push_back({peer, turn});
     picoquic_incoming_packet(m_quic, (uint8_t *)d, n, (struct sockaddr *)&peer,
                              (struct sockaddr *)&m_local, 0, 0, picoquic_current_time());
     pump();
 }
 
-bool QuicEngine::is_relayed(const struct sockaddr_storage &to, struct sockaddr_in *peer) const {
-    if (to.ss_family != AF_INET) return false;
+TurnRelay *QuicEngine::relay_for(const struct sockaddr_storage &to,
+                                 struct sockaddr_in *peer) const {
+    if (to.ss_family != AF_INET) return nullptr;
     auto *s = (const struct sockaddr_in *)&to;
-    for (const auto &p : m_relayed_peers)
-        if (p.sin_addr.s_addr == s->sin_addr.s_addr && p.sin_port == s->sin_port) {
-            *peer = *s; return true;
+    for (const auto &e : m_relayed_peers)
+        if (e.first.sin_addr.s_addr == s->sin_addr.s_addr &&
+            e.first.sin_port == s->sin_port) {
+            *peer = *s;
+            return e.second;
         }
-    return false;
+    return nullptr;
 }
 
 void QuicEngine::pump() {
@@ -418,8 +429,8 @@ void QuicEngine::pump() {
                                               &if_index, nullptr, &last);
         if (rc != 0 || send_len == 0) break;
         struct sockaddr_in rpeer {};
-        if (m_turn && is_relayed(to, &rpeer)) {
-            m_turn->send_to(rpeer, buf, send_len);
+        if (TurnRelay *tr = relay_for(to, &rpeer)) {
+            tr->send_to(rpeer, buf, send_len);
             continue;
         }
         ssize_t sent = sendto(m_fd, buf, send_len, 0, (struct sockaddr *)&to,

@@ -65,7 +65,11 @@ public:
     // side). Inbound Data indications become QUIC packets; outbound
     // QUIC to the relayed peer goes out as Send indications. The peer
     // is identified by the address TURN reports (its reflexive).
-    void enable_turn(TurnRelay *turn);
+    // Relays: a peer learned via a relay's Data indications is routed
+    // back through that same relay. Several relays coexist (rivtd
+    // rotates allocations; old ones keep serving established sessions).
+    void add_turn(TurnRelay *turn);
+    void remove_turn(TurnRelay *turn);
     ~QuicEngine();
 
     std::function<void(Conn *)> on_connected;   // handshake complete
@@ -121,10 +125,10 @@ private:
     bool m_cert_rejected = false;
     std::string m_label;  // "host:port" of an outbound target, for logs
     uint64_t m_last_rx_us = 0;  // picoquic_current_time() of last datagram
-    TurnRelay *m_turn = nullptr;
-    std::vector<struct sockaddr_in> m_relayed_peers;  // reached via m_turn
-    void feed_relayed(const struct sockaddr_in &peer, const uint8_t *d, size_t n);
-    bool is_relayed(const struct sockaddr_storage &to, struct sockaddr_in *peer) const;
+    std::vector<std::pair<struct sockaddr_in, TurnRelay *>> m_relayed_peers;
+    void feed_relayed(TurnRelay *turn, const struct sockaddr_in &peer,
+                      const uint8_t *d, size_t n);
+    TurnRelay *relay_for(const struct sockaddr_storage &to, struct sockaddr_in *peer) const;
 
     // Pending STUN reflexive query (at most one at a time).
     bool m_stun_active = false;

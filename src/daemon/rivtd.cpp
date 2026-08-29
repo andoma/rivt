@@ -32,6 +32,7 @@
 #include <unordered_map>
 #include <vector>
 
+#include <ctime>
 #include <errno.h>
 #include <signal.h>
 #include <sys/signalfd.h>
@@ -194,8 +195,9 @@ public:
                 // summon us for a hole punch / relay.
                 start_signaling(rdv);
 
-                // Relay data-path warming + liveness (see turn_self_probe).
-                m_loop.add_timer(60000, [this]() { turn_self_probe(); }, true);
+                // Relay data-path warming, liveness, and retired-relay
+                // reaping (see turn_self_probe / turn_maintenance).
+                m_loop.add_timer(60000, [this]() { turn_maintenance(); }, true);
             }
         }
         return true;
@@ -247,36 +249,29 @@ public:
     void handle_offer(const std::string &from, const std::vector<net::Candidate> &client_cands) {
         rivt::logmsg("rivtd: punch offer from %.16s... (%zu candidates)\n",
                 from.c_str(), client_cands.size());
-        // Self-probes flow every 60s once armed; >150s of Data-indication
-        // silence means the relayed port is dead no matter what the
-        // control plane says. Check here too — waiting for the next
-        // refresh tick would hand this client a zombie candidate.
-        bool data_dead = m_turn && m_turn->probing() && m_turn->seconds_since_data() > 150.0;
-        if (m_turn && m_turn->alive() && data_dead) {
-            rivt::logmsg("turn: data path silent %.0fs — relay %s:%u is dead\n",
-                         m_turn->seconds_since_data(), m_turn->relayed_host().c_str(),
-                         m_turn->relayed_port());
-        }
-        if (m_turn && (!m_turn->alive() || data_dead)) {
-            // A refresh failed since the last offer: the relayed address
-            // is dead at the TURN server. Drop it and allocate fresh —
-            // holding on to it advertises a black hole forever.
-            rivt::logmsg("rivtd: turn relay died, allocating a fresh one\n");
-            m_quic->enable_turn(nullptr);
-            m_turn.reset();
-        }
-        if (!m_turn) {  // allocate once, reuse while alive
-            std::string user, pass, thost; uint16_t tport;
-            if (net::turn_credentials(net::rendezvous_url(), user, pass, thost, tport)) {
-                auto t = std::make_unique<net::TurnRelay>(m_loop);
-                if (t->allocate(thost, tport, user, pass)) {
-                    m_turn = std::move(t);
-                    m_quic->enable_turn(m_turn.get());
-                } else {
-                    rivt::logmsg("rivtd: turn allocation failed — answering without relay\n");
-                }
+        // Rotate the advertised relay when: none yet, the current one is
+        // dead (refresh failure or probe silence), or it has served
+        // enough answers that its silent ~10-peer-flow budget is at
+        // risk. Old relays stay in m_relays serving established
+        // sessions until reaped (see turn_maintenance).
+        bool need_new = !m_turn;
+        if (m_turn) {
+            bool data_dead = m_turn->probing() && m_turn->seconds_since_data() > 150.0;
+            if (!m_turn->alive() || data_dead) {
+                rivt::logmsg("rivtd: current relay %s:%u is dead (%s), rotating\n",
+                             m_turn->relayed_host().c_str(), m_turn->relayed_port(),
+                             m_turn->alive() ? "data path silent" : "refresh failed");
+                need_new = true;
+            } else if (m_turn_answers >= 4) {
+                rivt::logmsg("rivtd: relay %s:%u served %d answers — rotating "
+                             "(peer-flow budget)\n",
+                             m_turn->relayed_host().c_str(), m_turn->relayed_port(),
+                             m_turn_answers);
+                need_new = true;
             }
         }
+        if (need_new) allocate_relay();
+        if (m_turn) m_turn_answers++;
         // Permit and punch toward every client candidate.
         for (const auto &c : client_cands) {
             struct sockaddr_in sa {};
@@ -344,6 +339,49 @@ public:
         m_turn->permit(m_reflexive);  // per-IP, deduped after the first
         m_quic->punch(m_turn->relayed_host(), m_turn->relayed_port());
         m_turn->expect_probes();
+    }
+
+    // Fetch (and cache) TURN credentials, allocate a fresh relay, make
+    // it current. Old relays are left in m_relays for their sessions.
+    void allocate_relay() {
+        if (m_cred_user.empty() || time(nullptr) - m_cred_fetched > 6 * 3600) {
+            if (!net::turn_credentials(net::rendezvous_url(), m_cred_user, m_cred_pass,
+                                       m_cred_host, m_cred_port)) {
+                rivt::logmsg("rivtd: turn credential fetch failed\n");
+                m_cred_user.clear();
+                return;
+            }
+            m_cred_fetched = time(nullptr);
+        }
+        auto t = std::make_unique<net::TurnRelay>(m_loop);
+        if (!t->allocate(m_cred_host, m_cred_port, m_cred_user, m_cred_pass)) {
+            rivt::logmsg("rivtd: turn allocation failed — answering without relay\n");
+            m_turn = nullptr;
+            return;
+        }
+        m_turn = t.get();
+        m_turn_answers = 0;
+        m_quic->add_turn(m_turn);
+        m_relays.push_back(std::move(t));
+        turn_self_probe();  // warm + arm the new relay immediately
+    }
+
+    // Reap retired relays: not current, and silent long enough that no
+    // established session still runs through them (session keepalives
+    // arrive at least every 30s). Dead ones go faster.
+    void turn_maintenance() {
+        turn_self_probe();
+        std::erase_if(m_relays, [this](std::unique_ptr<net::TurnRelay> &t) {
+            if (t.get() == m_turn) return false;
+            double quiet = t->seconds_since_data();
+            bool reap = (!t->alive() && quiet > 120.0) || quiet > 600.0;
+            if (reap) {
+                rivt::logmsg("rivtd: reaping retired relay %s:%u (silent %.0fs)\n",
+                             t->relayed_host().c_str(), t->relayed_port(), quiet);
+                m_quic->remove_turn(t.get());
+            }
+            return reap;
+        });
     }
 
     // Load the membership log (auto-init a single-device set if none),
@@ -1182,7 +1220,19 @@ private:
     std::unique_ptr<net::Identity> m_identity;
     std::unique_ptr<net::QuicEngine> m_quic;
     std::unique_ptr<net::Signaling> m_signaling;
-    std::unique_ptr<net::TurnRelay> m_turn;
+    // Relays rotate: a Cloudflare TURN allocation silently forwards
+    // only ~10 distinct peer flows over its lifetime (measured; flow 11+
+    // is dropped with the control plane green, and the budget never
+    // recovers). Each answered offer costs the client one flow, so a
+    // fresh allocation is made every few answers; old relays keep
+    // serving their established sessions until they have been silent
+    // long enough to reap.
+    std::vector<std::unique_ptr<net::TurnRelay>> m_relays;
+    net::TurnRelay *m_turn = nullptr;  // current: advertised in answers
+    int m_turn_answers = 0;            // answers served by m_turn
+    std::string m_cred_user, m_cred_pass, m_cred_host;
+    uint16_t m_cred_port = 0;
+    time_t m_cred_fetched = 0;
     struct sockaddr_in m_reflexive {};  // our QUIC socket's public v4 addr
     int m_listen_fd = -1;
     int m_sig_fd = -1;
