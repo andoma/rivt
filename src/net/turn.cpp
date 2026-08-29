@@ -109,7 +109,7 @@ TurnRelay::~TurnRelay() {
 // Relayed traffic shares this socket: non-matching Data indications are
 // dispatched, not eaten.
 bool TurnRelay::request(uint16_t type, bool with_auth, const struct sockaddr_in *peer,
-                        uint8_t *resp, size_t *resp_len) {
+                        uint8_t *resp, size_t *resp_len, int attempts) {
     Msg m;
     m.init(type);
     if (type == 0x0003) { uint8_t rt[4] = {17, 0, 0, 0}; m.attr(A_REQTRANS, rt, 4); }
@@ -121,7 +121,7 @@ bool TurnRelay::request(uint16_t type, bool with_auth, const struct sockaddr_in 
         m.attr(A_NONCE, m_nonce.data(), m_nonce.size());
         m.integrity(m_key);
     }
-    for (int attempt = 0; attempt < 3; attempt++) {
+    for (int attempt = 0; attempt < attempts; attempt++) {
         sendto(m_fd, m.buf, m.len, 0, (struct sockaddr *)&m_server, sizeof m_server);
         for (int waited_ms = 0; waited_ms < 2000;) {
             struct pollfd pf = {m_fd, POLLIN, 0};
@@ -166,19 +166,34 @@ bool TurnRelay::allocate(const std::string &turn_host, uint16_t turn_port,
     hints.ai_socktype = SOCK_DGRAM;
     if (getaddrinfo(turn_host.c_str(), std::to_string(turn_port).c_str(), &hints, &res) != 0 || !res)
         return false;
-    memcpy(&m_server, res->ai_addr, sizeof m_server);
-    freeaddrinfo(res);
 
     // Non-blocking from the start: request() waits via poll(), and the
     // steady-state Data-indication reads must never block the loop.
     m_fd = socket_cloexec(AF_INET, SOCK_DGRAM, 0, /*nonblock=*/true);
-    if (m_fd < 0) return false;
+    if (m_fd < 0) { freeaddrinfo(res); return false; }
 
     uint8_t resp[2048];
     size_t rn = 0;
-    // Unauthenticated Allocate -> 401 with realm+nonce.
-    if (!request(0x0003, false, nullptr, resp, &rn)) {
-        rivt::logmsg("turn: allocate: no response from %s\n", turn_host.c_str());
+    // Unauthenticated Allocate -> 401 with realm+nonce. The host has
+    // several A records and one being unreachable is a real occurrence:
+    // try each resolved address (2 attempts x 2s apiece) instead of
+    // camping on the first — same lesson as the v6-first STUN bug.
+    bool got_401 = false;
+    for (struct addrinfo *ai = res; ai && !got_401; ai = ai->ai_next) {
+        if (ai->ai_family != AF_INET) continue;
+        memcpy(&m_server, ai->ai_addr, sizeof m_server);
+        if (request(0x0003, false, nullptr, resp, &rn, 2)) {
+            got_401 = true;
+            break;
+        }
+        char ip[INET_ADDRSTRLEN] = {0};
+        inet_ntop(AF_INET, &m_server.sin_addr, ip, sizeof ip);
+        rivt::logmsg("turn: allocate: no response from %s (%s), trying next address\n",
+                     turn_host.c_str(), ip);
+    }
+    freeaddrinfo(res);
+    if (!got_401) {
+        rivt::logmsg("turn: allocate: no response from any %s address\n", turn_host.c_str());
         return false;
     }
     uint16_t rl, nl;
