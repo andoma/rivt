@@ -4,14 +4,18 @@
 
 #include <openssl/ssl.h>
 
+#include <chrono>
 #include <cstdio>
 #include <cstring>
 #include <ctime>
 #include <ifaddrs.h>
 #include <netdb.h>
 #include <arpa/inet.h>
+#include <fcntl.h>
+#include <poll.h>
 #include <sys/socket.h>
 #include <sys/time.h>
+#include "net/sock.h"
 #include <sys/stat.h>
 #include <unistd.h>
 
@@ -55,6 +59,51 @@ bool set_rendezvous_url(const std::string &url) {
 }
 
 // Minimal blocking HTTPS/1.1 request. host from url ("https://host[/...]").
+// TCP connect with an explicit deadline (non-blocking connect + poll),
+// returning a blocking fd with 10s send/recv timeouts. The only phase
+// left to the OS is getaddrinfo, which the resolver bounds (never
+// infinite). Everything else network-wide must carry a timeout: one
+// unbounded BIO_read once froze rivtd's event loop permanently.
+static int tcp_connect_bounded(const std::string &host, uint16_t port, int timeout_ms) {
+    struct addrinfo hints {}, *res = nullptr;
+    hints.ai_family = AF_UNSPEC;
+    hints.ai_socktype = SOCK_STREAM;
+    if (getaddrinfo(host.c_str(), std::to_string(port).c_str(), &hints, &res) != 0 || !res) {
+        dbg("https: dns failed for %s", host.c_str());
+        return -1;
+    }
+    int fd = socket_cloexec(res->ai_family, SOCK_STREAM, 0, /*nonblock=*/true);
+    if (fd < 0) { freeaddrinfo(res); return -1; }
+    int rc = ::connect(fd, res->ai_addr, res->ai_addrlen);
+    freeaddrinfo(res);
+    if (rc < 0 && errno != EINPROGRESS) {
+        dbg("https: connect to %s failed immediately (errno %d)", host.c_str(), errno);
+        ::close(fd);
+        return -1;
+    }
+    if (rc < 0) {
+        struct pollfd pf = {fd, POLLOUT, 0};
+        if (poll(&pf, 1, timeout_ms) <= 0) {
+            dbg("https: connect to %s timed out (%d ms)", host.c_str(), timeout_ms);
+            ::close(fd);
+            return -1;
+        }
+        int err = 0;
+        socklen_t el = sizeof err;
+        if (getsockopt(fd, SOL_SOCKET, SO_ERROR, &err, &el) != 0 || err) {
+            dbg("https: connect to %s failed (so_error %d)", host.c_str(), err);
+            ::close(fd);
+            return -1;
+        }
+    }
+    int fl = fcntl(fd, F_GETFL);
+    fcntl(fd, F_SETFL, fl & ~O_NONBLOCK);
+    struct timeval tv = {10, 0};
+    setsockopt(fd, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof tv);
+    setsockopt(fd, SOL_SOCKET, SO_SNDTIMEO, &tv, sizeof tv);
+    return fd;
+}
+
 static bool https_request(const std::string &url, const std::string &path,
                           const std::string &method, const std::string &body,
                           std::string &response_body) {
@@ -63,38 +112,35 @@ static bool https_request(const std::string &url, const std::string &path,
     auto slash = host.find('/');
     if (slash != std::string::npos) host.resize(slash);
 
+    auto t0 = std::chrono::steady_clock::now();
+    auto elapsed_ms = [t0]() {
+        return (int)std::chrono::duration_cast<std::chrono::milliseconds>(
+                   std::chrono::steady_clock::now() - t0).count();
+    };
+    const char *fail = nullptr;
+
+    int fd = tcp_connect_bounded(host, 443, 10000);
+    if (fd < 0) {
+        dbg("https: %s %s%s -> connect failed (%d ms)", method.c_str(),
+            host.c_str(), path.c_str(), elapsed_ms());
+        return false;
+    }
+
     SSL_CTX *ctx = SSL_CTX_new(TLS_client_method());
-    if (!ctx) return false;
+    if (!ctx) { ::close(fd); return false; }
     SSL_CTX_set_default_verify_paths(ctx);
     SSL_CTX_set_verify(ctx, SSL_VERIFY_PEER, nullptr);
-
-    BIO *bio = BIO_new_ssl_connect(ctx);
-    SSL *ssl = nullptr;
-    BIO_get_ssl(bio, &ssl);
+    SSL *ssl = SSL_new(ctx);
+    SSL_set_fd(ssl, fd);
     SSL_set_mode(ssl, SSL_MODE_AUTO_RETRY);
     SSL_set_tlsext_host_name(ssl, host.c_str());
     SSL_set1_host(ssl, host.c_str());
-    BIO_set_conn_hostname(bio, (host + ":443").c_str());
 
     bool ok = false;
     std::string out;
-    // Bound every phase after connect: without SO_RCVTIMEO a connection
-    // that stalls mid-read (silently dropped by a NAT/middlebox, no RST)
-    // blocks BIO_read forever — one such stall inside rivtd's 60s
-    // membership-sync timer froze the whole daemon permanently.
-    if (BIO_do_connect(bio) == 1) {
-        int fd = BIO_get_fd(bio, nullptr);
-        if (fd >= 0) {
-            struct timeval tv = {10, 0};
-            setsockopt(fd, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof tv);
-            setsockopt(fd, SOL_SOCKET, SO_SNDTIMEO, &tv, sizeof tv);
-        }
+    if (SSL_connect(ssl) != 1) {
+        fail = "tls handshake";
     } else {
-        BIO_free_all(bio);
-        SSL_CTX_free(ctx);
-        return false;
-    }
-    if (BIO_do_handshake(bio) == 1) {
         char req[1024];
         int n = snprintf(req, sizeof req,
                          "%s %s HTTP/1.1\r\n"
@@ -104,16 +150,21 @@ static bool https_request(const std::string &url, const std::string &path,
                          "Content-Length: %zu\r\n"
                          "Connection: close\r\n\r\n",
                          method.c_str(), path.c_str(), host.c_str(), body.size());
-        if (n > 0 && BIO_write(bio, req, n) == n &&
-            (body.empty() || BIO_write(bio, body.data(), (int)body.size()) == (int)body.size())) {
+        if (n > 0 && SSL_write(ssl, req, n) == n &&
+            (body.empty() || SSL_write(ssl, body.data(), (int)body.size()) == (int)body.size())) {
             char buf[4096];
             int r;
-            while ((r = BIO_read(bio, buf, sizeof buf)) > 0) out.append(buf, r);
+            while ((r = SSL_read(ssl, buf, sizeof buf)) > 0) out.append(buf, r);
             ok = true;
+        } else {
+            fail = "write";
         }
     }
-    BIO_free_all(bio);
+    SSL_free(ssl);
+    ::close(fd);
     SSL_CTX_free(ctx);
+    dbg("https: %s %s%s -> %s (%d ms, %zu bytes)", method.c_str(), host.c_str(),
+        path.c_str(), fail ? fail : "ok", elapsed_ms(), out.size());
     if (!ok) return false;
 
     // Split headers/body; tolerate chunked (single-chunk responses from

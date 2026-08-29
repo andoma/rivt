@@ -94,6 +94,7 @@ static QueryResult query_once(const std::string &path, std::vector<RemoteSession
 
     struct timeval tv = {5, 0};
     setsockopt(fd, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof tv);
+    setsockopt(fd, SOL_SOCKET, SO_SNDTIMEO, &tv, sizeof tv);  // wedged daemon: bounded writes too
 
     auto send_msg = [fd](uint16_t type, const proto::Writer &w) {
         uint8_t hdr[proto::FRAME_HEADER_SIZE];

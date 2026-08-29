@@ -70,6 +70,7 @@ int main(int argc, char **argv) {
     // sitting idle overnight between punches.
     bool idle_mode = argc > 1 && std::string(argv[1]) == "idle";
     int idle_interval = argc > 2 ? atoi(argv[2]) : 300;
+    debug_enabled() = true;  // diagnostic tool: always show dbg()
     std::string rdv = net::rendezvous_url();
     if (rdv.empty()) { logmsg("turn-soak: no rendezvous configured\n"); return 1; }
     std::string user, pass, host;
