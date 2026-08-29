@@ -74,6 +74,19 @@ const uint8_t *find_attr(const uint8_t *buf, size_t n, uint16_t want, uint16_t *
     return nullptr;
 }
 
+const char *stun_error_name(int code) {
+    switch (code) {
+        case 401: return "unauthorized";
+        case 403: return "forbidden";
+        case 437: return "allocation mismatch";
+        case 438: return "stale nonce";
+        case 441: return "wrong credentials";
+        case 486: return "allocation quota reached";
+        case 508: return "insufficient capacity";
+        default:  return "?";
+    }
+}
+
 // STUN ERROR-CODE attribute -> numeric code (e.g. 438), 0 if absent.
 int stun_error_code(const uint8_t *buf, size_t n) {
     uint16_t vl;
@@ -174,26 +187,42 @@ bool TurnRelay::allocate(const std::string &turn_host, uint16_t turn_port,
 
     uint8_t resp[2048];
     size_t rn = 0;
+    auto t0 = std::chrono::steady_clock::now();
+    auto ms = [t0]() {
+        return (int)std::chrono::duration_cast<std::chrono::milliseconds>(
+                   std::chrono::steady_clock::now() - t0).count();
+    };
+    size_t naddr = 0;
+    for (struct addrinfo *ai = res; ai; ai = ai->ai_next)
+        if (ai->ai_family == AF_INET) naddr++;
     // Unauthenticated Allocate -> 401 with realm+nonce. The host has
     // several A records and one being unreachable is a real occurrence:
     // try each resolved address (2 attempts x 2s apiece) instead of
     // camping on the first — same lesson as the v6-first STUN bug.
     bool got_401 = false;
+    size_t tried = 0;
+    char ip[INET_ADDRSTRLEN] = {0};
     for (struct addrinfo *ai = res; ai && !got_401; ai = ai->ai_next) {
         if (ai->ai_family != AF_INET) continue;
         memcpy(&m_server, ai->ai_addr, sizeof m_server);
+        inet_ntop(AF_INET, &m_server.sin_addr, ip, sizeof ip);
+        tried++;
+        auto ta = std::chrono::steady_clock::now();
         if (request(0x0003, false, nullptr, resp, &rn, 2)) {
             got_401 = true;
             break;
         }
-        char ip[INET_ADDRSTRLEN] = {0};
-        inet_ntop(AF_INET, &m_server.sin_addr, ip, sizeof ip);
-        rivt::logmsg("turn: allocate: no response from %s (%s), trying next address\n",
-                     turn_host.c_str(), ip);
+        double waited = std::chrono::duration<double>(
+                            std::chrono::steady_clock::now() - ta).count();
+        rivt::logmsg("turn: allocate: %s (address %zu/%zu of %s) sent 2 requests, "
+                     "0 responses in %.1fs — trying next address\n",
+                     ip, tried, naddr, turn_host.c_str(), waited);
     }
     freeaddrinfo(res);
     if (!got_401) {
-        rivt::logmsg("turn: allocate: no response from any %s address\n", turn_host.c_str());
+        rivt::logmsg("turn: allocate FAILED: all %zu address(es) of %s silent "
+                     "(%d ms total) — network drops UDP/3478, or resolver gave "
+                     "dead addresses\n", naddr, turn_host.c_str(), ms());
         return false;
     }
     uint16_t rl, nl;
@@ -208,18 +237,21 @@ bool TurnRelay::allocate(const std::string &turn_host, uint16_t turn_port,
 
     // Authenticated Allocate.
     if (!request(0x0003, true, nullptr, resp, &rn)) {
-        rivt::logmsg("turn: allocate: no response to authenticated request\n");
+        rivt::logmsg("turn: allocate FAILED: %s answered the 401 challenge but went "
+                     "silent on the authenticated Allocate (%d ms in)\n", ip, ms());
         return false;
     }
     if (!(resp[0] == 0x01 && resp[1] == 0x03)) {  // Allocate Success
-        rivt::logmsg("turn: allocate rejected (error %d)\n", stun_error_code(resp, rn));
+        int err = stun_error_code(resp, rn);
+        rivt::logmsg("turn: allocate FAILED: %s rejected credentials/allocation "
+                     "(error %d: %s)\n", ip, err, stun_error_name(err));
         return false;
     }
     struct sockaddr_in relayed {};
     if (!get_xor_addr(resp, rn, A_XRELAY, &relayed)) return false;
-    char ip[INET_ADDRSTRLEN];
-    inet_ntop(AF_INET, &relayed.sin_addr, ip, sizeof ip);
-    m_relayed_host = ip;
+    char rip[INET_ADDRSTRLEN];
+    inet_ntop(AF_INET, &relayed.sin_addr, rip, sizeof rip);
+    m_relayed_host = rip;
     m_relayed_port = ntohs(relayed.sin_port);
 
     m_last_data = std::chrono::steady_clock::now();
@@ -244,8 +276,8 @@ bool TurnRelay::allocate(const std::string &turn_host, uint16_t turn_port,
                    sizeof m_server);
         }, true);
     }
-    rivt::logmsg("turn: relay allocated %s:%u (lifetime 600s, refresh 240s)\n",
-                 m_relayed_host.c_str(), m_relayed_port);
+    rivt::logmsg("turn: relay allocated %s:%u via %s (%d ms, lifetime 600s, "
+                 "refresh 240s)\n", m_relayed_host.c_str(), m_relayed_port, ip, ms());
     return true;
 }
 
@@ -271,10 +303,15 @@ void TurnRelay::refresh() {
     }
     if (ok) ok = resp[0] == 0x01 && resp[1] == 0x04;  // Refresh Success
     if (!ok) {
+        char sip[INET_ADDRSTRLEN] = {0};
+        inet_ntop(AF_INET, &m_server.sin_addr, sip, sizeof sip);
         if (!got)
-            rivt::logmsg("turn: refresh got no response (server unreachable?)\n");
-        else if (!(resp[0] == 0x01 && resp[1] == 0x04))
-            rivt::logmsg("turn: refresh rejected (error %d)\n", stun_error_code(resp, rn));
+            rivt::logmsg("turn: refresh: %s silent for 3x2s requests\n", sip);
+        else if (!(resp[0] == 0x01 && resp[1] == 0x04)) {
+            int err = stun_error_code(resp, rn);
+            rivt::logmsg("turn: refresh rejected by %s (error %d: %s)\n",
+                         sip, err, stun_error_name(err));
+        }
         // The allocation is gone (or the server is unreachable): the
         // relayed address is dead and must never be advertised again.
         // A silent failure here once left a daemon advertising a dead
