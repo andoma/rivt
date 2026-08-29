@@ -46,8 +46,12 @@ RemoteController::RemoteController(RemoteClient &client, Window &window, TabMana
         m_active = true;
         m_sent_cols = m_sent_rows = 0;  // new attach: size not negotiated yet
         if (m_reconnecting) {
-            rivt::logmsg("rivt: re-attached to session %u\n", sid);
+            rivt::logmsg("rivt: re-attached to session %u (%s)\n", sid,
+                         m_client.transport().c_str());
             m_reconnecting = false;
+        } else {
+            rivt::logmsg("rivt: attached to session %u (%s)\n", sid,
+                         m_client.transport().c_str());
         }
         m_fetching.clear();
         m_fetch_done.clear();
