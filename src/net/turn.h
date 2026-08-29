@@ -57,6 +57,7 @@ private:
     EventLoop &m_loop;
     int m_fd = -1;
     int m_refresh_timer = -1;
+    int m_keepalive_timer = -1;
     struct sockaddr_in m_server {};
     std::string m_user, m_pass, m_realm, m_nonce;
     uint8_t m_key[16] = {0};

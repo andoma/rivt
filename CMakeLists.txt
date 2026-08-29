@@ -295,6 +295,23 @@ if(CMAKE_BUILD_TYPE STREQUAL "Debug")
 endif()
 add_test(NAME snapshot COMMAND test_snapshot)
 
+# Standalone TURN relay soak tester (manual diagnostic, not a ctest).
+add_executable(turn_soak
+    tests/turn_soak.cpp
+    src/net/turn.cpp
+    src/net/stun.cpp
+    src/net/rendezvous.cpp
+    src/net/identity.cpp
+    src/core/util.cpp
+    $<IF:$<BOOL:${APPLE}>,src/core/event_loop_kqueue.mm,src/core/event_loop.cpp>
+)
+target_include_directories(turn_soak PRIVATE src)
+target_compile_options(turn_soak PRIVATE -Wall -Wextra -Wpedantic)
+target_link_libraries(turn_soak PRIVATE OpenSSL::SSL OpenSSL::Crypto)
+if(APPLE)
+    target_link_libraries(turn_soak PRIVATE ${COCOA_FRAMEWORK} ${COREFOUNDATION_FRAMEWORK})
+endif()
+
 if(NOT APPLE)
 add_executable(rivtd
     src/daemon/rivtd.cpp

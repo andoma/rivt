@@ -1,5 +1,6 @@
 #include "net/turn.h"
 #include "net/sock.h"
+#include "net/stun.h"
 #include "core/debug.h"
 
 #include <openssl/evp.h>
@@ -96,6 +97,7 @@ bool get_xor_addr(const uint8_t *buf, size_t n, uint16_t type, struct sockaddr_i
 
 TurnRelay::~TurnRelay() {
     if (m_refresh_timer >= 0) m_loop.remove_timer(m_refresh_timer);
+    if (m_keepalive_timer >= 0) m_loop.remove_timer(m_keepalive_timer);
     if (m_fd >= 0) { m_loop.remove_fd(m_fd); ::close(m_fd); }
 }
 
@@ -202,6 +204,24 @@ bool TurnRelay::allocate(const std::string &turn_host, uint16_t turn_port,
     // Steady state: async Data indications; periodic refresh.
     m_loop.add_fd(m_fd, [this](uint32_t ev) { if (ev & EV_READ) on_socket(); });
     m_refresh_timer = m_loop.add_timer(240000, [this]() { refresh(); }, true);
+    // NAT keepalive: the 240s refresh cadence is far above typical NAT
+    // UDP timeouts (30-180s), so on an idle relay our NAT mapping toward
+    // the TURN server expires between refreshes. Control still works
+    // (each refresh re-opens the mapping) but inbound Data indications
+    // arriving in the dead window are dropped — a zombie relay that
+    // looks healthy. A cheap unauthenticated Binding request every 20s
+    // keeps the mapping open in both directions (fire-and-forget; the
+    // response is ignored by the demux). RIVT_TURN_NO_KEEPALIVE=1
+    // disables it for A/B testing.
+    if (!getenv("RIVT_TURN_NO_KEEPALIVE")) {
+        m_keepalive_timer = m_loop.add_timer(20000, [this]() {
+            uint8_t req[20];
+            uint8_t txid[STUN_TXID_LEN];
+            stun_build_request(req, txid);
+            sendto(m_fd, req, sizeof req, 0, (struct sockaddr *)&m_server,
+                   sizeof m_server);
+        }, true);
+    }
     rivt::logmsg("turn: relay allocated %s:%u (lifetime 600s, refresh 240s)\n",
                  m_relayed_host.c_str(), m_relayed_port);
     return true;
