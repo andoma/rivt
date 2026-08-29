@@ -111,7 +111,24 @@ bool get_xor_addr(const uint8_t *buf, size_t n, uint16_t type, struct sockaddr_i
 TurnRelay::~TurnRelay() {
     if (m_refresh_timer >= 0) m_loop.remove_timer(m_refresh_timer);
     if (m_keepalive_timer >= 0) m_loop.remove_timer(m_keepalive_timer);
-    if (m_fd >= 0) { m_loop.remove_fd(m_fd); ::close(m_fd); }
+    if (m_fd >= 0) {
+        // Polite release: a Refresh with LIFETIME=0 frees the allocation
+        // at the server immediately (fire-and-forget; otherwise it just
+        // expires at the end of its 600s lifetime).
+        if (m_alive && !m_nonce.empty()) {
+            Msg m;
+            m.init(0x0004);
+            uint8_t lt[4] = {0, 0, 0, 0};
+            m.attr(A_LIFETIME, lt, 4);
+            m.attr(A_USER, m_user.data(), m_user.size());
+            m.attr(A_REALM, m_realm.data(), m_realm.size());
+            m.attr(A_NONCE, m_nonce.data(), m_nonce.size());
+            m.integrity(m_key);
+            sendto(m_fd, m.buf, m.len, 0, (struct sockaddr *)&m_server, sizeof m_server);
+        }
+        m_loop.remove_fd(m_fd);
+        ::close(m_fd);
+    }
 }
 
 // Blocking send + await matching response (3 tries, 2s each). The

@@ -368,8 +368,27 @@ public:
 
     // Reap retired relays: not current, and silent long enough that no
     // established session still runs through them (session keepalives
-    // arrive at least every 30s). Dead ones go faster.
+    // arrive at least every 30s). Dead ones go faster. With no QUIC
+    // clients at all for a few minutes, release everything — keeping an
+    // allocation warm buys nothing (a fresh one takes ~30ms inside the
+    // answer flow) and just generates refresh/probe traffic forever.
     void turn_maintenance() {
+        bool have_clients = false;
+        for (const auto &c : m_clients)
+            if (!c->dead && c->quic) { have_clients = true; break; }
+        if (!have_clients && m_turn) {
+            if (++m_turn_idle_ticks >= 5) {
+                rivt::logmsg("rivtd: no clients for %d min — releasing %zu turn "
+                             "relay(s)\n", m_turn_idle_ticks, m_relays.size());
+                for (auto &t : m_relays) m_quic->remove_turn(t.get());
+                m_relays.clear();
+                m_turn = nullptr;
+                m_turn_idle_ticks = 0;
+                return;
+            }
+        } else {
+            m_turn_idle_ticks = 0;
+        }
         turn_self_probe();
         std::erase_if(m_relays, [this](std::unique_ptr<net::TurnRelay> &t) {
             if (t.get() == m_turn) return false;
@@ -1230,6 +1249,7 @@ private:
     std::vector<std::unique_ptr<net::TurnRelay>> m_relays;
     net::TurnRelay *m_turn = nullptr;  // current: advertised in answers
     int m_turn_answers = 0;            // answers served by m_turn
+    int m_turn_idle_ticks = 0;         // minutes with no QUIC clients
     std::string m_cred_user, m_cred_pass, m_cred_host;
     uint16_t m_cred_port = 0;
     time_t m_cred_fetched = 0;
