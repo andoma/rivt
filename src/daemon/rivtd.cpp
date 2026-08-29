@@ -1398,6 +1398,15 @@ int main(int argc, char **argv) {
     for (int i = 1; i < argc; i++)
         if (!strcmp(argv[i], "setup")) return run_setup(argc, argv);
 
+    // Install/enable the systemd --user service for an already-
+    // configured daemon (setup offers the same thing after enrollment).
+    for (int i = 1; i < argc; i++)
+        if (!strcmp(argv[i], "install")) {
+            if (!install_systemd_unit()) return 1;
+            printf("rivtd is running under systemd --user and will start on boot.\n");
+            return 0;
+        }
+
     // Pairing / set verbs (foreground, no daemon).
     for (int i = 1; i < argc; i++) {
         if (!strcmp(argv[i], "pair") || !strcmp(argv[i], "join") ||
