@@ -281,7 +281,7 @@ TEST(quic_over_turn_relay) {
     if (!relay.allocate(thost, tport, user, pass)) {
         fprintf(stderr, "  [turn] allocate failed — skipping\n"); return;
     }
-    server->enable_turn(&relay);
+    server->add_turn(&relay);
     std::string got_at_server;
     server->on_data = [&](QuicEngine::Conn *, const uint8_t *d, size_t n) {
         got_at_server.append((const char *)d, n);
