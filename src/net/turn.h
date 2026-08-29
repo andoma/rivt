@@ -1,5 +1,6 @@
 #pragma once
 #include "core/event_loop.h"
+#include <chrono>
 #include <cstdint>
 #include <functional>
 #include <string>
@@ -33,10 +34,21 @@ public:
     const std::string &relayed_host() const { return m_relayed_host; }
     uint16_t relayed_port() const { return m_relayed_port; }
 
-    // False once an allocation refresh has failed: the relayed address
-    // is (or will shortly be) dead at the TURN server, and the owner
-    // must allocate a fresh relay. Never flips back to true.
+    // False once an allocation refresh has failed OR the data path has
+    // gone silent despite self-probes: the relayed address is dead at
+    // the TURN server, and the owner must allocate a fresh relay. Never
+    // flips back to true.
     bool alive() const { return m_alive; }
+
+    // The owner sends a probe through its own relayed address on a
+    // steady cadence (peer traffic keeps Cloudflare's relayed port
+    // warm — control-plane refreshes alone do not). Once armed,
+    // refresh() treats prolonged Data-indication silence as a dead
+    // relay. Control responses are no evidence: a relay was observed
+    // answering refreshes for an hour while forwarding nothing.
+    void expect_probes() { m_expect_probes = true; }
+    bool probing() const { return m_expect_probes; }
+    double seconds_since_data() const;
 
     // Allow a peer (its reflexive address) to reach our relay.
     void permit(const struct sockaddr_in &peer);
@@ -64,6 +76,8 @@ private:
     std::string m_relayed_host;
     uint16_t m_relayed_port = 0;
     bool m_alive = true;
+    bool m_expect_probes = false;
+    std::chrono::steady_clock::time_point m_last_data{};
     // Permitted peers, re-issued on every refresh: TURN permissions expire
     // after 300s, so a one-shot permit stalls a relay session at ~5 min.
     std::vector<struct sockaddr_in> m_peers;

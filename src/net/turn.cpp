@@ -142,8 +142,14 @@ bool TurnRelay::request(uint16_t type, bool with_auth, const struct sockaddr_in 
 
 // Inbound Data indication -> on_data. Shared by the async read path and
 // request()'s wait loop (relayed QUIC arrives on the same socket).
+double TurnRelay::seconds_since_data() const {
+    if (m_last_data == std::chrono::steady_clock::time_point{}) return 0.0;
+    return std::chrono::duration<double>(std::chrono::steady_clock::now() - m_last_data).count();
+}
+
 void TurnRelay::dispatch_data_indication(const uint8_t *buf, size_t n) {
     if (n < 20 || buf[0] != 0x00 || buf[1] != 0x17) return;
+    m_last_data = std::chrono::steady_clock::now();
     struct sockaddr_in peer {};
     uint16_t dl;
     const uint8_t *d = find_attr(buf, n, A_DATA, &dl);
@@ -201,6 +207,7 @@ bool TurnRelay::allocate(const std::string &turn_host, uint16_t turn_port,
     m_relayed_host = ip;
     m_relayed_port = ntohs(relayed.sin_port);
 
+    m_last_data = std::chrono::steady_clock::now();
     // Steady state: async Data indications; periodic refresh.
     m_loop.add_fd(m_fd, [this](uint32_t ev) { if (ev & EV_READ) on_socket(); });
     m_refresh_timer = m_loop.add_timer(240000, [this]() { refresh(); }, true);
@@ -273,6 +280,17 @@ void TurnRelay::refresh() {
             renewed++;
     rivt::logmsg("turn: allocation refreshed, %zu/%zu permission(s) renewed\n",
                  renewed, m_peers.size());
+    // Control-plane success proves nothing about the data path: the
+    // owner self-probes through the relayed address every minute, so
+    // prolonged Data-indication silence means the relay stopped
+    // forwarding — declare it dead so a fresh one gets allocated.
+    if (m_expect_probes && seconds_since_data() > 150.0) {
+        rivt::logmsg("turn: data path silent %.0fs despite probes — relay %s:%u is dead\n",
+                     seconds_since_data(), m_relayed_host.c_str(), m_relayed_port);
+        m_alive = false;
+        if (m_refresh_timer >= 0) { m_loop.remove_timer(m_refresh_timer); m_refresh_timer = -1; }
+        if (m_keepalive_timer >= 0) { m_loop.remove_timer(m_keepalive_timer); m_keepalive_timer = -1; }
+    }
 }
 
 void TurnRelay::permit(const struct sockaddr_in &peer) {

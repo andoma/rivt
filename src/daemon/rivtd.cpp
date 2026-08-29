@@ -193,6 +193,9 @@ public:
                 // Persistent signaling channel so clients behind NAT can
                 // summon us for a hole punch / relay.
                 start_signaling(rdv);
+
+                // Relay data-path warming + liveness (see turn_self_probe).
+                m_loop.add_timer(60000, [this]() { turn_self_probe(); }, true);
             }
         }
         return true;
@@ -244,7 +247,17 @@ public:
     void handle_offer(const std::string &from, const std::vector<net::Candidate> &client_cands) {
         rivt::logmsg("rivtd: punch offer from %.16s... (%zu candidates)\n",
                 from.c_str(), client_cands.size());
-        if (m_turn && !m_turn->alive()) {
+        // Self-probes flow every 60s once armed; >150s of Data-indication
+        // silence means the relayed port is dead no matter what the
+        // control plane says. Check here too — waiting for the next
+        // refresh tick would hand this client a zombie candidate.
+        bool data_dead = m_turn && m_turn->probing() && m_turn->seconds_since_data() > 150.0;
+        if (m_turn && m_turn->alive() && data_dead) {
+            rivt::logmsg("turn: data path silent %.0fs — relay %s:%u is dead\n",
+                         m_turn->seconds_since_data(), m_turn->relayed_host().c_str(),
+                         m_turn->relayed_port());
+        }
+        if (m_turn && (!m_turn->alive() || data_dead)) {
             // A refresh failed since the last offer: the relayed address
             // is dead at the TURN server. Drop it and allocate fresh —
             // holding on to it advertises a black hole forever.
@@ -296,11 +309,18 @@ public:
                 if (sa.ss_family == AF_INET) {
                     auto *s = (const struct sockaddr_in *)&sa;
                     inet_ntop(AF_INET, &s->sin_addr, ip, sizeof ip); port = ntohs(s->sin_port);
+                    m_reflexive = *s;
                 } else {
                     auto *s = (const struct sockaddr_in6 *)&sa;
                     inet_ntop(AF_INET6, &s->sin6_addr, ip, sizeof ip); port = ntohs(s->sin6_port);
+                    if (IN6_IS_ADDR_V4MAPPED(&s->sin6_addr)) {
+                        m_reflexive.sin_family = AF_INET;
+                        m_reflexive.sin_port = s->sin6_port;
+                        memcpy(&m_reflexive.sin_addr, &s->sin6_addr.s6_addr[12], 4);
+                    }
                 }
                 mine.push_back({ip, port, "stun"});
+                turn_self_probe();  // first data-path probe + arm the watchdog
             }
             if (m_turn && m_turn->alive())
                 mine.push_back({m_turn->relayed_host(), m_turn->relayed_port(), "turn"});
@@ -310,6 +330,20 @@ public:
                 rivt::logmsg("rivtd:   [%-8s] %s:%u\n", c.kind.c_str(), c.host.c_str(), c.port);
             if (m_signaling) m_signaling->send(from, /*answer=*/true, mine);
         });
+    }
+
+    // Push one packet of real peer traffic through our own relayed
+    // address: permit our reflexive, punch the relayed address from the
+    // QUIC socket. This keeps Cloudflare's relayed port warm (an idle
+    // one stops forwarding after ~30-40 min even though refreshes keep
+    // succeeding) and gives TurnRelay a hard liveness signal — the
+    // probe must come back as a Data indication.
+    void turn_self_probe() {
+        if (!m_turn || !m_turn->alive() || !m_quic) return;
+        if (m_reflexive.sin_family != AF_INET) return;
+        m_turn->permit(m_reflexive);  // per-IP, deduped after the first
+        m_quic->punch(m_turn->relayed_host(), m_turn->relayed_port());
+        m_turn->expect_probes();
     }
 
     // Load the membership log (auto-init a single-device set if none),
@@ -1149,6 +1183,7 @@ private:
     std::unique_ptr<net::QuicEngine> m_quic;
     std::unique_ptr<net::Signaling> m_signaling;
     std::unique_ptr<net::TurnRelay> m_turn;
+    struct sockaddr_in m_reflexive {};  // our QUIC socket's public v4 addr
     int m_listen_fd = -1;
     int m_sig_fd = -1;
     std::vector<std::unique_ptr<Client>> m_clients;
