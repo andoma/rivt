@@ -69,7 +69,11 @@ int main(int argc, char **argv) {
     // report whether the data path still works — mimics a rivtd relay
     // sitting idle overnight between punches.
     bool idle_mode = argc > 1 && std::string(argv[1]) == "idle";
-    int idle_interval = argc > 2 ? atoi(argv[2]) : 300;
+    // "churn [interval]": one allocation, but a FRESH peer socket per
+    // round (STUN + permit + 3 probes), like a client re-punching every
+    // attempt. Pins down per-peer/per-flow state decay at the relay.
+    bool churn_mode = argc > 1 && std::string(argv[1]) == "churn";
+    int idle_interval = argc > 2 ? atoi(argv[2]) : (churn_mode ? 20 : 300);
     debug_enabled() = true;  // diagnostic tool: always show dbg()
     std::string rdv = net::rendezvous_url();
     if (rdv.empty()) { logmsg("turn-soak: no rendezvous configured\n"); return 1; }
@@ -136,8 +140,64 @@ int main(int argc, char **argv) {
     });
 
     auto probe_window_echoes = std::make_shared<uint64_t>(0);
-    loop.add_timer(1000, [&, probe_window_echoes]() {
+    auto churn_round = std::make_shared<uint64_t>(0);
+    auto churn_fail = std::make_shared<uint64_t>(0);
+    loop.add_timer(1000, [&, probe_window_echoes, churn_round, churn_fail]() {
         uint64_t tick = ++seq;
+        if (churn_mode) {
+            // Cooldown: full radio silence, then resume rounds.
+            static uint64_t quiet_until = 0, round_tick = 0, last_fail = 0, consec = 0;
+            if (quiet_until) {
+                if (tick < quiet_until) return;
+                logmsg("turn-soak: churn: cooldown over, resuming\n");
+                quiet_until = 0;
+                round_tick = 0;
+                consec = 0;
+            }
+            uint64_t rt = round_tick++ % (uint64_t)idle_interval;
+            (void)last_fail;
+            if (rt == 0) {
+                // Fresh peer socket, like a client's new punch attempt.
+                loop.remove_fd(pfd);
+                ::close(pfd);
+                pfd = net::socket_cloexec(AF_INET, SOCK_DGRAM, 0, true);
+                struct sockaddr_in pub {};
+                if (discover_reflexive(pfd, &pub)) relay.permit(pub);
+                loop.add_fd(pfd, [&](uint32_t ev) {
+                    if (!(ev & EV_READ)) return;
+                    uint8_t buf[512];
+                    for (;;) {
+                        ssize_t n = recv(pfd, buf, sizeof buf, 0);
+                        if (n <= 0) break;
+                        if (net::is_stun(buf, (size_t)n)) continue;
+                        echoed++;
+                        last_echo = steady::now();
+                    }
+                });
+                *probe_window_echoes = echoed;
+            }
+            if (rt <= 2) {
+                char msg[64];
+                int n = snprintf(msg, sizeof msg, "churn %llu", (unsigned long long)tick);
+                sendto(pfd, msg, n, 0, (struct sockaddr *)&relayed, sizeof relayed);
+            }
+            if (rt == 5) {
+                uint64_t got = echoed - *probe_window_echoes;
+                (*churn_round)++;
+                if (!got) { (*churn_fail)++; consec++; } else consec = 0;
+                logmsg("turn-soak: churn round %llu: %s (%llu/3, fails %llu/%llu, "
+                       "control alive=%d)\n",
+                       (unsigned long long)*churn_round, got ? "OK" : "FAILED",
+                       (unsigned long long)got, (unsigned long long)*churn_fail,
+                       (unsigned long long)*churn_round, relay.alive());
+                if (consec >= 2) {
+                    logmsg("turn-soak: churn: 2 consecutive failures — going "
+                           "silent 150s to test slot recovery\n");
+                    quiet_until = tick + 150;
+                }
+            }
+            return;
+        }
         if (idle_mode) {
             int phase = (int)(tick % (uint64_t)idle_interval);
             if (phase == 1) *probe_window_echoes = echoed;  // window opens
