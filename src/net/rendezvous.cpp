@@ -10,6 +10,8 @@
 #include <ifaddrs.h>
 #include <netdb.h>
 #include <arpa/inet.h>
+#include <sys/socket.h>
+#include <sys/time.h>
 #include <sys/stat.h>
 #include <unistd.h>
 
@@ -76,7 +78,23 @@ static bool https_request(const std::string &url, const std::string &path,
 
     bool ok = false;
     std::string out;
-    if (BIO_do_connect(bio) == 1 && BIO_do_handshake(bio) == 1) {
+    // Bound every phase after connect: without SO_RCVTIMEO a connection
+    // that stalls mid-read (silently dropped by a NAT/middlebox, no RST)
+    // blocks BIO_read forever — one such stall inside rivtd's 60s
+    // membership-sync timer froze the whole daemon permanently.
+    if (BIO_do_connect(bio) == 1) {
+        int fd = BIO_get_fd(bio, nullptr);
+        if (fd >= 0) {
+            struct timeval tv = {10, 0};
+            setsockopt(fd, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof tv);
+            setsockopt(fd, SOL_SOCKET, SO_SNDTIMEO, &tv, sizeof tv);
+        }
+    } else {
+        BIO_free_all(bio);
+        SSL_CTX_free(ctx);
+        return false;
+    }
+    if (BIO_do_handshake(bio) == 1) {
         char req[1024];
         int n = snprintf(req, sizeof req,
                          "%s %s HTTP/1.1\r\n"

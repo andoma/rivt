@@ -179,8 +179,16 @@ public:
                 publish();
                 m_loop.add_timer(60000, publish, true);
                 // Re-sync the set periodically so newly-paired devices
-                // become trusted without a restart.
-                m_loop.add_timer(60000, [this]() { sync_membership(); }, true);
+                // become trusted without a restart. Forked like publish():
+                // it's blocking HTTPS, and the daemon must never wait on
+                // the network — the child writes the bundle file, which
+                // QUIC re-reads from disk per handshake anyway.
+                m_loop.add_timer(60000, [this]() {
+                    pid_t pid = fork();
+                    if (pid != 0) return;
+                    sync_membership();
+                    _exit(0);
+                }, true);
 
                 // Persistent signaling channel so clients behind NAT can
                 // summon us for a hole punch / relay.
