@@ -93,11 +93,13 @@ public:
     // existing per-window callback model).
     static void set_new_window_handler(std::function<void()> handler);
     static void set_quit_handler(std::function<void()> handler);
-    // Called with false when the system goes to sleep (lid close), true
-    // on wake and whenever the network path changes (wifi <-> tethering).
-    // Only the macOS backend invokes it today.
-    static void set_connectivity_handler(std::function<void(bool awake)> handler);
-    static const std::function<void(bool)> &connectivity_handler();
+    // Connectivity/power events. Sleep is sticky: it parks all remote
+    // maintenance until a real Wake — path events during dark-wake
+    // windows (lid closed, network "up") must not resume anything.
+    // Only the macOS backend emits these today.
+    enum class ConnEvent { Sleep, Wake, PathUp, PathDown };
+    static void set_connectivity_handler(std::function<void(ConnEvent)> handler);
+    static const std::function<void(ConnEvent)> &connectivity_handler();
     static const std::function<void()> &new_window_handler();
     static const std::function<void()> &quit_handler();
 };

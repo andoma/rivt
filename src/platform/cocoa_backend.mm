@@ -127,34 +127,36 @@ void CocoaApp::ensure_initialized() {
 
     build_menu();
 
-    // Sleep/wake + network-path changes drive the remote-link watchdog:
-    // passive while the lid is closed, verify-or-reconnect immediately on
-    // wake or when the route changes (wifi <-> tethering), instead of
-    // waiting for the user to type into a dead session. Both callbacks
-    // arrive on the main runloop, which our poll() pumps.
+    // Sleep gating: lid close reliably fires ScreensDidSleep (before the
+    // machine suspends; WillSleep was observed not to arrive in time),
+    // and dark-wake windows never wake the screens — so the parked state
+    // covers them and the reconnect loop stays quiet behind a closed
+    // lid. Path events are separate: they nudge an awake client but must
+    // never un-park a sleeping one.
+    using CE = rivt::Platform::ConnEvent;
     NSNotificationCenter *nc = [[NSWorkspace sharedWorkspace] notificationCenter];
+    auto emit = [](CE e, const char *what) {
+        rivt::logmsg("rivt: power/net event: %s\n", what);
+        if (const auto &h = rivt::Platform::connectivity_handler()) h(e);
+    };
     [nc addObserverForName:NSWorkspaceWillSleepNotification object:nil queue:nil
-        usingBlock:^(NSNotification *) {
-        rivt::logmsg("rivt: system sleep — parking remote links\n");
-        if (const auto &h = rivt::Platform::connectivity_handler()) h(false);
-    }];
+        usingBlock:^(NSNotification *) { emit(CE::Sleep, "system sleep"); }];
+    [nc addObserverForName:NSWorkspaceScreensDidSleepNotification object:nil queue:nil
+        usingBlock:^(NSNotification *) { emit(CE::Sleep, "screens sleep (lid?)"); }];
     [nc addObserverForName:NSWorkspaceDidWakeNotification object:nil queue:nil
-        usingBlock:^(NSNotification *) {
-        rivt::logmsg("rivt: system wake — verifying remote links\n");
-        if (const auto &h = rivt::Platform::connectivity_handler()) h(true);
-    }];
+        usingBlock:^(NSNotification *) { emit(CE::Wake, "system wake"); }];
+    [nc addObserverForName:NSWorkspaceScreensDidWakeNotification object:nil queue:nil
+        usingBlock:^(NSNotification *) { emit(CE::Wake, "screens wake"); }];
     nw_path_monitor_t mon = nw_path_monitor_create();
     nw_path_monitor_set_queue(mon, dispatch_get_main_queue());
     nw_path_monitor_set_update_handler(mon, ^(nw_path_t path) {
         bool up = nw_path_get_status(path) == nw_path_status_satisfied;
-        // Log transitions only; path re-evaluations with the same status
-        // are frequent and uninteresting.
+        // Emit transitions only; same-status re-evaluations are frequent
+        // and previously reset reconnect budgets for no reason.
         static int last = -1;
-        if ((int)up != last) {
-            last = (int)up;
-            rivt::logmsg("rivt: network path %s\n", up ? "up" : "down");
-        }
-        if (const auto &h = rivt::Platform::connectivity_handler()) h(up);
+        if ((int)up == last) return;
+        last = (int)up;
+        emit(up ? CE::PathUp : CE::PathDown, up ? "network path up" : "network path down");
     });
     nw_path_monitor_start(mon);
 

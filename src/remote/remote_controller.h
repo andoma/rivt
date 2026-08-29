@@ -1,5 +1,6 @@
 #pragma once
 #include "remote/remote_client.h"
+#include "platform/platform.h"
 #include <cstdint>
 #include <functional>
 #include <unordered_map>
@@ -51,10 +52,10 @@ public:
     // requested from the daemon (teardown happens on WindowClosed).
     bool request_close_tab(Tab *tab);
 
-    // System sleep/wake and network-change hook. false = go passive
-    // (lid closed): stop probing and pause reconnect attempts. true =
-    // verify the link now / retry reconnecting with a fresh budget.
-    void set_awake(bool awake);
+    // Sleep parks all remote maintenance (sticky: dark-wake path events
+    // must not resume it); Wake resumes with a fresh reconnect budget;
+    // PathUp nudges an awake client; PathDown parks probes non-stickily.
+    void connectivity_event(Platform::ConnEvent e);
 
     // Fired when the session ends or the daemon goes away.
     std::function<void()> on_exit;
@@ -68,6 +69,7 @@ private:
     void reposition_for_tab_bar();
     void refresh_status();
     void exit();
+    void park();  // stop probes + pending reconnect attempts
 
     RemoteClient &m_client;
     Window &m_window;
@@ -97,6 +99,7 @@ private:
     void begin_reconnect();
     void schedule_reconnect_attempt();
     bool m_reconnecting = false;
+    bool m_asleep = false;  // sticky until a real Wake event
     int m_reconnect_timer = -1;
     int m_reconnect_attempts = 0;
     std::string m_peer_name;

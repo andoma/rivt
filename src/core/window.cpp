@@ -583,8 +583,8 @@ void Window::stop_tmux_pty_mode() {
     m_closing = true;
 }
 
-void Window::set_awake(bool awake) {
-    if (m_remote_controller) m_remote_controller->set_awake(awake);
+void Window::connectivity_event(Platform::ConnEvent e) {
+    if (m_remote_controller) m_remote_controller->connectivity_event(e);
 }
 
 void Window::handle_resize(int w, int h) {

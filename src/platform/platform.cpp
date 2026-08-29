@@ -18,7 +18,7 @@ std::unique_ptr<Platform> Platform::create() {
 namespace {
 std::function<void()> g_new_window_handler;
 std::function<void()> g_quit_handler;
-std::function<void(bool)> g_connectivity_handler;
+std::function<void(Platform::ConnEvent)> g_connectivity_handler;
 } // namespace
 
 void Platform::set_new_window_handler(std::function<void()> handler) {
@@ -30,10 +30,10 @@ void Platform::set_quit_handler(std::function<void()> handler) {
 const std::function<void()> &Platform::new_window_handler() {
     return g_new_window_handler;
 }
-void Platform::set_connectivity_handler(std::function<void(bool)> handler) {
+void Platform::set_connectivity_handler(std::function<void(ConnEvent)> handler) {
     g_connectivity_handler = std::move(handler);
 }
-const std::function<void(bool)> &Platform::connectivity_handler() {
+const std::function<void(Platform::ConnEvent)> &Platform::connectivity_handler() {
     return g_connectivity_handler;
 }
 const std::function<void()> &Platform::quit_handler() {

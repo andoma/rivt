@@ -53,7 +53,7 @@ public:
     void mark_closing(const char *reason = "unspecified");
     // Log why, then fire on_close (owner marks us closing).
     void request_close(const char *reason);
-    void set_awake(bool awake);  // sleep/wake + network-change hook
+    void connectivity_event(Platform::ConnEvent e);  // sleep/wake/path hook
     bool needs_render() const { return m_needs_render; }
     TabManager *tab_manager() { return m_tabs.get(); }
 

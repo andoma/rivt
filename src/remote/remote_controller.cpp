@@ -365,25 +365,43 @@ void RemoteController::detach() {
 // The tab bar appears at 2 tabs and disappears at 1. Grow/shrink the
 // window so the terminal grid is unchanged, and shift existing pane
 // rects by the content-origin delta (same dance as TmuxController).
-void RemoteController::set_awake(bool awake) {
-    if (!awake) {
-        m_client.suspend_probes();
-        if (m_reconnect_timer >= 0) {
-            m_client.loop().remove_timer(m_reconnect_timer);
-            m_reconnect_timer = -1;
+void RemoteController::connectivity_event(Platform::ConnEvent e) {
+    using CE = Platform::ConnEvent;
+    switch (e) {
+    case CE::Sleep:
+        // Sticky: nothing runs (no probes, no reconnects, no relay
+        // flows burned by dark-wake churn) until a real Wake.
+        m_asleep = true;
+        park();
+        break;
+    case CE::PathDown:
+        park();
+        break;
+    case CE::Wake:
+        m_asleep = false;
+        [[fallthrough]];
+    case CE::PathUp:
+        if (m_asleep) break;  // dark-wake path noise: stay parked
+        if (m_reconnecting) {
+            // Fresh budget: the outage was sleep or a network change,
+            // not the peer being gone.
+            rivt::logmsg("rivt: resuming reconnect (budget reset)\n");
+            m_reconnect_attempts = 0;
+            schedule_reconnect_attempt();
+        } else if (m_active) {
+            m_client.verify_link();
         }
-        return;
-    }
-    if (m_reconnecting) {
-        // Fresh budget: the outage was the machine being asleep or
-        // between networks, not the peer being gone.
-        rivt::logmsg("rivt: connectivity change while reconnecting — budget reset\n");
-        m_reconnect_attempts = 0;
-        schedule_reconnect_attempt();
-    } else if (m_active) {
-        m_client.verify_link();
+        break;
     }
     refresh_status();
+}
+
+void RemoteController::park() {
+    m_client.suspend_probes();
+    if (m_reconnect_timer >= 0) {
+        m_client.loop().remove_timer(m_reconnect_timer);
+        m_reconnect_timer = -1;
+    }
 }
 
 void RemoteController::begin_reconnect() {
@@ -408,6 +426,7 @@ void RemoteController::refresh_status() {
 }
 
 void RemoteController::schedule_reconnect_attempt() {
+    if (m_asleep) return;  // parked; Wake resumes via connectivity_event
     if (m_reconnect_timer >= 0) return;  // one pending attempt at a time
     // Roaming laptops disappear for a while (network switch, lid close,
     // captive portal); keep trying for several minutes, backing off from
