@@ -53,6 +53,8 @@ public:
     void mark_closing(const char *reason = "unspecified");
     // Log why, then fire on_close (owner marks us closing).
     void request_close(const char *reason);
+    // Close the focused pane via its owner (tmux/rivtd/local).
+    void close_focused_pane_routed(const char *reason);
     void connectivity_event(Platform::ConnEvent e);  // sleep/wake/path hook
     bool needs_render() const { return m_needs_render; }
     TabManager *tab_manager() { return m_tabs.get(); }

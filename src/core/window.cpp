@@ -208,9 +208,7 @@ void Window::setup_callbacks() {
         if (on_new_window) on_new_window();
     };
     m_platform->on_menu_close_window = [this]() {
-        if (m_tabs && !m_tabs->close_focused_pane()) {
-            request_close("menu close, last pane");
-        }
+        close_focused_pane_routed("menu close, last pane");
     };
     m_platform->on_menu_copy = [this]() {
         Pane *pane = m_tabs ? m_tabs->focused_pane() : nullptr;
@@ -333,6 +331,23 @@ bool Window::init_remote(const std::string &socket_path, uint32_t attach_sid,
     m_platform->show_window();
     setup_callbacks();
     return true;
+}
+
+// Close the focused pane through whoever owns it. tmux and rivtd panes
+// are closed daemon-side — teardown arrives later as protocol events
+// that keep the controller's bookkeeping consistent. Freeing them
+// locally (as the Cmd-W menu path once did) leaves dangling Pane
+// pointers in the controller maps: heap-use-after-free on the next
+// layout/window message.
+void Window::close_focused_pane_routed(const char *reason) {
+    if (m_tmux_controller && m_tmux_controller->is_active()) {
+        m_tmux_client->send_command("kill-pane");
+    } else if (m_remote_controller && m_remote_controller->is_active()) {
+        m_remote_controller->close_focused_pane();
+    } else if (m_tabs && !m_tabs->close_focused_pane()) {
+        request_close(reason);
+    }
+    m_needs_render = true;
 }
 
 void Window::request_close(const char *reason) {
@@ -786,16 +801,7 @@ void Window::handle_key(const KeyEvent &raw_key) {
                 return;
             case XKB_KEY_W:
             case XKB_KEY_w:
-                if (m_tmux_controller && m_tmux_controller->is_active()) {
-                    m_tmux_client->send_command("kill-pane");
-                } else if (m_remote_controller && m_remote_controller->is_active()) {
-                    m_remote_controller->close_focused_pane();
-                } else {
-                    if (!m_tabs->close_focused_pane()) {
-                        request_close("last pane closed by key");
-                    }
-                }
-                m_needs_render = true;
+                close_focused_pane_routed("last pane closed by key");
                 return;
             // Pane navigation
             case XKB_KEY_Left:
