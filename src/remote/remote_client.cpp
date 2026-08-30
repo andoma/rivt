@@ -461,6 +461,7 @@ void RemoteClient::close() {
     agent_close_all();
     m_qin.clear();
     m_pane_stream.clear();
+    m_in_seq.clear();
     if (m_turn_fallback_timer >= 0) {
         m_loop.remove_timer(m_turn_fallback_timer);
         m_turn_fallback_timer = -1;
@@ -577,6 +578,12 @@ void RemoteClient::process_buffer(std::string &in, uint64_t quic_stream) {
             if (on_snapshot) on_snapshot(h.channel, payload, h.len);
         } else if (h.type == proto::PANE_SCROLLBACK) {
             if (on_scrollback) on_scrollback(h.channel, payload, h.len);
+        } else if (h.type == proto::PANE_ACK) {
+            if (h.len >= 4 && on_pane_ack) {
+                uint32_t seq;
+                memcpy(&seq, payload, 4);
+                on_pane_ack(h.channel, seq);
+            }
         }
         in.erase(0, total);
     }
@@ -911,8 +918,14 @@ void RemoteClient::kill_session(uint32_t sid) {
     send_control((uint16_t)MsgType::KillSession, w);
 }
 
-void RemoteClient::send_input(uint32_t pane_id, const char *data, size_t len) {
-    send_frame((uint16_t)pane_id, proto::PANE_IN, data, len);
+uint32_t RemoteClient::send_input(uint32_t pane_id, const char *data, size_t len) {
+    uint32_t seq = ++m_in_seq[pane_id];
+    std::string payload;
+    payload.reserve(4 + len);
+    payload.append((const char *)&seq, 4);
+    payload.append(data, len);
+    send_frame((uint16_t)pane_id, proto::PANE_IN, payload.data(), payload.size());
+    return seq;
 }
 
 } // namespace rivt

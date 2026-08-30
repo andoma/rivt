@@ -98,6 +98,11 @@ struct PaneRef {
     uint32_t sid;
     uint32_t wid;
     Pane *pane;
+    // Input-echo acking (predictive echo): last input seq written to the
+    // PTY, which client sent it, and what has been acked back to it.
+    uint32_t in_seq = 0;
+    uint32_t acked_seq = 0;
+    Client *in_client = nullptr;
 };
 
 static constexpr uint32_t HANDOVER_VERSION = 1;
@@ -827,9 +832,14 @@ private:
 
     void handle_pane_input(Client *c, uint16_t pane_id, const uint8_t *data, size_t len) {
         if (!c->hello) { kill_client(c); return; }
+        if (len < 4) return;  // v5: u32 seq prefixes the bytes
         auto it = m_panes.find(pane_id);
         if (it == m_panes.end() || it->second.sid != c->attached) return;
-        it->second.pane->write((const char *)data, len);
+        uint32_t seq;
+        memcpy(&seq, data, 4);
+        it->second.in_seq = seq;
+        it->second.in_client = c;
+        it->second.pane->write((const char *)data + 4, len - 4);
     }
 
     void send_error(Client *c, const char *msg) {
@@ -924,6 +934,16 @@ private:
             for (auto &c : m_clients) {
                 if (c->dead || c->attached != sid) continue;
                 send_frame(c.get(), pid, proto::PANE_OUT, d, n);
+                // Ack the sender's input after the output that reflects
+                // it — the client's echo predictions compare against the
+                // authoritative screen only once this arrives.
+                auto pit = m_panes.find(pid);
+                if (pit != m_panes.end() && pit->second.in_client == c.get() &&
+                    pit->second.in_seq != pit->second.acked_seq) {
+                    pit->second.acked_seq = pit->second.in_seq;
+                    uint32_t seq = pit->second.acked_seq;
+                    send_frame(c.get(), pid, proto::PANE_ACK, &seq, 4);
+                }
                 // Backpressure: a QUIC peer slower than the PTY pauses
                 // the producer; the shell blocks on the full PTY buffer.
                 // (Shared-pane caveat: one slow client stalls the pane
@@ -1225,6 +1245,8 @@ private:
             m_sweep_clients = false;
             for (auto &c : m_clients)
                 if (c->dead) {
+                    for (auto &[pid, ref] : m_panes)
+                        if (ref.in_client == c.get()) ref.in_client = nullptr;
                     for (auto it = m_agent_streams.begin(); it != m_agent_streams.end();) {
                         if (it->second.client == c.get()) {
                             m_loop.remove_fd(it->second.fd);

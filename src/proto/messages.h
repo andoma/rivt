@@ -11,9 +11,12 @@ constexpr uint32_t PROTO_VERSION = 5;  // 5: per-pane QUIC streams
 // Frame types on pane channels (channel = pane id, > 0)
 enum PaneFrame : uint16_t {
     PANE_OUT = 0,       // daemon -> client: raw VT output bytes
-    PANE_IN = 1,        // client -> daemon: raw input bytes
+    PANE_IN = 1,        // client -> daemon: u32 seq, raw input bytes (v5+)
     PANE_SNAPSHOT = 2,  // daemon -> client: proto::Snapshot blob
     PANE_SCROLLBACK = 3,// daemon -> client: u32 start_abs, u32 n, n lines
+    PANE_ACK = 4,       // daemon -> client: u32 seq — the output sent so
+                        //   far reflects this client's input through seq
+                        //   (predictive-echo confirmation anchor)
                         //   (Snapshot::encode_line each, oldest first)
 };
 

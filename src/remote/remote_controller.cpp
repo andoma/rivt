@@ -189,6 +189,10 @@ RemoteController::RemoteController(RemoteClient &client, Window &window, TabMana
         if (m_reconnecting) exit();
     };
 
+    m_client.on_pane_ack = [this](uint32_t pane_id, uint32_t seq) {
+        shadow_ack(pane_id, seq);
+    };
+
     m_client.on_status = [this]() { refresh_status(); };
     // Re-evaluate staleness periodically (no rx for a while => stale).
     m_status_timer = m_client.loop().add_timer(5000, [this]() { refresh_status(); }, true);
@@ -330,8 +334,9 @@ Pane *RemoteController::create_remote_pane(Tab *tab, uint32_t pane_id, int cols,
     Pane *pane = m_tabs.add_pane_to_tab(tab, cols, rows);
     if (!pane) return nullptr;
 
-    pane->m_write_callback = [this, pane_id](const std::string &data) {
-        m_client.send_input(pane_id, data.data(), data.size());
+    pane->m_write_callback = [this, pane_id, pane](const std::string &data) {
+        uint32_t seq = m_client.send_input(pane_id, data.data(), data.size());
+        shadow_predict(pane_id, pane, data, seq);
     };
     // Query responses (DA, DSR, ...) are answered once, by the daemon's
     // authoritative parser. The replica must stay silent or every query
@@ -365,6 +370,80 @@ void RemoteController::detach() {
 // The tab bar appears at 2 tabs and disappears at 1. Grow/shrink the
 // window so the terminal grid is unchanged, and shift existing pane
 // rects by the content-origin delta (same dance as TmuxController).
+// ---------------- shadow echo predictor ----------------
+
+void RemoteController::shadow_predict(uint32_t pane_id, Pane *pane,
+                                      const std::string &data, uint32_t seq) {
+    m_shadow_stats.keys++;
+    const ScreenBuffer &sb = pane->screen();
+    // The milestone-2 prediction policy, evaluated but not rendered:
+    // single printable ASCII byte, primary screen, cursor away from the
+    // right margin.
+    if (data.size() != 1 || (unsigned char)data[0] < 0x20 ||
+        (unsigned char)data[0] > 0x7e || sb.alt_screen() ||
+        sb.cursor_col() >= sb.cols() - 2)
+        return;
+    auto &v = m_shadow[pane_id];
+    shadow_expire(v);
+    v.push_back({seq, sb.cursor_row(), sb.cursor_col(), (uint32_t)(unsigned char)data[0],
+                 std::chrono::steady_clock::now()});
+    m_shadow_stats.predicted++;
+}
+
+void RemoteController::shadow_ack(uint32_t pane_id, uint32_t seq) {
+    auto sit = m_shadow.find(pane_id);
+    if (sit == m_shadow.end()) return;
+    auto pit = m_pane_map.find(pane_id);
+    if (pit == m_pane_map.end()) return;
+    const ScreenBuffer &sb = pit->second.pane->screen();
+    auto &v = sit->second;
+    shadow_expire(v);
+    size_t done = 0;
+    for (auto &pr : v) {
+        if (pr.seq > seq) break;
+        double ms = std::chrono::duration<double, std::milli>(
+                        std::chrono::steady_clock::now() - pr.at).count();
+        bool hit = !sb.alt_screen() && pr.row < sb.rows() && pr.col < sb.cols() &&
+                   sb.cell(pr.row, pr.col).codepoint == pr.ch;
+        if (hit) {
+            m_shadow_stats.hits++;
+            m_shadow_stats.latency_sum_ms += ms;
+        } else {
+            m_shadow_stats.miss_cell++;
+        }
+        dbg("predict[%u]: seq %u '%c' %s (%.0f ms)", pane_id, pr.seq, (char)pr.ch,
+            hit ? "HIT" : "miss", ms);
+        done++;
+    }
+    v.erase(v.begin(), v.begin() + done);
+    if ((m_shadow_stats.hits + m_shadow_stats.miss_cell) % 50 == 0 &&
+        m_shadow_stats.predicted) {
+        uint64_t scored = m_shadow_stats.hits + m_shadow_stats.miss_cell +
+                          m_shadow_stats.miss_timeout;
+        dbg("predict: %llu keys, %llu predicted, %llu/%llu hits (%.0f%%), "
+            "%llu stale-timeout, mean confirm %.0f ms",
+            (unsigned long long)m_shadow_stats.keys,
+            (unsigned long long)m_shadow_stats.predicted,
+            (unsigned long long)m_shadow_stats.hits,
+            (unsigned long long)scored,
+            scored ? 100.0 * m_shadow_stats.hits / scored : 0.0,
+            (unsigned long long)m_shadow_stats.miss_timeout,
+            m_shadow_stats.hits ? m_shadow_stats.latency_sum_ms / m_shadow_stats.hits : 0.0);
+    }
+}
+
+void RemoteController::shadow_expire(std::vector<ShadowPred> &v) {
+    auto now = std::chrono::steady_clock::now();
+    size_t stale = 0;
+    while (stale < v.size() &&
+           std::chrono::duration<double>(now - v[stale].at).count() > 1.5)
+        stale++;
+    if (stale) {
+        m_shadow_stats.miss_timeout += stale;
+        v.erase(v.begin(), v.begin() + stale);
+    }
+}
+
 void RemoteController::connectivity_event(Platform::ConnEvent e) {
     using CE = Platform::ConnEvent;
     switch (e) {

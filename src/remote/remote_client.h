@@ -83,7 +83,9 @@ public:
     void close_window(uint32_t window_id);
     void fetch_scrollback(uint32_t pane_id, uint32_t end_abs, uint32_t count);
     void kill_session(uint32_t session_id);
-    void send_input(uint32_t pane_id, const char *data, size_t len);
+    // Sends input tagged with a per-pane sequence number; returns it.
+    // PANE_ACK confirms the daemon's output reflects input through seq.
+    uint32_t send_input(uint32_t pane_id, const char *data, size_t len);
 
     // Events. on_disconnect may be invoked from inside the read
     // callback; receivers must defer destruction of this object
@@ -100,6 +102,7 @@ public:
     std::function<void(uint32_t pane_id, const uint8_t *, size_t)> on_scrollback;
     std::function<void(uint32_t pane_id, const char *, size_t)> on_output;
     std::function<void(uint32_t pane_id)> on_pane_exited;
+    std::function<void(uint32_t pane_id, uint32_t seq)> on_pane_ack;
     std::function<void(uint32_t sid)> on_session_closed;
     std::function<void(const std::string &)> on_error;
     std::function<void()> on_disconnect;
@@ -178,6 +181,7 @@ private:
     std::string m_in, m_out;
     std::unordered_map<uint64_t, std::string> m_qin;      // per-QUIC-stream reassembly
     std::unordered_map<uint16_t, uint64_t> m_pane_stream;  // learned pane -> stream
+    std::unordered_map<uint32_t, uint32_t> m_in_seq;        // per-pane input seq
     size_t m_out_off = 0;
     bool m_write_armed = false;
     bool m_failing = false;

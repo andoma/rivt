@@ -7,7 +7,9 @@
 #include <picoquic.h>
 #include <picoquic_utils.h>
 
+#include <chrono>
 #include <cstring>
+#include <cstdlib>
 #include <netdb.h>
 #include <arpa/inet.h>
 #include <sys/socket.h>
@@ -19,6 +21,67 @@ static bool qdbg() {
     static int v = getenv("RIVT_QUIC_DEBUG") ? 1 : 0;
     return v;
 }
+
+// Link impairment simulator (client-side testing: predictive echo, bad
+// cell coverage, metro tunnels). RIVT_NETEM applies to every datagram
+// in both directions on this engine's socket:
+//   RIVT_NETEM="delay=300,jitter=200,loss=10,outage=8/45"
+//     delay ms base one-way, jitter ms uniform, loss %, and an
+//     outage of N seconds every M seconds (total blackout).
+// Presets: RIVT_NETEM=metro (grim), cell (mediocre), edge (awful).
+struct Netem {
+    bool enabled = false;
+    int delay_ms = 0, jitter_ms = 0;
+    double loss = 0.0;
+    int outage_s = 0, outage_period_s = 0;
+    std::chrono::steady_clock::time_point start = std::chrono::steady_clock::now();
+
+    Netem() {
+        const char *spec = getenv("RIVT_NETEM");
+        if (!spec || !*spec) return;
+        enabled = true;
+        std::string v = spec;
+        if (v == "metro")     v = "delay=250,jitter=350,loss=12,outage=10/40";
+        else if (v == "cell") v = "delay=120,jitter=60,loss=3";
+        else if (v == "edge") v = "delay=500,jitter=400,loss=20,outage=15/60";
+        auto num = [&](const char *key) -> int {
+            auto p = v.find(std::string(key) + "=");
+            return p == std::string::npos ? 0 : atoi(v.c_str() + p + strlen(key) + 1);
+        };
+        delay_ms = num("delay");
+        jitter_ms = num("jitter");
+        loss = num("loss") / 100.0;
+        auto o = v.find("outage=");
+        if (o != std::string::npos) {
+            outage_s = atoi(v.c_str() + o + 7);
+            auto sl = v.find('/', o);
+            if (sl != std::string::npos) outage_period_s = atoi(v.c_str() + sl + 1);
+        }
+        rivt::logmsg("netem: ACTIVE delay=%dms jitter=%dms loss=%.0f%% outage=%ds/%ds\n",
+                     delay_ms, jitter_ms, loss * 100, outage_s, outage_period_s);
+    }
+
+    bool in_outage() const {
+        if (!outage_s || !outage_period_s) return false;
+        double t = std::chrono::duration<double>(
+                       std::chrono::steady_clock::now() - start).count();
+        double phase = t - (int)(t / outage_period_s) * (double)outage_period_s;
+        return phase < outage_s;
+    }
+    // <0 = drop; otherwise extra one-way delay in ms.
+    int impair() {
+        if (!enabled) return 0;
+        if (in_outage()) return -1;
+        if (loss > 0 && (rand() / (double)RAND_MAX) < loss) return -1;
+        int j = jitter_ms ? rand() % (2 * jitter_ms + 1) - jitter_ms : 0;
+        int d = delay_ms + j;
+        return d > 0 ? d : 0;
+    }
+    static Netem &instance() {
+        static Netem n;
+        return n;
+    }
+};
 
 static constexpr char ALPN[] = "rivt/1";
 static constexpr uint64_t CONTROL_STREAM = 0;  // client's first bidi stream
@@ -332,6 +395,21 @@ void QuicEngine::on_socket(uint32_t events) {
             continue;  // never hand STUN to picoquic
         }
         if (qdbg()) rivt::logmsg("quic[%p] rx %zd\n", (void *)this, n);
+        int impair = Netem::instance().impair();
+        if (impair < 0) continue;  // netem: dropped
+        if (impair > 0) {
+            std::string pkt((const char *)buf, n);
+            struct sockaddr_storage from_copy = from;
+            m_loop.add_timer(impair, [this, pkt, from_copy]() {
+                struct sockaddr_storage f = from_copy;
+                picoquic_incoming_packet(m_quic, (uint8_t *)pkt.data(), pkt.size(),
+                                         (struct sockaddr *)&f,
+                                         (struct sockaddr *)&m_local, 0, 0,
+                                         picoquic_current_time());
+                pump();
+            }, false);
+            continue;
+        }
         picoquic_incoming_packet(m_quic, buf, (size_t)n, (struct sockaddr *)&from,
                                  (struct sockaddr *)&m_local, 0, 0,
                                  picoquic_current_time());
@@ -450,8 +528,30 @@ void QuicEngine::pump() {
                                               &if_index, nullptr, &last);
         if (rc != 0 || send_len == 0) break;
         struct sockaddr_in rpeer {};
+        int impair = Netem::instance().impair();
+        if (impair < 0) continue;  // netem: dropped
         if (TurnRelay *tr = relay_for(to, &rpeer)) {
+            if (impair > 0) {
+                std::string pkt((const char *)buf, send_len);
+                struct sockaddr_in peer_copy = rpeer;
+                m_loop.add_timer(impair, [tr, peer_copy, pkt]() {
+                    tr->send_to(peer_copy, (const uint8_t *)pkt.data(), pkt.size());
+                }, false);
+                continue;
+            }
             tr->send_to(rpeer, buf, send_len);
+            continue;
+        }
+        if (impair > 0) {
+            std::string pkt((const char *)buf, send_len);
+            struct sockaddr_storage to_copy = to;
+            int fd = m_fd;
+            socklen_t sl = to.ss_family == AF_INET ? sizeof(struct sockaddr_in)
+                                                   : sizeof(struct sockaddr_in6);
+            m_loop.add_timer(impair, [fd, to_copy, pkt, sl]() {
+                sendto(fd, pkt.data(), pkt.size(), 0,
+                       (const struct sockaddr *)&to_copy, sl);
+            }, false);
             continue;
         }
         ssize_t sent = sendto(m_fd, buf, send_len, 0, (struct sockaddr *)&to,
