@@ -100,6 +100,15 @@ private:
     bool m_cursor_blink_on = true;
     bool m_closing = false;
     int m_hover_close_tab = -1;  // tab index whose close button is hovered
+    // Pane-divider drag (resize). Local tabs adjust the layout tree
+    // directly; server-managed tabs send cell deltas to the daemon and
+    // wait for LayoutUpdate to move the rects.
+    LayoutNode *m_divider_drag = nullptr;
+    Pane *m_edge_pane = nullptr;
+    bool m_edge_horizontal = false;
+    int m_edge_anchor = 0;       // press position along the drag axis
+    int m_edge_sent = 0;         // cells already sent this drag
+    bool m_resize_cursor = false;
 
     std::unique_ptr<TmuxClient> m_tmux_client;
     std::unique_ptr<TmuxController> m_tmux_controller;

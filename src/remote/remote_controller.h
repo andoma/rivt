@@ -49,6 +49,9 @@ public:
     void split(bool horizontal);
     void close_focused_pane();
     void new_window();
+    // Divider drag on a remote pane: move its right/bottom edge by
+    // delta cells (daemon relayouts; LayoutUpdate brings new rects).
+    void resize_pane_edge(Pane *pane, bool horizontal, int delta_cells);
     // Returns true if the tab is remote-managed and its close was
     // requested from the daemon (teardown happens on WindowClosed).
     bool request_close_tab(Tab *tab);

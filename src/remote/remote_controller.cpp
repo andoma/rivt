@@ -613,6 +613,16 @@ void RemoteController::begin_reconnect() {
     schedule_reconnect_attempt();
 }
 
+void RemoteController::resize_pane_edge(Pane *pane, bool horizontal, int delta_cells) {
+    if (!m_active || !delta_cells) return;
+    for (const auto &[id, e] : m_pane_map)
+        if (e.pane == pane) {
+            m_client.resize_pane(id, horizontal ? delta_cells : 0,
+                                 horizontal ? 0 : delta_cells);
+            return;
+        }
+}
+
 void RemoteController::refresh_status() {
     std::string t = m_client.transport();
     std::string state;

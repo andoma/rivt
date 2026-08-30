@@ -76,6 +76,10 @@ void LayoutTree::compute_layout(int x, int y, int w, int h, int border_width,
 
 void LayoutTree::compute_node(LayoutNode *node, int x, int y, int w, int h,
                                int border_width, int cell_w, int cell_h) {
+    node->x = x;
+    node->y = y;
+    node->w = w;
+    node->h = h;
     if (node->is_leaf()) {
         node->pane->rect = {x, y, w, h};
         // Compute grid dimensions from pixel size
@@ -115,6 +119,72 @@ void LayoutTree::compute_node(LayoutNode *node, int x, int y, int w, int h,
         compute_node(node->first.get(), x, y, w, first_h, border_width, cell_w, cell_h);
         compute_node(node->second.get(), x, second_y, w, second_h, border_width, cell_w, cell_h);
     }
+}
+
+static LayoutNode *divider_at_node(LayoutNode *node, int px, int py, int slop) {
+    if (!node || node->is_leaf()) return nullptr;
+    // Deepest match wins: check children before this node's own divider.
+    if (LayoutNode *d = divider_at_node(node->first.get(), px, py, slop)) return d;
+    if (LayoutNode *d = divider_at_node(node->second.get(), px, py, slop)) return d;
+    if (node->split_dir == SplitDir::Vertical) {
+        // Divider is the vertical band between first's right edge and
+        // second's left edge.
+        int lo = node->first->x + node->first->w - slop;
+        int hi = node->second->x + slop;
+        if (px >= lo && px <= hi && py >= node->y && py < node->y + node->h)
+            return node;
+    } else {
+        int lo = node->first->y + node->first->h - slop;
+        int hi = node->second->y + slop;
+        if (py >= lo && py <= hi && px >= node->x && px < node->x + node->w)
+            return node;
+    }
+    return nullptr;
+}
+
+LayoutNode *LayoutTree::divider_at(int px, int py, int slop) {
+    return divider_at_node(m_root.get(), px, py, slop);
+}
+
+void LayoutTree::drag_divider(LayoutNode *split, int px, int py) {
+    if (!split || split->is_leaf()) return;
+    float r;
+    if (split->split_dir == SplitDir::Vertical)
+        r = split->w > 0 ? (float)(px - split->x) / split->w : split->ratio;
+    else
+        r = split->h > 0 ? (float)(py - split->y) / split->h : split->ratio;
+    if (r < 0.05f) r = 0.05f;
+    if (r > 0.95f) r = 0.95f;
+    split->ratio = r;
+}
+
+static bool subtree_contains(const LayoutNode *node, Pane *t) {
+    if (!node) return false;
+    if (node->is_leaf()) return node->pane == t;
+    return subtree_contains(node->first.get(), t) ||
+           subtree_contains(node->second.get(), t);
+}
+
+static LayoutNode *edge_split_node(LayoutNode *node, Pane *t, SplitDir dir) {
+    if (!node || node->is_leaf()) return nullptr;
+    if (LayoutNode *d = edge_split_node(node->first.get(), t, dir)) return d;
+    if (LayoutNode *d = edge_split_node(node->second.get(), t, dir)) return d;
+    if (node->split_dir == dir && subtree_contains(node->first.get(), t))
+        return node;
+    return nullptr;
+}
+
+bool LayoutTree::resize_edge(Pane *target, bool horizontal, int delta) {
+    SplitDir dir = horizontal ? SplitDir::Vertical : SplitDir::Horizontal;
+    LayoutNode *split = edge_split_node(m_root.get(), target, dir);
+    if (!split) return false;
+    int extent = horizontal ? split->w : split->h;
+    if (extent <= 0) return false;
+    float r = split->ratio + (float)delta / (float)extent;
+    if (r < 0.05f) r = 0.05f;
+    if (r > 0.95f) r = 0.95f;
+    split->ratio = r;
+    return true;
 }
 
 Pane *LayoutTree::pane_at(int px, int py) const {

@@ -452,6 +452,8 @@ uint32_t modifier_keysym_from_keycode(unsigned short kc) {
     switch (_backend ? _backend->_impl_cursor() : rivt::Platform::MouseCursor::Default) {
         case rivt::Platform::MouseCursor::Hand: c = [NSCursor pointingHandCursor]; break;
         case rivt::Platform::MouseCursor::Text: c = [NSCursor IBeamCursor]; break;
+        case rivt::Platform::MouseCursor::ResizeH: c = [NSCursor resizeLeftRightCursor]; break;
+        case rivt::Platform::MouseCursor::ResizeV: c = [NSCursor resizeUpDownCursor]; break;
         default: break;
     }
     [c set];

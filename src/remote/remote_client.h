@@ -82,6 +82,7 @@ public:
     void resize_session(int cols, int rows);
     void split(uint32_t pane_id, bool horizontal);  // false = side by side
     void close_pane(uint32_t pane_id);
+    void resize_pane(uint32_t pane_id, int dx_cells, int dy_cells);
     void new_window();
     void close_window(uint32_t window_id);
     void fetch_scrollback(uint32_t pane_id, uint32_t end_abs, uint32_t count);

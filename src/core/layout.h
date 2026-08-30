@@ -21,6 +21,9 @@ struct LayoutNode {
     std::unique_ptr<LayoutNode> second;
 
     bool is_leaf() const { return pane != nullptr; }
+
+    // Geometry from the last compute_layout (for divider hit-testing).
+    int x = 0, y = 0, w = 0, h = 0;
 };
 
 class LayoutTree {
@@ -46,6 +49,18 @@ public:
 
     // Find the pane at pixel coordinates (px, py). Returns nullptr if none.
     Pane *pane_at(int px, int py) const;
+
+    // Divider hit test: the split whose divider passes within `slop`
+    // pixels of (px, py), or nullptr. Uses last compute_layout geometry.
+    LayoutNode *divider_at(int px, int py, int slop);
+    // Move a split's divider to the given pixel position along its axis
+    // (ratio clamped so both sides keep at least ~one cell).
+    static void drag_divider(LayoutNode *split, int px, int py);
+    // Move target's trailing (right/bottom) divider by delta units along
+    // the axis: adjusts the deepest ancestor split of the matching
+    // orientation whose first subtree holds target. False if target has
+    // no such divider (it sits on the container edge).
+    bool resize_edge(Pane *target, bool horizontal, int delta);
 
     // Navigate from a pane in a direction. Returns the target pane, or from if no neighbor.
     Pane *navigate(Pane *from, NavDir dir) const;

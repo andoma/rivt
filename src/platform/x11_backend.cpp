@@ -759,7 +759,8 @@ void X11Backend::create_cursors() {
     xcb_font_t font = xcb_generate_id(m_conn);
     xcb_open_font(m_conn, font, 6, "cursor");
 
-    // XC_left_ptr = 68, XC_hand2 = 60, XC_xterm = 152
+    // XC_left_ptr = 68, XC_hand2 = 60, XC_xterm = 152,
+    // XC_sb_h_double_arrow = 108, XC_sb_v_double_arrow = 116
     m_cursor_default = xcb_generate_id(m_conn);
     xcb_create_glyph_cursor(m_conn, m_cursor_default, font, font, 68, 69, 0xFFFF, 0xFFFF, 0xFFFF, 0, 0, 0);
 
@@ -768,6 +769,12 @@ void X11Backend::create_cursors() {
 
     m_cursor_text = xcb_generate_id(m_conn);
     xcb_create_glyph_cursor(m_conn, m_cursor_text, font, font, 152, 153, 0xFFFF, 0xFFFF, 0xFFFF, 0, 0, 0);
+
+    m_cursor_resize_h = xcb_generate_id(m_conn);
+    xcb_create_glyph_cursor(m_conn, m_cursor_resize_h, font, font, 108, 109, 0xFFFF, 0xFFFF, 0xFFFF, 0, 0, 0);
+
+    m_cursor_resize_v = xcb_generate_id(m_conn);
+    xcb_create_glyph_cursor(m_conn, m_cursor_resize_v, font, font, 116, 117, 0xFFFF, 0xFFFF, 0xFFFF, 0, 0, 0);
 
     xcb_close_font(m_conn, font);
 }
@@ -779,6 +786,8 @@ void X11Backend::set_mouse_cursor(MouseCursor mc) {
     xcb_cursor_t cursor = m_cursor_default;
     if (mc == MouseCursor::Hand) cursor = m_cursor_hand;
     else if (mc == MouseCursor::Text) cursor = m_cursor_text;
+    else if (mc == MouseCursor::ResizeH) cursor = m_cursor_resize_h;
+    else if (mc == MouseCursor::ResizeV) cursor = m_cursor_resize_v;
 
     if (cursor) {
         uint32_t values[] = { cursor };

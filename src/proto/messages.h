@@ -52,6 +52,9 @@ enum class MsgType : uint16_t {
                           //   protocol versions (it exists to upgrade
                           //   mismatched daemons): re-exec with sessions
                           //   preserved
+    ResizePane = 16,      // u32 pane_id, i32 dx, i32 dy (cells): move the
+                          //   pane's right (dx) or bottom (dy) divider
+                          //   edge; LayoutUpdate broadcasts the result
     Ping = 14,            // - ; no reply. Exists to elicit a QUIC ACK
                           //   datagram: the client's link watchdog sends
                           //   it after wake / network change to verify

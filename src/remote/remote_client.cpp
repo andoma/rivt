@@ -892,6 +892,14 @@ void RemoteClient::verify_link() {
     send_control((uint16_t)MsgType::Ping, w);  // send_frame arms the ACK probe
 }
 
+void RemoteClient::resize_pane(uint32_t pane_id, int dx, int dy) {
+    proto::Writer w;
+    w.u32(pane_id);
+    w.i32(dx);
+    w.i32(dy);
+    send_control((uint16_t)MsgType::ResizePane, w);
+}
+
 void RemoteClient::hello() {
     proto::Writer w;
     w.u32(proto::PROTO_VERSION);

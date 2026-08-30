@@ -125,6 +125,8 @@ private:
     xcb_cursor_t m_cursor_default = 0;
     xcb_cursor_t m_cursor_hand = 0;
     xcb_cursor_t m_cursor_text = 0;
+    xcb_cursor_t m_cursor_resize_h = 0;
+    xcb_cursor_t m_cursor_resize_v = 0;
     MouseCursor m_current_cursor = MouseCursor::Default;
 };
 

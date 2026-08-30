@@ -864,6 +864,25 @@ private:
             m_sessions.erase(it);
             break;
         }
+        case MsgType::ResizePane: {
+            uint32_t pid = r.u32();
+            int32_t dx = r.i32();
+            int32_t dy = r.i32();
+            if (!r.ok || (!dx && !dy)) return;
+            auto it = m_panes.find((uint16_t)pid);
+            if (it == m_panes.end() || it->second.sid != c->attached) return;
+            Session &s = m_sessions.at(it->second.sid);
+            for (auto &win : s.windows) {
+                if (win.id != it->second.wid) continue;
+                // Window layout is in cell units, so deltas are direct.
+                bool changed = false;
+                if (dx) changed |= win.layout.resize_edge(it->second.pane, true, dx);
+                if (dy) changed |= win.layout.resize_edge(it->second.pane, false, dy);
+                if (changed) relayout(s, win);
+                break;
+            }
+            break;
+        }
         case MsgType::AgentData: {
             uint32_t id = r.u32();
             if (!r.ok) return;

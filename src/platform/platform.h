@@ -62,7 +62,7 @@ public:
     }
 
     // Mouse cursor appearance
-    enum class MouseCursor { Default, Hand, Text };
+    enum class MouseCursor { Default, Hand, Text, ResizeH, ResizeV };
     virtual void set_mouse_cursor(MouseCursor /*cursor*/) {}
 
     // Display info

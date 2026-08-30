@@ -971,6 +971,76 @@ void Window::handle_mouse(const MouseEvent &mouse) {
         m_needs_render = true;
     }
 
+    // Pane divider drag in progress: consume everything until release
+    if (m_divider_drag || m_edge_pane) {
+        if (mouse.motion) {
+            if (m_divider_drag) {
+                LayoutTree::drag_divider(m_divider_drag, mouse.x, mouse.y);
+                recompute();
+                m_needs_render = true;
+            } else {
+                int cell = m_edge_horizontal ? met.cell_width : met.cell_height;
+                int pos = m_edge_horizontal ? mouse.x : mouse.y;
+                int cells = cell > 0 ? (pos - m_edge_anchor) / cell : 0;
+                if (cells != m_edge_sent && m_remote_controller)
+                    m_remote_controller->resize_pane_edge(
+                        m_edge_pane, m_edge_horizontal, cells - m_edge_sent);
+                m_edge_sent = cells;
+            }
+        } else if (!mouse.pressed) {
+            m_divider_drag = nullptr;
+            m_edge_pane = nullptr;
+        }
+        return;
+    }
+
+    // Divider hover / grab: local tabs hit the layout tree; rivtd tabs
+    // hit the gaps between pane rects (the daemon owns that layout, so a
+    // drag there sends cell deltas instead of moving anything locally).
+    if (mouse.y >= bar_h) {
+        LayoutNode *div = nullptr;
+        Pane *edge_pane = nullptr;
+        bool edge_h = false;
+        if (!tab->tmux_managed) {
+            div = tab->layout.divider_at(mouse.x, mouse.y, 4);
+        } else if (m_remote_controller && m_remote_controller->is_active()) {
+            for (auto &p : tab->panes) {
+                const auto &r = p->rect;
+                if (mouse.y >= r.y && mouse.y < r.y + r.h &&
+                    mouse.x >= r.x + r.w && mouse.x < r.x + r.w + met.cell_width &&
+                    r.x + r.w + met.cell_width < m_win_w) {
+                    edge_pane = p.get(); edge_h = true; break;
+                }
+                if (mouse.x >= r.x && mouse.x < r.x + r.w &&
+                    mouse.y >= r.y + r.h && mouse.y < r.y + r.h + met.cell_height &&
+                    r.y + r.h + met.cell_height < m_win_h) {
+                    edge_pane = p.get(); edge_h = false; break;
+                }
+            }
+        }
+        if (div || edge_pane) {
+            bool horiz = div ? (div->split_dir == SplitDir::Vertical) : edge_h;
+            m_platform->set_mouse_cursor(horiz ? Platform::MouseCursor::ResizeH
+                                               : Platform::MouseCursor::ResizeV);
+            m_resize_cursor = true;
+            if (mouse.pressed && !mouse.motion && mouse.button == MouseButton::Left) {
+                if (div) {
+                    m_divider_drag = div;
+                } else {
+                    m_edge_pane = edge_pane;
+                    m_edge_horizontal = edge_h;
+                    m_edge_anchor = edge_h ? mouse.x : mouse.y;
+                    m_edge_sent = 0;
+                }
+            }
+            return;
+        }
+        if (m_resize_cursor) {
+            m_resize_cursor = false;
+            m_platform->set_mouse_cursor(Platform::MouseCursor::Default);
+        }
+    }
+
     // Route mouse to correct pane
     Pane *target_pane = nullptr;
     if (tab->tmux_managed) {
