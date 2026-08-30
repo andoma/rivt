@@ -102,7 +102,7 @@ public:
     std::function<void(uint32_t pane_id, const uint8_t *, size_t)> on_scrollback;
     std::function<void(uint32_t pane_id, const char *, size_t)> on_output;
     std::function<void(uint32_t pane_id)> on_pane_exited;
-    std::function<void(uint32_t pane_id, uint32_t seq)> on_pane_ack;
+    std::function<void(uint32_t pane_id, uint32_t seq, bool echo_off)> on_pane_ack;
     std::function<void(uint32_t sid)> on_session_closed;
     std::function<void(const std::string &)> on_error;
     std::function<void()> on_disconnect;

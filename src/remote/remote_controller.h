@@ -106,25 +106,36 @@ private:
     std::string m_peer_name;
     int m_status_timer = -1;
 
-    // Shadow echo predictor: computes what predictive echo *would* show
-    // and scores it against the authoritative screen on PANE_ACK — no
-    // speculative rendering yet. Stats under --debug guide milestone 2.
+    // Predictive echo. Every prediction is scored against the
+    // authoritative screen on PANE_ACK; speculative glyphs are only
+    // *drawn* (underlined, via ScreenBuffer::predictions) once the
+    // confidence gate opens. RIVT_PREDICT=off|on|auto (default auto:
+    // show after a confirmed streak when confirm latency is worth it).
     struct ShadowPred {
         uint32_t seq;
         int row, col;
         uint32_t ch;
         std::chrono::steady_clock::time_point at;
     };
-    std::unordered_map<uint32_t, std::vector<ShadowPred>> m_shadow;
+    struct PanePredict {
+        std::vector<ShadowPred> preds;
+        int streak = 0;
+        bool showing = false;
+        bool remote_echo_off = false;
+    };
+    std::unordered_map<uint32_t, PanePredict> m_shadow;
     struct {
         uint64_t keys = 0, predicted = 0, hits = 0, miss_cell = 0,
                  miss_timeout = 0;
         double latency_sum_ms = 0;
+        double confirm_ewma_ms = 0;
     } m_shadow_stats;
     void shadow_predict(uint32_t pane_id, Pane *pane, const std::string &data,
                         uint32_t seq);
-    void shadow_ack(uint32_t pane_id, uint32_t seq);
-    void shadow_expire(std::vector<ShadowPred> &v);
+    void shadow_ack(uint32_t pane_id, uint32_t seq, bool echo_off);
+    void shadow_expire(uint32_t pane_id, PanePredict &ps);
+    void predict_reset(uint32_t pane_id, PanePredict &ps, const char *why);
+    void predict_overlay_sync(uint32_t pane_id, const PanePredict &ps);
 
     int m_cols = 80, m_rows = 24;
     int m_cell_w = 0, m_cell_h = 0;

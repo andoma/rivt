@@ -35,6 +35,7 @@
 #include <ctime>
 #include <errno.h>
 #include <signal.h>
+#include <termios.h>
 #include <sys/signalfd.h>
 #include <sys/socket.h>
 #include <sys/stat.h>
@@ -103,6 +104,7 @@ struct PaneRef {
     uint32_t in_seq = 0;
     uint32_t acked_seq = 0;
     Client *in_client = nullptr;
+    bool echo_off = false;  // PTY termios ECHO state as last observed
 };
 
 static constexpr uint32_t HANDOVER_VERSION = 1;
@@ -936,13 +938,27 @@ private:
                 send_frame(c.get(), pid, proto::PANE_OUT, d, n);
                 // Ack the sender's input after the output that reflects
                 // it — the client's echo predictions compare against the
-                // authoritative screen only once this arrives.
+                // authoritative screen only once this arrives. The ack
+                // carries the PTY's live termios ECHO bit: we own the
+                // master, so password prompts (ECHO off) are a fact we
+                // read, not a heuristic. An ECHO flip is also announced
+                // unprompted (same frame, unchanged seq) so the client
+                // suppresses predictions before the first password key.
                 auto pit = m_panes.find(pid);
-                if (pit != m_panes.end() && pit->second.in_client == c.get() &&
-                    pit->second.in_seq != pit->second.acked_seq) {
-                    pit->second.acked_seq = pit->second.in_seq;
-                    uint32_t seq = pit->second.acked_seq;
-                    send_frame(c.get(), pid, proto::PANE_ACK, &seq, 4);
+                if (pit != m_panes.end()) {
+                    struct termios tio;
+                    bool eoff = tcgetattr(pane->pty().fd(), &tio) == 0 &&
+                                !(tio.c_lflag & ECHO);
+                    bool flip = eoff != pit->second.echo_off;
+                    pit->second.echo_off = eoff;
+                    if (pit->second.in_client == c.get() &&
+                        (flip || pit->second.in_seq != pit->second.acked_seq)) {
+                        pit->second.acked_seq = pit->second.in_seq;
+                        uint8_t buf[5];
+                        memcpy(buf, &pit->second.acked_seq, 4);
+                        buf[4] = eoff ? 1 : 0;
+                        send_frame(c.get(), pid, proto::PANE_ACK, buf, 5);
+                    }
                 }
                 // Backpressure: a QUIC peer slower than the PTY pauses
                 // the producer; the shell blocks on the full PTY buffer.

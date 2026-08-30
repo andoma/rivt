@@ -106,6 +106,9 @@ RemoteController::RemoteController(RemoteClient &client, Window &window, TabMana
         // layout geometry wins.
         if (p->screen().cols() != cols || p->screen().rows() != rows)
             p->resize(cols, rows);
+        // Fresh authoritative state: outstanding predictions are void.
+        auto shit = m_shadow.find(pane_id);
+        if (shit != m_shadow.end()) predict_reset(pane_id, shit->second, "snapshot");
         if (p->on_needs_render) p->on_needs_render();
     };
 
@@ -189,8 +192,8 @@ RemoteController::RemoteController(RemoteClient &client, Window &window, TabMana
         if (m_reconnecting) exit();
     };
 
-    m_client.on_pane_ack = [this](uint32_t pane_id, uint32_t seq) {
-        shadow_ack(pane_id, seq);
+    m_client.on_pane_ack = [this](uint32_t pane_id, uint32_t seq, bool echo_off) {
+        shadow_ack(pane_id, seq, echo_off);
     };
 
     m_client.on_status = [this]() { refresh_status(); };
@@ -370,44 +373,108 @@ void RemoteController::detach() {
 // The tab bar appears at 2 tabs and disappears at 1. Grow/shrink the
 // window so the terminal grid is unchanged, and shift existing pane
 // rects by the content-origin delta (same dance as TmuxController).
-// ---------------- shadow echo predictor ----------------
+// ---------------- predictive echo ----------------
+
+static int predict_mode() {  // 0=off 1=auto 2=on
+    static int mode = [] {
+        const char *e = getenv("RIVT_PREDICT");
+        if (e && !strcmp(e, "off")) return 0;
+        if (e && !strcmp(e, "on")) return 2;
+        return 1;
+    }();
+    return mode;
+}
+
+// Push the current outstanding predictions into the pane's render
+// overlay (or clear it when not showing / none left).
+void RemoteController::predict_overlay_sync(uint32_t pane_id, const PanePredict &ps) {
+    auto pit = m_pane_map.find(pane_id);
+    if (pit == m_pane_map.end()) return;
+    auto &ov = pit->second.pane->screen().predictions;
+    ov.cells.clear();
+    if (!ps.showing || ps.preds.empty()) {
+        ov.clear();
+        if (pit->second.pane->on_needs_render) pit->second.pane->on_needs_render();
+        return;
+    }
+    for (const auto &pr : ps.preds)
+        ov.cells.push_back({pr.row, pr.col, pr.ch});
+    ov.cursor_row = ps.preds.back().row;
+    ov.cursor_col = ps.preds.back().col + 1;
+    ov.active = true;
+    if (pit->second.pane->on_needs_render) pit->second.pane->on_needs_render();
+}
+
+void RemoteController::predict_reset(uint32_t pane_id, PanePredict &ps, const char *why) {
+    if (ps.showing || !ps.preds.empty())
+        dbg("predict[%u]: reset (%s)", pane_id, why);
+    ps.preds.clear();
+    ps.streak = 0;
+    ps.showing = false;
+    predict_overlay_sync(pane_id, ps);
+}
 
 void RemoteController::shadow_predict(uint32_t pane_id, Pane *pane,
                                       const std::string &data, uint32_t seq) {
+    if (predict_mode() == 0) return;
     m_shadow_stats.keys++;
+    auto &ps = m_shadow[pane_id];
+    shadow_expire(pane_id, ps);
     const ScreenBuffer &sb = pane->screen();
-    // The milestone-2 prediction policy, evaluated but not rendered:
-    // single printable ASCII byte, primary screen, cursor away from the
-    // right margin.
-    if (data.size() != 1 || (unsigned char)data[0] < 0x20 ||
-        (unsigned char)data[0] > 0x7e || sb.alt_screen())
+
+    // Backspace during a burst: retract the last unconfirmed prediction
+    // instead of waiting a round trip.
+    if (data.size() == 1 && (data[0] == 0x7f || data[0] == 0x08)) {
+        if (!ps.preds.empty()) {
+            ps.preds.pop_back();
+            predict_overlay_sync(pane_id, ps);
+        }
         return;
-    auto &v = m_shadow[pane_id];
-    shadow_expire(v);
-    // Speculative cursor: with confirm latency above the typing
-    // interval, the replica cursor lags earlier keystrokes — each
-    // prediction lands one column after the previous outstanding one,
-    // not at the stale authoritative cursor.
+    }
+
+    // Policy: single printable ASCII, primary screen, echo known on,
+    // cursor (speculative) clear of the right margin.
+    if (data.size() != 1 || (unsigned char)data[0] < 0x20 ||
+        (unsigned char)data[0] > 0x7e || sb.alt_screen() || ps.remote_echo_off)
+        return;
     int row = sb.cursor_row();
     int col = sb.cursor_col();
-    if (!v.empty() && v.back().row == row && v.back().col + 1 > col)
-        col = v.back().col + 1;
+    if (!ps.preds.empty() && ps.preds.back().row == row &&
+        ps.preds.back().col + 1 > col)
+        col = ps.preds.back().col + 1;
     if (col >= sb.cols() - 2) return;
-    v.push_back({seq, row, col, (uint32_t)(unsigned char)data[0],
-                 std::chrono::steady_clock::now()});
+    ps.preds.push_back({seq, row, col, (uint32_t)(unsigned char)data[0],
+                        std::chrono::steady_clock::now()});
     m_shadow_stats.predicted++;
+
+    // Confidence gate: show after a confirmed streak; in auto mode only
+    // when the measured confirm latency makes prediction worthwhile.
+    if (!ps.showing) {
+        bool latency_worth = m_shadow_stats.confirm_ewma_ms >= 60.0;
+        if (predict_mode() == 2 || (ps.streak >= 8 && latency_worth)) {
+            ps.showing = true;
+            dbg("predict[%u]: showing (streak %d, confirm %.0f ms)", pane_id,
+                ps.streak, m_shadow_stats.confirm_ewma_ms);
+        }
+    }
+    if (ps.showing) predict_overlay_sync(pane_id, ps);
 }
 
-void RemoteController::shadow_ack(uint32_t pane_id, uint32_t seq) {
+void RemoteController::shadow_ack(uint32_t pane_id, uint32_t seq, bool echo_off) {
     auto sit = m_shadow.find(pane_id);
     if (sit == m_shadow.end()) return;
+    auto &ps = sit->second;
+    if (echo_off != ps.remote_echo_off) {
+        ps.remote_echo_off = echo_off;
+        if (echo_off) predict_reset(pane_id, ps, "remote echo off");
+    }
     auto pit = m_pane_map.find(pane_id);
     if (pit == m_pane_map.end()) return;
     const ScreenBuffer &sb = pit->second.pane->screen();
-    auto &v = sit->second;
-    shadow_expire(v);
+    shadow_expire(pane_id, ps);
     size_t done = 0;
-    for (auto &pr : v) {
+    bool missed = false;
+    for (auto &pr : ps.preds) {
         if (pr.seq > seq) break;
         double ms = std::chrono::duration<double, std::milli>(
                         std::chrono::steady_clock::now() - pr.at).count();
@@ -416,14 +483,25 @@ void RemoteController::shadow_ack(uint32_t pane_id, uint32_t seq) {
         if (hit) {
             m_shadow_stats.hits++;
             m_shadow_stats.latency_sum_ms += ms;
+            m_shadow_stats.confirm_ewma_ms =
+                m_shadow_stats.confirm_ewma_ms
+                    ? 0.8 * m_shadow_stats.confirm_ewma_ms + 0.2 * ms
+                    : ms;
+            ps.streak++;
         } else {
             m_shadow_stats.miss_cell++;
+            missed = true;
         }
         dbg("predict[%u]: seq %u '%c' %s (%.0f ms)", pane_id, pr.seq, (char)pr.ch,
             hit ? "HIT" : "miss", ms);
         done++;
     }
-    v.erase(v.begin(), v.begin() + done);
+    ps.preds.erase(ps.preds.begin(), ps.preds.begin() + done);
+    if (missed) {
+        predict_reset(pane_id, ps, "misprediction");
+    } else if (done) {
+        predict_overlay_sync(pane_id, ps);
+    }
     if ((m_shadow_stats.hits + m_shadow_stats.miss_cell) % 50 == 0 &&
         m_shadow_stats.predicted) {
         uint64_t scored = m_shadow_stats.hits + m_shadow_stats.miss_cell +
@@ -440,15 +518,16 @@ void RemoteController::shadow_ack(uint32_t pane_id, uint32_t seq) {
     }
 }
 
-void RemoteController::shadow_expire(std::vector<ShadowPred> &v) {
+void RemoteController::shadow_expire(uint32_t pane_id, PanePredict &ps) {
     auto now = std::chrono::steady_clock::now();
     size_t stale = 0;
-    while (stale < v.size() &&
-           std::chrono::duration<double>(now - v[stale].at).count() > 1.5)
+    while (stale < ps.preds.size() &&
+           std::chrono::duration<double>(now - ps.preds[stale].at).count() > 1.5)
         stale++;
     if (stale) {
         m_shadow_stats.miss_timeout += stale;
-        v.erase(v.begin(), v.begin() + stale);
+        ps.preds.erase(ps.preds.begin(), ps.preds.begin() + stale);
+        predict_reset(pane_id, ps, "stale predictions");
     }
 }
 

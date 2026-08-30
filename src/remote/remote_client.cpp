@@ -582,7 +582,8 @@ void RemoteClient::process_buffer(std::string &in, uint64_t quic_stream) {
             if (h.len >= 4 && on_pane_ack) {
                 uint32_t seq;
                 memcpy(&seq, payload, 4);
-                on_pane_ack(h.channel, seq);
+                bool echo_off = h.len >= 5 && payload[4];
+                on_pane_ack(h.channel, seq, echo_off);
             }
         }
         in.erase(0, total);

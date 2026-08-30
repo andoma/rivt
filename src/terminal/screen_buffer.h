@@ -144,6 +144,18 @@ public:
 
     // Selection
     Selection selection;
+
+    // Predictive-echo overlay: speculative glyphs + cursor drawn by the
+    // renderer until the daemon's echo confirms them. Render-only —
+    // the parser and all authoritative state ignore it entirely.
+    struct Predictions {
+        struct PCell { int row, col; uint32_t ch; };
+        std::vector<PCell> cells;
+        int cursor_row = -1, cursor_col = -1;
+        bool active = false;
+        void clear() { cells.clear(); active = false; cursor_row = cursor_col = -1; }
+    };
+    Predictions predictions;
     int absolute_line(int screen_row) const {
         return m_scrollback_trimmed + (int)m_scrollback.size() + m_viewport_offset + screen_row;
     }

@@ -359,7 +359,16 @@ void Renderer::build_pane_vertices(const ScreenBuffer &buffer, const Config &con
         int abs_line = buffer.absolute_line(row);
 
         for (int col = 0; col < buffer.cols() && col < (int)line.cells.size(); col++) {
-            const Cell &cell = line.cells[col];
+            Cell cell = line.cells[col];
+            // Predictive echo: speculative glyphs overlay the buffer at
+            // render time only, underlined until the echo confirms.
+            if (buffer.predictions.active && buffer.viewport_offset() == 0)
+                for (const auto &pc : buffer.predictions.cells)
+                    if (pc.row == row && pc.col == col) {
+                        cell.codepoint = pc.ch;
+                        cell.attrs = (cell.attrs & ~ATTR_WIDE_CONT) | ATTR_UNDERLINE;
+                        break;
+                    }
             float x_left = ox + col * m.cell_width;
             float x_right = x_left + m.cell_width;
 
@@ -483,6 +492,10 @@ void Renderer::build_pane_vertices(const ScreenBuffer &buffer, const Config &con
     if (buffer.cursor_visible() && buffer.viewport_offset() == 0) {
         int cr = buffer.cursor_row();
         int cc = buffer.cursor_col();
+        if (buffer.predictions.active && buffer.predictions.cursor_row >= 0) {
+            cr = buffer.predictions.cursor_row;
+            cc = buffer.predictions.cursor_col;
+        }
         float cx = ox + cc * m.cell_width;
         float cy = oy + cr * m.cell_height;
         float cur_r = ((config.cursor_color >> 16) & 0xFF) / 255.0f;
