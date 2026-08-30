@@ -482,6 +482,9 @@ void RemoteController::shadow_predict(uint32_t pane_id, Pane *pane,
             ps.showing = true;
             dbg("predict[%u]: showing (streak %d, confirm %.0f ms)", pane_id,
                 ps.streak, m_shadow_stats.confirm_ewma_ms);
+        } else if (m_shadow_stats.predicted % 8 == 0) {
+            dbg("predict[%u]: gate closed (streak %d/8, confirm %.0f ms, "
+                "need >=60)", pane_id, ps.streak, m_shadow_stats.confirm_ewma_ms);
         }
     }
     if (ps.showing) predict_overlay_sync(pane_id, ps);
@@ -546,10 +549,14 @@ void RemoteController::shadow_ack(uint32_t pane_id, uint32_t seq, bool echo_off)
 }
 
 void RemoteController::shadow_expire(uint32_t pane_id, PanePredict &ps) {
+    // Generous: confirms on the links prediction exists for take 0.5-2s,
+    // and predictions must survive a 10s outage (they confirm after it —
+    // that persistence IS the feature). Expiry only catches truly
+    // unechoed input; termios echo-off already covers passwords.
     auto now = std::chrono::steady_clock::now();
     size_t stale = 0;
     while (stale < ps.preds.size() &&
-           std::chrono::duration<double>(now - ps.preds[stale].at).count() > 1.5)
+           std::chrono::duration<double>(now - ps.preds[stale].at).count() > 10.0)
         stale++;
     if (stale) {
         m_shadow_stats.miss_timeout += stale;
