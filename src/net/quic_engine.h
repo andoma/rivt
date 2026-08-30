@@ -3,6 +3,7 @@
 #include "net/stun.h"
 #include <cstdint>
 #include <functional>
+#include <map>
 #include <sys/socket.h>
 #include <netinet/in.h>
 #include <functional>
@@ -32,11 +33,22 @@ public:
         bool established = false;
         bool dead = false;
         void *user = nullptr;  // owner's per-connection state
-        // Outbound bytes the stack hasn't pulled yet (active-stream
-        // API: picoquic asks for data when it can actually send).
-        std::string out;
-        size_t out_off = 0;
-        size_t queued() const { return out.size() - out_off; }
+        // Outbound bytes per stream that the stack hasn't pulled yet
+        // (active-stream API: picoquic asks per stream when it can
+        // send). Control rides stream 0; each pane gets its own stream
+        // so one pane's bulk output can't head-of-line-block input or
+        // other panes.
+        struct StreamBuf {
+            std::string out;
+            size_t out_off = 0;
+            size_t queued() const { return out.size() - out_off; }
+        };
+        std::map<uint64_t, StreamBuf> streams;
+        size_t queued() const {  // aggregate, for connection backpressure
+            size_t n = 0;
+            for (const auto &[id, sb] : streams) n += sb.queued();
+            return n;
+        }
     };
 
     // Mutual authentication in both modes: our cert/key from identity,
@@ -74,14 +86,14 @@ public:
 
     std::function<void(Conn *)> on_connected;   // handshake complete
     std::function<void(Conn *)> on_closed;      // any teardown, fires once
-    std::function<void(Conn *, const uint8_t *, size_t)> on_data;
+    std::function<void(Conn *, uint64_t stream, const uint8_t *, size_t)> on_data;
     // Send queue fell below the low-water mark: resume paused producers.
     std::function<void(Conn *)> on_drained;
 
     static constexpr size_t SEND_HIGH_WATER = 3 << 20;
     static constexpr size_t SEND_LOW_WATER = 512 << 10;
 
-    void send(Conn *c, const void *data, size_t len);
+    void send(Conn *c, uint64_t stream, const void *data, size_t len);
     void close_conn(Conn *c);
     Conn *client_conn() { return m_client_conn; }  // client mode only
     // Seconds since any datagram last arrived on this engine (keepalives

@@ -21,7 +21,7 @@ static bool qdbg() {
 }
 
 static constexpr char ALPN[] = "rivt/1";
-static constexpr uint64_t STREAM_ID = 0;  // client's first bidi stream
+static constexpr uint64_t CONTROL_STREAM = 0;  // client's first bidi stream
 
 // C trampoline: callback_ctx is the engine for brand-new inbound
 // connections (quic default ctx) and the Conn afterwards.
@@ -222,19 +222,25 @@ int QuicEngine::handle_event(picoquic_cnx_t *cnx, Conn *conn, uint64_t stream_id
         if (on_connected) on_connected(conn);
         break;
     case picoquic_callback_prepare_to_send: {
-        // The stack can send on our stream: feed it from conn->out.
-        // 'bytes' is the opaque buffer context, 'length' the max size.
-        size_t avail = conn->queued();
+        // The stack can send on this stream: feed it from that stream's
+        // buffer. 'bytes' is the opaque buffer context, 'length' the max.
+        auto it = conn->streams.find(stream_id);
+        if (it == conn->streams.end()) {
+            picoquic_provide_stream_data_buffer(bytes, 0, 0, 0);
+            break;
+        }
+        Conn::StreamBuf &sb = it->second;
+        size_t avail = sb.queued();
         size_t chunk = avail < length ? avail : length;
         bool before_high = conn->queued() >= SEND_LOW_WATER;
         uint8_t *dst = picoquic_provide_stream_data_buffer(bytes, chunk, 0,
                                                            chunk < avail);
         if (dst && chunk > 0) {
-            memcpy(dst, conn->out.data() + conn->out_off, chunk);
-            conn->out_off += chunk;
-            if (conn->out_off == conn->out.size()) {
-                conn->out.clear();
-                conn->out_off = 0;
+            memcpy(dst, sb.out.data() + sb.out_off, chunk);
+            sb.out_off += chunk;
+            if (sb.out_off == sb.out.size()) {
+                sb.out.clear();
+                sb.out_off = 0;
             }
         }
         if (before_high && conn->queued() < SEND_LOW_WATER && on_drained && !conn->dead)
@@ -243,9 +249,12 @@ int QuicEngine::handle_event(picoquic_cnx_t *cnx, Conn *conn, uint64_t stream_id
     }
     case picoquic_callback_stream_data:
     case picoquic_callback_stream_fin:
-        if (stream_id == STREAM_ID && length > 0 && on_data && !conn->dead)
-            on_data(conn, bytes, length);
-        if (event == picoquic_callback_stream_fin) mark_closed(conn);
+        if (length > 0 && on_data && !conn->dead)
+            on_data(conn, stream_id, bytes, length);
+        // Fin on the control stream ends the connection; a pane stream
+        // finishing is just that pane going away.
+        if (event == picoquic_callback_stream_fin && stream_id == CONTROL_STREAM)
+            mark_closed(conn);
         break;
     case picoquic_callback_close:
     case picoquic_callback_application_close:
@@ -280,10 +289,13 @@ int QuicEngine::handle_event(picoquic_cnx_t *cnx, Conn *conn, uint64_t stream_id
     return 0;
 }
 
-void QuicEngine::send(Conn *c, const void *data, size_t len) {
+void QuicEngine::send(Conn *c, uint64_t stream, const void *data, size_t len) {
     if (!c || c->dead) return;
-    c->out.append((const char *)data, len);
-    picoquic_mark_active_stream(c->cnx, STREAM_ID, 1, nullptr);
+    c->streams[stream].out.append((const char *)data, len);
+    // Marking an unopened stream id implicitly opens it (ids must obey
+    // the initiator's numbering: we allocate server-side pane streams as
+    // 1,5,9,... on the daemon; the client only reuses ids it has seen).
+    picoquic_mark_active_stream(c->cnx, stream, 1, nullptr);
     pump();
 }
 

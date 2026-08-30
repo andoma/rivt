@@ -56,7 +56,11 @@ struct Client {
     // Resize coalescing: bursts apply once, after the batch drains.
     bool resize_pending = false;
     int resize_cols = 0, resize_rows = 0;
-    std::string in;
+    // Per-QUIC-stream reassembly buffers (unix transport uses in[0]).
+    std::unordered_map<uint64_t, std::string> in;
+    // Server-allocated pane streams for this connection (ids 1,5,9,...).
+    std::unordered_map<uint16_t, uint64_t> pane_stream;
+    uint64_t next_stream = 1;
     std::string out;
     size_t out_off = 0;
     uint32_t attached = 0;  // session id, 0 = not attached
@@ -165,11 +169,12 @@ public:
                 conn->user = c.get();
                 m_clients.push_back(std::move(c));
             };
-            m_quic->on_data = [this](net::QuicEngine::Conn *conn, const uint8_t *d, size_t n) {
+            m_quic->on_data = [this](net::QuicEngine::Conn *conn, uint64_t stream,
+                                     const uint8_t *d, size_t n) {
                 Client *c = (Client *)conn->user;
                 if (!c || c->dead) return;
-                c->in.append((const char *)d, n);
-                process_client(c);
+                c->in[stream].append((const char *)d, n);
+                process_client(c, stream);
             };
             m_quic->on_closed = [this](net::QuicEngine::Conn *conn) {
                 Client *c = (Client *)conn->user;
@@ -527,33 +532,34 @@ private:
             char buf[65536];
             for (;;) {
                 ssize_t n = recv(c->fd, buf, sizeof buf, 0);
-                if (n > 0) { c->in.append(buf, n); continue; }
+                if (n > 0) { c->in[0].append(buf, n); continue; }
                 if (n == 0) { eof = true; break; }
                 if (errno == EAGAIN || errno == EWOULDBLOCK) break;
                 if (errno == EINTR) continue;
                 eof = true;
                 break;
             }
-            process_client(c);
+            process_client(c, 0);
         }
         if (eof || (ev & (EV_HUP | EV_ERR))) kill_client(c);
     }
 
-    void process_client(Client *c) {
-        while (!c->dead && c->in.size() >= proto::FRAME_HEADER_SIZE) {
+    void process_client(Client *c, uint64_t stream) {
+        std::string &in = c->in[stream];
+        while (!c->dead && in.size() >= proto::FRAME_HEADER_SIZE) {
             proto::FrameHeader h;
-            if (!proto::decode_frame_header((const uint8_t *)c->in.data(), h)) {
+            if (!proto::decode_frame_header((const uint8_t *)in.data(), h)) {
                 kill_client(c);
                 return;
             }
             size_t total = proto::FRAME_HEADER_SIZE + h.len;
-            if (c->in.size() < total) return;
-            const uint8_t *payload = (const uint8_t *)c->in.data() + proto::FRAME_HEADER_SIZE;
+            if (in.size() < total) return;
+            const uint8_t *payload = (const uint8_t *)in.data() + proto::FRAME_HEADER_SIZE;
             if (h.channel == 0)
                 handle_control(c, (MsgType)h.type, payload, h.len);
             else if (h.type == proto::PANE_IN)
                 handle_pane_input(c, h.channel, payload, h.len);
-            c->in.erase(0, total);
+            in.erase(0, total);
         }
         if (!c->dead && c->resize_pending) {
             c->resize_pending = false;
@@ -571,10 +577,21 @@ private:
                     const void *data, size_t len) {
         if (c->dead) return;
         if (c->quic) {
+            // Control on stream 0; each pane on its own server-initiated
+            // stream so bulk output can't head-of-line-block the rest.
+            uint64_t stream = 0;
+            if (channel != 0) {
+                auto [it, fresh] = c->pane_stream.try_emplace(channel, 0);
+                if (fresh) {
+                    it->second = c->next_stream;
+                    c->next_stream += 4;
+                }
+                stream = it->second;
+            }
             uint8_t hdr[proto::FRAME_HEADER_SIZE];
             proto::encode_frame_header(hdr, {(uint32_t)len, channel, type});
-            m_quic->send(c->quic, hdr, sizeof hdr);
-            m_quic->send(c->quic, data, len);
+            m_quic->send(c->quic, stream, hdr, sizeof hdr);
+            m_quic->send(c->quic, stream, data, len);
             return;
         }
         if (c->out.size() - c->out_off + len > CLIENT_OUT_MAX) {

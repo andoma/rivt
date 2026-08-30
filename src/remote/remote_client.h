@@ -116,6 +116,7 @@ public:
 private:
     void on_event(uint32_t ev);
     void process();
+    void process_buffer(std::string &in, uint64_t quic_stream);
     void dispatch_control(uint16_t type, const uint8_t *data, size_t len);
     void send_frame(uint16_t channel, uint16_t type, const void *data, size_t len);
     void send_control(uint16_t type, const proto::Writer &w) {
@@ -175,6 +176,8 @@ private:
     net::QuicEngine::Conn *m_quic_conn = nullptr;
     int m_fd = -1;
     std::string m_in, m_out;
+    std::unordered_map<uint64_t, std::string> m_qin;      // per-QUIC-stream reassembly
+    std::unordered_map<uint16_t, uint64_t> m_pane_stream;  // learned pane -> stream
     size_t m_out_off = 0;
     bool m_write_armed = false;
     bool m_failing = false;

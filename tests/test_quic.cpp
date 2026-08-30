@@ -63,7 +63,7 @@ TEST(quic_mutual_auth_roundtrip) {
 
     std::string got_at_server, got_at_client;
     QuicEngine::Conn *server_side = nullptr;
-    server->on_data = [&](QuicEngine::Conn *c, const uint8_t *d, size_t n) {
+    server->on_data = [&](QuicEngine::Conn *c, uint64_t, const uint8_t *d, size_t n) {
         server_side = c;
         got_at_server.append((const char *)d, n);
     };
@@ -72,16 +72,16 @@ TEST(quic_mutual_auth_roundtrip) {
     ASSERT_TRUE(client != nullptr);
     bool connected = false;
     client->on_connected = [&](QuicEngine::Conn *) { connected = true; };
-    client->on_data = [&](QuicEngine::Conn *, const uint8_t *d, size_t n) {
+    client->on_data = [&](QuicEngine::Conn *, uint64_t, const uint8_t *d, size_t n) {
         got_at_client.append((const char *)d, n);
     };
 
     ASSERT_TRUE(pump_until(loop, [&] { return connected; }));
-    client->send(client->client_conn(), "hello-over-quic", 15);
+    client->send(client->client_conn(), 0, "hello-over-quic", 15);
     ASSERT_TRUE(pump_until(loop, [&] { return got_at_server.size() >= 15; }));
     ASSERT_STR_EQ(got_at_server, "hello-over-quic");
 
-    server->send(server_side, "welcome", 7);
+    server->send(server_side, 0, "welcome", 7);
     ASSERT_TRUE(pump_until(loop, [&] { return got_at_client.size() >= 7; }));
     ASSERT_STR_EQ(got_at_client, "welcome");
 }
@@ -100,7 +100,7 @@ TEST(quic_rejects_unauthorized_peer) {
     auto server = QuicEngine::listen(loop, port, *ida, bundle_a);
     ASSERT_TRUE(server != nullptr);
     std::string leaked;
-    server->on_data = [&](QuicEngine::Conn *, const uint8_t *d, size_t n) {
+    server->on_data = [&](QuicEngine::Conn *, uint64_t, const uint8_t *d, size_t n) {
         leaked.append((const char *)d, n);
     };
 
@@ -109,7 +109,7 @@ TEST(quic_rejects_unauthorized_peer) {
     bool connected = false, closed = false;
     client->on_connected = [&](QuicEngine::Conn *) { connected = true; };
     client->on_closed = [&](QuicEngine::Conn *) { closed = true; };
-    client->send(client->client_conn(), "secret", 6);
+    client->send(client->client_conn(), 0, "secret", 6);
 
     pump_until(loop, [&] { return closed; }, 4000);
     ASSERT_TRUE(!connected || closed);  // handshake must not complete usably
@@ -131,7 +131,7 @@ TEST(quic_bulk_throughput_with_backpressure) {
     size_t received = 0;
     uint8_t expect = 0;
     bool corrupt = false;
-    server->on_data = [&](QuicEngine::Conn *c, const uint8_t *d, size_t n) {
+    server->on_data = [&](QuicEngine::Conn *c, uint64_t, const uint8_t *d, size_t n) {
         sconn = c;
         for (size_t i = 0; i < n; i++)
             if (d[i] != (uint8_t)(received + i)) corrupt = true;
@@ -154,7 +154,7 @@ TEST(quic_bulk_throughput_with_backpressure) {
             uint8_t chunk[65536];
             size_t n = TOTAL - produced < sizeof chunk ? TOTAL - produced : sizeof chunk;
             for (size_t i = 0; i < n; i++) chunk[i] = (uint8_t)(produced + i);
-            client->send(client->client_conn(), chunk, n);
+            client->send(client->client_conn(), 0, chunk, n);
             produced += n;
             if (client->client_conn()->queued() > QuicEngine::SEND_HIGH_WATER)
                 paused = true;
@@ -234,14 +234,14 @@ TEST(quic_trust_derived_from_membership_log) {
     auto server = QuicEngine::listen(loop, port, *a, bundle_a);
     ASSERT_TRUE(server != nullptr);
     bool got = false;
-    server->on_data = [&](QuicEngine::Conn *, const uint8_t *, size_t) { got = true; };
+    server->on_data = [&](QuicEngine::Conn *, uint64_t, const uint8_t *, size_t) { got = true; };
 
     // Member B (in A's log) connects — trusted.
     auto cb = QuicEngine::connect(loop, "127.0.0.1", port, *b, bundle_b);
     bool b_up = false;
     cb->on_connected = [&](QuicEngine::Conn *) { b_up = true; };
     ASSERT_TRUE(pump_until(loop, [&] { return b_up; }));
-    cb->send(cb->client_conn(), "hi", 2);
+    cb->send(cb->client_conn(), 0, "hi", 2);
     ASSERT_TRUE(pump_until(loop, [&] { return got; }));
 
     // Outsider C (not in the log, so absent from A's bundle) is rejected.
@@ -283,7 +283,7 @@ TEST(quic_over_turn_relay) {
     }
     server->add_turn(&relay);
     std::string got_at_server;
-    server->on_data = [&](QuicEngine::Conn *, const uint8_t *d, size_t n) {
+    server->on_data = [&](QuicEngine::Conn *, uint64_t, const uint8_t *d, size_t n) {
         got_at_server.append((const char *)d, n);
     };
 
@@ -313,7 +313,7 @@ TEST(quic_over_turn_relay) {
     client->on_connected = [&](QuicEngine::Conn *) { connected = true; };
     ASSERT_TRUE(client->start_connection(relay.relayed_host(), relay.relayed_port()));
     ASSERT_TRUE(pump_until(loop, [&] { return connected; }, 10000));
-    client->send(client->client_conn(), "via-turn-relay", 14);
+    client->send(client->client_conn(), 0, "via-turn-relay", 14);
     ASSERT_TRUE(pump_until(loop, [&] { return got_at_server.size() >= 14; }, 8000));
     ASSERT_STR_EQ(got_at_server, "via-turn-relay");
     fprintf(stderr, "  [turn] QUIC handshake + data over Cloudflare relay ok\n");

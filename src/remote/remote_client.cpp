@@ -390,16 +390,17 @@ void RemoteClient::adopt_probe(size_t idx) {
     m_probes.clear();
 
     m_quic->on_connected = nullptr;
-    m_quic->on_data = [this](net::QuicEngine::Conn *, const uint8_t *d, size_t n) {
-        m_in.append((const char *)d, n);
-        process();
+    m_quic->on_data = [this](net::QuicEngine::Conn *, uint64_t stream,
+                             const uint8_t *d, size_t n) {
+        m_qin[stream].append((const char *)d, n);
+        process_buffer(m_qin[stream], stream);
     };
     m_quic->on_closed = [this](net::QuicEngine::Conn *) {
         // fail() must see connected()==true to run; close() clears the conn.
         fail();
     };
     if (!m_pending_out.empty()) {
-        m_quic->send(m_quic_conn, m_pending_out.data(), m_pending_out.size());
+        m_quic->send(m_quic_conn, 0, m_pending_out.data(), m_pending_out.size());
         m_pending_out.clear();
     }
 }
@@ -458,6 +459,8 @@ bool RemoteClient::connect(const std::string &path, bool autostart) {
 void RemoteClient::close() {
     disarm_ack_probe();
     agent_close_all();
+    m_qin.clear();
+    m_pane_stream.clear();
     if (m_turn_fallback_timer >= 0) {
         m_loop.remove_timer(m_turn_fallback_timer);
         m_turn_fallback_timer = -1;
@@ -546,16 +549,26 @@ void RemoteClient::on_event(uint32_t ev) {
 }
 
 void RemoteClient::process() {
-    while (connected() && m_in.size() >= proto::FRAME_HEADER_SIZE) {
+    process_buffer(m_in, /*quic_stream=*/UINT64_MAX);
+}
+
+// Parse complete frames out of one reassembly buffer. For QUIC, each
+// stream has its own buffer (chunks of different streams interleave);
+// pane frames teach us which stream the daemon chose for that pane so
+// our input goes back on the same one.
+void RemoteClient::process_buffer(std::string &in, uint64_t quic_stream) {
+    while (connected() && in.size() >= proto::FRAME_HEADER_SIZE) {
         proto::FrameHeader h;
-        if (!proto::decode_frame_header((const uint8_t *)m_in.data(), h)) {
+        if (!proto::decode_frame_header((const uint8_t *)in.data(), h)) {
             fail();
             return;
         }
         size_t total = proto::FRAME_HEADER_SIZE + h.len;
-        if (m_in.size() < total) return;
-        const uint8_t *payload = (const uint8_t *)m_in.data() + proto::FRAME_HEADER_SIZE;
+        if (in.size() < total) return;
+        const uint8_t *payload = (const uint8_t *)in.data() + proto::FRAME_HEADER_SIZE;
 
+        if (h.channel != 0 && quic_stream != UINT64_MAX)
+            m_pane_stream[h.channel] = quic_stream;
         if (h.channel == 0) {
             dispatch_control(h.type, payload, h.len);
         } else if (h.type == proto::PANE_OUT) {
@@ -565,7 +578,7 @@ void RemoteClient::process() {
         } else if (h.type == proto::PANE_SCROLLBACK) {
             if (on_scrollback) on_scrollback(h.channel, payload, h.len);
         }
-        m_in.erase(0, total);
+        in.erase(0, total);
     }
 }
 
@@ -773,8 +786,15 @@ void RemoteClient::send_frame(uint16_t channel, uint16_t type, const void *data,
     uint8_t hdr[proto::FRAME_HEADER_SIZE];
     proto::encode_frame_header(hdr, {(uint32_t)len, channel, type});
     if (m_quic_conn) {
-        m_quic->send(m_quic_conn, hdr, sizeof hdr);
-        if (len) m_quic->send(m_quic_conn, data, len);
+        uint64_t stream = 0;
+        if (channel != 0) {
+            auto it = m_pane_stream.find(channel);
+            if (it != m_pane_stream.end()) stream = it->second;
+            // Unknown yet (input before any output): stream 0 is always
+            // correct — framing is self-describing — just unprioritized.
+        }
+        m_quic->send(m_quic_conn, stream, hdr, sizeof hdr);
+        if (len) m_quic->send(m_quic_conn, stream, data, len);
         arm_ack_probe();
         return;
     }
