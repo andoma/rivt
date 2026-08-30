@@ -1291,6 +1291,16 @@ static std::string prompt(const char *msg) {
 
 // Write a systemd --user unit for this exact binary and enable it.
 static bool install_systemd_unit() {
+    // Sessions that bypass pam_systemd (containers, `ssh host cmd`,
+    // sudo -u shells) lack XDG_RUNTIME_DIR even when a systemd --user
+    // instance is running; systemctl --user then fails with ENOMEDIUM.
+    if (!getenv("XDG_RUNTIME_DIR")) {
+        std::string rt = "/run/user/" + std::to_string(getuid());
+        struct stat st;
+        if (stat((rt + "/systemd").c_str(), &st) == 0 && S_ISDIR(st.st_mode))
+            setenv("XDG_RUNTIME_DIR", rt.c_str(), 1);
+    }
+
     char exe[4096];
     ssize_t n = readlink("/proc/self/exe", exe, sizeof(exe) - 1);
     if (n <= 0) { rivt::logmsg("cannot resolve own path\n"); return false; }
