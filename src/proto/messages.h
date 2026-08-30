@@ -17,6 +17,12 @@ enum PaneFrame : uint16_t {
     PANE_ACK = 4,       // daemon -> client: u32 seq — the output sent so
                         //   far reflects this client's input through seq
                         //   (predictive-echo confirmation anchor)
+    PANE_RESUME = 5,    // daemon -> client: u64 offset — the pane's byte
+                        //   stream continues from this absolute offset;
+                        //   the client's replica is current through it.
+                        //   Sent instead of a snapshot on resumable
+                        //   re-attach, and after each snapshot to anchor
+                        //   the client's offset counting.
                         //   (Snapshot::encode_line each, oldest first)
 };
 
@@ -27,7 +33,11 @@ enum class MsgType : uint16_t {
     Hello = 1,          // u32 proto_version
     ListSessions = 2,   // -
     CreateSession = 3,  // str name, str cwd, u16 cols, u16 rows
-    Attach = 4,         // u32 session_id
+    Attach = 4,         // u32 session_id, then 0..n resume entries
+                        //   { u32 pane_id, u64 offset }: "my replica of
+                        //   pane P is current through absolute output
+                        //   offset X". Daemon replays the gap from its
+                        //   ring instead of snapshotting when it can.
     Detach = 5,         // -
     Resize = 6,         // u16 cols, u16 rows (session grid; server relayouts)
     KillSession = 7,    // u32 session_id

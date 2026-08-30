@@ -105,7 +105,14 @@ struct PaneRef {
     uint32_t acked_seq = 0;
     Client *in_client = nullptr;
     bool echo_off = false;  // PTY termios ECHO state as last observed
+    // Recent output with absolute offsets: a re-attaching client that is
+    // current through an offset inside the ring gets the gap replayed
+    // instead of a full snapshot (seamless reconnect).
+    std::string ring;
+    uint64_t ring_end = 0;  // absolute offset of the byte after ring
 };
+
+static constexpr size_t PANE_RING_MAX = 256 * 1024;
 
 static constexpr uint32_t HANDOVER_VERSION = 1;
 
@@ -671,6 +678,10 @@ private:
             c->hello = true;
             proto::Writer w;
             w.u32(proto::PROTO_VERSION);
+            // Daemon epoch: pane output offsets are only comparable
+            // within one daemon lifetime; a client that reconnects to a
+            // restarted daemon must snapshot, never resume.
+            w.u32(m_epoch);
             send_control(c, MsgType::HelloOk, w);
             return;
         }
@@ -699,6 +710,12 @@ private:
         }
         case MsgType::Attach: {
             uint32_t sid = r.u32();
+            std::unordered_map<uint32_t, uint64_t> resume;
+            while (r.ok && r.remaining() >= 12) {
+                uint32_t pid = r.u32();
+                uint64_t off = r.u64();
+                if (r.ok) resume[pid] = off;
+            }
             auto it = m_sessions.find(sid);
             if (!r.ok || it == m_sessions.end()) {
                 send_error(c, "no such session");
@@ -718,9 +735,34 @@ private:
             }
             for (auto &win : s.windows)
                 for (auto &[pid, pane] : win.panes) {
+                    // Seamless path: the client is current through an
+                    // offset still in the ring — replay only the gap.
+                    auto pref = m_panes.find(pid);
+                    auto res = resume.find(pid);
+                    if (pref != m_panes.end() && res != resume.end()) {
+                        const PaneRef &ref = pref->second;
+                        uint64_t ring_start = ref.ring_end - ref.ring.size();
+                        if (res->second >= ring_start && res->second <= ref.ring_end) {
+                            uint64_t off = res->second;
+                            send_frame(c, pid, proto::PANE_RESUME, &off, 8);
+                            size_t skip = (size_t)(off - ring_start);
+                            if (ref.ring.size() > skip)
+                                send_frame(c, pid, proto::PANE_OUT,
+                                           ref.ring.data() + skip,
+                                           ref.ring.size() - skip);
+                            dbg("rivtd: pane %u resumed at %llu (+%zu replay)",
+                                pid, (unsigned long long)off, ref.ring.size() - skip);
+                            continue;
+                        }
+                    }
                     auto blob = proto::Snapshot::serialize(pane->screen(), pane->parser(),
                                                            ATTACH_SCROLLBACK_LINES);
                     send_frame(c, pid, proto::PANE_SNAPSHOT, blob.data(), blob.size());
+                    // Anchor the client's offset counting at now.
+                    if (pref != m_panes.end()) {
+                        uint64_t off = pref->second.ring_end;
+                        send_frame(c, pid, proto::PANE_RESUME, &off, 8);
+                    }
                 }
             break;
         }
@@ -933,6 +975,14 @@ private:
 
     void wire_pane(uint32_t sid, uint16_t pid, Pane *pane) {
         pane->on_output = [this, sid, pid, pane](const char *d, size_t n) {
+            auto rit = m_panes.find(pid);
+            if (rit != m_panes.end()) {
+                PaneRef &ref = rit->second;
+                ref.ring.append(d, n);
+                ref.ring_end += n;
+                if (ref.ring.size() > PANE_RING_MAX)
+                    ref.ring.erase(0, ref.ring.size() - PANE_RING_MAX);
+            }
             for (auto &c : m_clients) {
                 if (c->dead || c->attached != sid) continue;
                 send_frame(c.get(), pid, proto::PANE_OUT, d, n);
@@ -1484,6 +1534,7 @@ private:
     // long enough to reap.
     std::unordered_map<uint32_t, AgentStream> m_agent_streams;
     uint32_t m_next_agent_stream = 1;
+    const uint32_t m_epoch = (uint32_t)time(nullptr) ^ (uint32_t)getpid();
 
     std::vector<std::unique_ptr<net::TurnRelay>> m_relays;
     net::TurnRelay *m_turn = nullptr;  // current: advertised in answers

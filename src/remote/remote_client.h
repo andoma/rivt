@@ -74,6 +74,9 @@ public:
     void verify_link();
     void list_sessions();
     void create_session(const std::string &name, const std::string &cwd, int cols, int rows);
+    // Attach; when we hold anchored output offsets for the session's
+    // panes (from a previous attach in this daemon epoch), they ride
+    // along so the daemon can resume streams instead of snapshotting.
     void attach(uint32_t session_id);
     void detach();
     void resize_session(int cols, int rows);
@@ -182,6 +185,11 @@ private:
     std::unordered_map<uint64_t, std::string> m_qin;      // per-QUIC-stream reassembly
     std::unordered_map<uint16_t, uint64_t> m_pane_stream;  // learned pane -> stream
     std::unordered_map<uint32_t, uint32_t> m_in_seq;        // per-pane input seq
+    // Seamless re-attach: absolute output offset our replica is current
+    // through, per pane — anchored by PANE_RESUME, advanced by PANE_OUT.
+    // Survives close() deliberately; invalidated on daemon-epoch change.
+    std::unordered_map<uint32_t, uint64_t> m_pane_off;
+    uint32_t m_daemon_epoch = 0;
     size_t m_out_off = 0;
     bool m_write_armed = false;
     bool m_failing = false;

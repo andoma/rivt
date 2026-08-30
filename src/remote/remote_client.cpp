@@ -573,8 +573,21 @@ void RemoteClient::process_buffer(std::string &in, uint64_t quic_stream) {
         if (h.channel == 0) {
             dispatch_control(h.type, payload, h.len);
         } else if (h.type == proto::PANE_OUT) {
+            auto oit = m_pane_off.find(h.channel);
+            if (oit != m_pane_off.end()) oit->second += h.len;
             if (on_output) on_output(h.channel, (const char *)payload, h.len);
+        } else if (h.type == proto::PANE_RESUME) {
+            if (h.len >= 8) {
+                uint64_t off;
+                memcpy(&off, payload, 8);
+                m_pane_off[h.channel] = off;
+                dbg("remote: pane %u stream anchored at %llu", h.channel,
+                    (unsigned long long)off);
+            }
         } else if (h.type == proto::PANE_SNAPSHOT) {
+            // Full state replacement: our offset is void until the
+            // daemon's anchor (sent right behind the snapshot) re-bases.
+            m_pane_off.erase(h.channel);
             if (on_snapshot) on_snapshot(h.channel, payload, h.len);
         } else if (h.type == proto::PANE_SCROLLBACK) {
             if (on_scrollback) on_scrollback(h.channel, payload, h.len);
@@ -595,6 +608,12 @@ void RemoteClient::dispatch_control(uint16_t type, const uint8_t *data, size_t l
     switch ((MsgType)type) {
     case MsgType::HelloOk: {
         uint32_t ver = r.u32();
+        uint32_t epoch = r.remaining() >= 4 ? r.u32() : 0;
+        if (epoch != m_daemon_epoch) {
+            // Different daemon lifetime: our pane offsets are meaningless.
+            m_pane_off.clear();
+            m_daemon_epoch = epoch;
+        }
         if (r.ok && ver == proto::PROTO_VERSION) {
             if (on_hello_ok) on_hello_ok();
         } else {
@@ -868,6 +887,13 @@ void RemoteClient::create_session(const std::string &name, const std::string &cw
 void RemoteClient::attach(uint32_t sid) {
     proto::Writer w;
     w.u32(sid);
+    // Resume entries: stale panes (other sessions, dead panes) are
+    // simply ignored daemon-side; wrong-epoch offsets never exist here
+    // (cleared on HelloOk).
+    for (const auto &[pane, off] : m_pane_off) {
+        w.u32(pane);
+        w.u64(off);
+    }
     send_control((uint16_t)MsgType::Attach, w);
 }
 
