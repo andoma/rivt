@@ -99,6 +99,19 @@ struct PaneRef {
 static constexpr uint32_t HANDOVER_VERSION = 1;
 
 class Daemon {
+    // Agent forwarding streams: one per accepted connection on a
+    // session's agent socket, pinned to the client chosen at accept.
+    // Declared up front: used as a parameter type by member functions,
+    // which is not a complete-class context.
+    struct AgentStream {
+        int fd = -1;
+        uint32_t sid = 0;
+        Client *client = nullptr;  // valid until sweep() reaps it
+        std::string out;
+        size_t out_off = 0;
+        bool write_armed = false;
+    };
+
 public:
     Daemon(std::string socket_path, std::string handover_path, int listen_port,
            std::string device_name)
@@ -1410,16 +1423,6 @@ private:
     // fresh allocation is made every few answers; old relays keep
     // serving their established sessions until they have been silent
     // long enough to reap.
-    // Agent forwarding streams: one per accepted connection on a
-    // session's agent socket, pinned to the client chosen at accept.
-    struct AgentStream {
-        int fd = -1;
-        uint32_t sid = 0;
-        Client *client = nullptr;  // valid until sweep() reaps it
-        std::string out;
-        size_t out_off = 0;
-        bool write_armed = false;
-    };
     std::unordered_map<uint32_t, AgentStream> m_agent_streams;
     uint32_t m_next_agent_stream = 1;
 
