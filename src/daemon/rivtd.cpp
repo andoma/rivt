@@ -49,7 +49,12 @@ namespace rivt {
 using proto::MsgType;
 
 static constexpr size_t CLIENT_OUT_MAX = 8 << 20;  // kill client past this
-static constexpr int ATTACH_SCROLLBACK_LINES = 2000;
+// Attach ships the screen plus this much recent history in one frame;
+// the client fetches deeper scrollback on demand (request_scrollback).
+// Keep it small: the snapshot is frame-atomic, so nothing renders until
+// it fully arrives — 2000 heavy lines took a minute on a lossy link
+// while the pane sat blank.
+static constexpr int ATTACH_SCROLLBACK_LINES = 100;
 
 struct Client {
     int fd = -1;                          // unix transport, or...
