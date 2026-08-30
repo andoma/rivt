@@ -249,11 +249,11 @@ void RemoteClient::begin_punch(const RemoteEndpoint &ep) {
     // punch has genuinely failed. (probe_failed defers to this timer
     // while the signaling subscription is live.)
     if (m_turn_fallback_timer >= 0) m_loop.remove_timer(m_turn_fallback_timer);
-    m_turn_fallback_timer = m_loop.add_timer(20000, [this]() {
+    m_turn_fallback_timer = m_loop.add_timer(30000, [this]() {
         m_loop.remove_timer(m_turn_fallback_timer);
         m_turn_fallback_timer = -1;
         if (m_quic || !m_signaling) return;
-        rivt::logmsg("rivt: punch: no punched/relayed path after 20s, giving up\n");
+        rivt::logmsg("rivt: punch: no punched/relayed path after 30s, giving up\n");
         m_signaling->unsubscribe(m_sig_peer);
         m_signaling = nullptr;
         probe_failed();
@@ -270,12 +270,31 @@ void RemoteClient::begin_punch(const RemoteEndpoint &ep) {
     // adopts them like any candidate.
     auto reflexives = std::make_shared<std::vector<net::Candidate>>();
     auto pending = std::make_shared<int>(2);
+    m_punch_stun = {};
+    m_punch_turn = {};
     for (int role = 0; role < 2; role++) {
         auto e = net::QuicEngine::create_client(m_loop, *m_identity, bundle);
         if (!e) { (*pending)--; continue; }
+        // Punched paths may be high-RTT and lossy (relay + bad cell):
+        // give the handshake room, and re-dial the same candidate from
+        // the same socket (same relay flow, no budget cost) while the
+        // punch window is open.
+        e->set_handshake_timeout(12);
         size_t idx = m_probes.size();
         e->on_connected = [this, idx](net::QuicEngine::Conn *) { adopt_probe(idx); };
-        e->on_closed = [this](net::QuicEngine::Conn *) { probe_failed(); };
+        e->on_closed = [this, idx, role](net::QuicEngine::Conn *) {
+            probe_failed();
+            if (m_quic || !m_signaling) return;
+            const net::Candidate &t = role == 0 ? m_punch_stun : m_punch_turn;
+            if (t.host.empty()) return;
+            m_loop.add_timer(1500, [this, idx, t]() {
+                if (m_quic || !m_signaling || idx >= m_probes.size() || !m_probes[idx])
+                    return;
+                dbg("rivt: punch: re-dialing [%s] %s:%u", t.kind.c_str(),
+                    t.host.c_str(), t.port);
+                m_probes[idx]->start_connection(t.host, t.port);
+            }, false);
+        };
         net::QuicEngine *ep_raw = e.get();
         m_probes.push_back(std::move(e));
         m_probe_kinds.push_back(role == 0 ? "direct" : "turn");
@@ -354,6 +373,8 @@ void RemoteClient::on_answer(const std::vector<net::Candidate> &server_cands) {
         else if (c.kind == "turn" && !cturn) cturn = &c;
         else if (c.kind == "local") locals.push_back(c);
     }
+    if (cstun) m_punch_stun = *cstun;
+    if (cturn) m_punch_turn = *cturn;
     if (direct && cstun) direct->start_connection(cstun->host, cstun->port);
     if (turn && cturn) turn->start_connection(cturn->host, cturn->port);
     // Server-side LAN addresses, in case any is reachable from us.
@@ -561,6 +582,10 @@ void RemoteClient::process_buffer(std::string &in, uint64_t quic_stream) {
     while (connected() && in.size() >= proto::FRAME_HEADER_SIZE) {
         proto::FrameHeader h;
         if (!proto::decode_frame_header((const uint8_t *)in.data(), h)) {
+            rivt::logmsg("rivt: frame desync on stream %llu: len=%u ch=%u type=%u "
+                         "(buf %zu bytes) — disconnecting\n",
+                         (unsigned long long)quic_stream, h.len, h.channel, h.type,
+                         in.size());
             fail();
             return;
         }

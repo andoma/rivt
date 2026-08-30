@@ -67,6 +67,10 @@ public:
     static std::unique_ptr<QuicEngine> create_client(EventLoop &loop, const Identity &id,
                                                      const std::string &authorized_bundle);
     bool start_connection(const std::string &host, uint16_t port);
+    // Handshake give-up (default 5s: fail unreachable candidates fast).
+    // Punch/relay engines set this higher: high-RTT lossy links need
+    // several seconds of handshake round trips.
+    void set_handshake_timeout(int seconds);
 
     // Send a few small datagrams to addr from the live socket to open a
     // NAT mapping toward the peer (hole punch). Harmless if it arrives:
@@ -137,6 +141,10 @@ private:
     bool m_cert_rejected = false;
     std::string m_label;  // "host:port" of an outbound target, for logs
     uint64_t m_last_rx_us = 0;  // picoquic_current_time() of last datagram
+    // Liveness token for netem's delayed-delivery timers: they may fire
+    // after this engine is destroyed (raced candidates are torn down
+    // constantly) and must become no-ops, not use-after-frees.
+    std::shared_ptr<char> m_netem_alive = std::make_shared<char>(0);
     std::vector<std::pair<struct sockaddr_in, TurnRelay *>> m_relayed_peers;
     void feed_relayed(TurnRelay *turn, const struct sockaddr_in &peer,
                       const uint8_t *d, size_t n);

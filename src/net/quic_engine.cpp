@@ -68,14 +68,26 @@ struct Netem {
         double phase = t - (int)(t / outage_period_s) * (double)outage_period_s;
         return phase < outage_s;
     }
-    // <0 = drop; otherwise extra one-way delay in ms.
-    int impair() {
+    // <0 = drop; otherwise one-way delay in ms. Models a FIFO queue per
+    // direction: jitter varies the delay but a packet is never delivered
+    // before one queued ahead of it — i.i.d. per-packet delay would mean
+    // pathological reordering no real link exhibits, and QUIC handshakes
+    // never converge through it.
+    std::chrono::steady_clock::time_point last_deliver[2] {};
+    int impair(bool inbound) {
         if (!enabled) return 0;
         if (in_outage()) return -1;
         if (loss > 0 && (rand() / (double)RAND_MAX) < loss) return -1;
         int j = jitter_ms ? rand() % (2 * jitter_ms + 1) - jitter_ms : 0;
         int d = delay_ms + j;
-        return d > 0 ? d : 0;
+        if (d < 0) d = 0;
+        auto now = std::chrono::steady_clock::now();
+        auto deliver = now + std::chrono::milliseconds(d);
+        auto &last = last_deliver[inbound ? 1 : 0];
+        if (deliver < last) deliver = last;  // FIFO: no overtaking
+        last = deliver;
+        return (int)std::chrono::duration_cast<std::chrono::milliseconds>(
+                   deliver - now).count();
     }
     static Netem &instance() {
         static Netem n;
@@ -171,6 +183,10 @@ std::unique_ptr<QuicEngine> QuicEngine::connect(EventLoop &loop, const std::stri
     auto e = create_client(loop, id, bundle);
     if (!e || !e->start_connection(host, port)) return nullptr;
     return e;
+}
+
+void QuicEngine::set_handshake_timeout(int seconds) {
+    picoquic_set_default_handshake_timeout(m_quic, (uint64_t)seconds * 1000000);
 }
 
 void QuicEngine::punch(const std::string &host, uint16_t port) {
@@ -395,12 +411,14 @@ void QuicEngine::on_socket(uint32_t events) {
             continue;  // never hand STUN to picoquic
         }
         if (qdbg()) rivt::logmsg("quic[%p] rx %zd\n", (void *)this, n);
-        int impair = Netem::instance().impair();
+        int impair = Netem::instance().impair(/*inbound=*/true);
         if (impair < 0) continue;  // netem: dropped
         if (impair > 0) {
             std::string pkt((const char *)buf, n);
             struct sockaddr_storage from_copy = from;
-            m_loop.add_timer(impair, [this, pkt, from_copy]() {
+            std::weak_ptr<char> alive = m_netem_alive;
+            m_loop.add_timer(impair, [this, alive, pkt, from_copy]() {
+                if (alive.expired()) return;  // engine gone
                 struct sockaddr_storage f = from_copy;
                 picoquic_incoming_packet(m_quic, (uint8_t *)pkt.data(), pkt.size(),
                                          (struct sockaddr *)&f,
@@ -528,14 +546,19 @@ void QuicEngine::pump() {
                                               &if_index, nullptr, &last);
         if (rc != 0 || send_len == 0) break;
         struct sockaddr_in rpeer {};
-        int impair = Netem::instance().impair();
+        int impair = Netem::instance().impair(/*inbound=*/false);
         if (impair < 0) continue;  // netem: dropped
         if (TurnRelay *tr = relay_for(to, &rpeer)) {
             if (impair > 0) {
                 std::string pkt((const char *)buf, send_len);
-                struct sockaddr_in peer_copy = rpeer;
-                m_loop.add_timer(impair, [tr, peer_copy, pkt]() {
-                    tr->send_to(peer_copy, (const uint8_t *)pkt.data(), pkt.size());
+                struct sockaddr_storage to_copy = to;
+                std::weak_ptr<char> alive = m_netem_alive;
+                m_loop.add_timer(impair, [this, alive, to_copy, pkt]() {
+                    if (alive.expired()) return;  // engine gone
+                    struct sockaddr_in peer {};
+                    // Re-resolve: the relay may have been reaped since.
+                    if (TurnRelay *cur = relay_for(to_copy, &peer))
+                        cur->send_to(peer, (const uint8_t *)pkt.data(), pkt.size());
                 }, false);
                 continue;
             }
@@ -545,11 +568,12 @@ void QuicEngine::pump() {
         if (impair > 0) {
             std::string pkt((const char *)buf, send_len);
             struct sockaddr_storage to_copy = to;
-            int fd = m_fd;
             socklen_t sl = to.ss_family == AF_INET ? sizeof(struct sockaddr_in)
                                                    : sizeof(struct sockaddr_in6);
-            m_loop.add_timer(impair, [fd, to_copy, pkt, sl]() {
-                sendto(fd, pkt.data(), pkt.size(), 0,
+            std::weak_ptr<char> alive = m_netem_alive;
+            m_loop.add_timer(impair, [this, alive, to_copy, pkt, sl]() {
+                if (alive.expired()) return;  // engine (and its fd) gone
+                sendto(m_fd, pkt.data(), pkt.size(), 0,
                        (const struct sockaddr *)&to_copy, sl);
             }, false);
             continue;

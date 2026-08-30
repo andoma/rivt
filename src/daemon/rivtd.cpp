@@ -757,6 +757,14 @@ private:
                     }
                     auto blob = proto::Snapshot::serialize(pane->screen(), pane->parser(),
                                                            ATTACH_SCROLLBACK_LINES);
+                    if (blob.size() > proto::FRAME_MAX_LEN / 2) {
+                        // Heavy scrollback: ship less history rather than
+                        // an oversized frame (rest is fetchable on scroll).
+                        rivt::logmsg("rivtd: pane %u snapshot %zu bytes — "
+                                     "trimming to 200 lines\n", pid, blob.size());
+                        blob = proto::Snapshot::serialize(pane->screen(), pane->parser(),
+                                                          200);
+                    }
                     send_frame(c, pid, proto::PANE_SNAPSHOT, blob.data(), blob.size());
                     // Anchor the client's offset counting at now.
                     if (pref != m_panes.end()) {

@@ -10,7 +10,11 @@ namespace rivt::proto {
 // Over QUIC (phase 2) channels map to streams and this header goes away.
 
 constexpr size_t FRAME_HEADER_SIZE = 8;
-constexpr uint32_t FRAME_MAX_LEN = 1 << 20;  // sanity cap per frame
+// Sanity cap per frame. Attach snapshots are the big ones: 2000 lines
+// of heavy scrollback serialize to several MB (a 1MB cap once made the
+// client treat a legitimate 1.7MB snapshot as garbage and disconnect).
+// rivtd trims snapshot depth to stay under half of this.
+constexpr uint32_t FRAME_MAX_LEN = 8 << 20;
 
 struct FrameHeader {
     uint32_t len;      // payload length, excluding header

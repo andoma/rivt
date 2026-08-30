@@ -173,6 +173,10 @@ private:
     std::chrono::steady_clock::time_point m_await_since{};
     void begin_punch(const RemoteEndpoint &ep);
     void on_answer(const std::vector<net::Candidate> &server_cands);
+    // Punched-path targets, kept for re-dials within the punch window
+    // (a handshake that spans a link outage dies; the next one lands).
+    net::Candidate m_punch_stun {};
+    net::Candidate m_punch_turn {};
     void adopt_probe(size_t idx);
     void probe_failed();
     // close() can run inside m_quic's own callback (on_closed -> fail);
