@@ -7,13 +7,13 @@ namespace rivt {
 
 // Platform-neutral event flags exposed to fd callbacks. The Linux
 // (epoll) and macOS (kqueue) backends translate native event bits
-// to this enum before invoking callbacks.
-enum EventFlags : uint32_t {
-    EV_READ  = 1u << 0,
-    EV_WRITE = 1u << 1,
-    EV_HUP   = 1u << 2,
-    EV_ERR   = 1u << 3,
-};
+// to these flags before invoking callbacks. Plain uint32_t (not an
+// enum): masks are built with ?: against 0, which -Wextra flags for
+// enumerated types.
+inline constexpr uint32_t EV_READ  = 1u << 0;
+inline constexpr uint32_t EV_WRITE = 1u << 1;
+inline constexpr uint32_t EV_HUP   = 1u << 2;
+inline constexpr uint32_t EV_ERR   = 1u << 3;
 
 class EventLoop {
 public:

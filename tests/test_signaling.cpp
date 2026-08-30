@@ -41,7 +41,7 @@ TEST(signaling_offer_answer) {
     std::vector<Candidate> got;
     std::string got_from;
     bool got_answer = false, got_offer = false;
-    sb.on_candidates = [&](const std::string &from, bool ans, std::vector<Candidate> c) {
+    sb.on_candidates = [&](const std::string &from, bool ans, std::vector<Candidate>) {
         if (!ans) { got_offer = true; sb.send(from, true, {{"203.0.113.9", 51111, "stun"}}); }
     };
     sa.on_candidates = [&](const std::string &from, bool ans, std::vector<Candidate> c) {
