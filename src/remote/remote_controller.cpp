@@ -380,12 +380,20 @@ void RemoteController::shadow_predict(uint32_t pane_id, Pane *pane,
     // single printable ASCII byte, primary screen, cursor away from the
     // right margin.
     if (data.size() != 1 || (unsigned char)data[0] < 0x20 ||
-        (unsigned char)data[0] > 0x7e || sb.alt_screen() ||
-        sb.cursor_col() >= sb.cols() - 2)
+        (unsigned char)data[0] > 0x7e || sb.alt_screen())
         return;
     auto &v = m_shadow[pane_id];
     shadow_expire(v);
-    v.push_back({seq, sb.cursor_row(), sb.cursor_col(), (uint32_t)(unsigned char)data[0],
+    // Speculative cursor: with confirm latency above the typing
+    // interval, the replica cursor lags earlier keystrokes — each
+    // prediction lands one column after the previous outstanding one,
+    // not at the stale authoritative cursor.
+    int row = sb.cursor_row();
+    int col = sb.cursor_col();
+    if (!v.empty() && v.back().row == row && v.back().col + 1 > col)
+        col = v.back().col + 1;
+    if (col >= sb.cols() - 2) return;
+    v.push_back({seq, row, col, (uint32_t)(unsigned char)data[0],
                  std::chrono::steady_clock::now()});
     m_shadow_stats.predicted++;
 }
