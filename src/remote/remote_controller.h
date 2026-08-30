@@ -137,6 +137,13 @@ private:
     void predict_reset(uint32_t pane_id, PanePredict &ps, const char *why);
     void predict_overlay_sync(uint32_t pane_id, const PanePredict &ps);
 
+    // Per-pane streams have no ordering against control (stream 0): a
+    // snapshot can arrive before the LayoutUpdate that creates its pane.
+    // Park early pane frames and replay them on pane creation.
+    struct EarlyFrame { int kind; std::string data; };  // 0=snapshot 1=output 2=scrollback
+    std::unordered_map<uint32_t, std::vector<EarlyFrame>> m_early;
+    static constexpr size_t EARLY_MAX = 8 << 20;
+
     int m_cols = 80, m_rows = 24;
     int m_cell_w = 0, m_cell_h = 0;
     int m_content_x = 0, m_content_y = 0;

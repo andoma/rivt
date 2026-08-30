@@ -95,7 +95,12 @@ RemoteController::RemoteController(RemoteClient &client, Window &window, TabMana
 
     m_client.on_snapshot = [this](uint32_t pane_id, const uint8_t *data, size_t len) {
         auto it = m_pane_map.find(pane_id);
-        if (it == m_pane_map.end()) return;
+        if (it == m_pane_map.end()) {
+            auto &q = m_early[pane_id];
+            if (q.size() < 64 && len < EARLY_MAX)
+                q.push_back({0, std::string((const char *)data, len)});
+            return;
+        }
         Pane *p = it->second.pane;
         int cols = p->screen().cols(), rows = p->screen().rows();
         if (!proto::Snapshot::deserialize(p->screen(), p->parser(), data, len)) {
@@ -146,7 +151,13 @@ RemoteController::RemoteController(RemoteClient &client, Window &window, TabMana
 
     m_client.on_output = [this](uint32_t pane_id, const char *data, size_t len) {
         auto it = m_pane_map.find(pane_id);
-        if (it != m_pane_map.end()) it->second.pane->feed_data(data, len);
+        if (it != m_pane_map.end()) {
+            it->second.pane->feed_data(data, len);
+            return;
+        }
+        auto &q = m_early[pane_id];
+        if (q.size() < 64 && len < EARLY_MAX)
+            q.push_back({1, std::string(data, len)});
     };
 
     m_client.on_pane_exited = [this](uint32_t pane_id) {
@@ -350,6 +361,22 @@ Pane *RemoteController::create_remote_pane(Tab *tab, uint32_t pane_id, int cols,
     };
 
     m_pane_map[pane_id] = {pane, 0};  // wid filled by caller
+
+    // Replay pane frames that raced ahead of the layout on their own
+    // QUIC stream (arrival order within the pane stream is preserved).
+    auto eit = m_early.find(pane_id);
+    if (eit != m_early.end()) {
+        dbg("remote: pane %u: replaying %zu early frame(s)", pane_id,
+            eit->second.size());
+        for (auto &f : eit->second) {
+            if (f.kind == 0 && m_client.on_snapshot)
+                m_client.on_snapshot(pane_id, (const uint8_t *)f.data.data(),
+                                     f.data.size());
+            else if (f.kind == 1)
+                pane->feed_data(f.data.data(), f.data.size());
+        }
+        m_early.erase(eit);
+    }
     return pane;
 }
 
@@ -644,6 +671,7 @@ void RemoteController::reposition_for_tab_bar() {
 void RemoteController::exit() {
     m_active = false;
     m_pane_map.clear();
+    m_early.clear();
     m_windows.clear();
     m_fetching.clear();
     m_fetch_done.clear();
