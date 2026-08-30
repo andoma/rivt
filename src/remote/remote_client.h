@@ -118,6 +118,8 @@ public:
     const std::string &link_state() const { return m_link_state; }
     // Seconds since we last received any bytes (for staleness).
     double seconds_since_rx() const;
+    // Smoothed transport RTT in ms (0 = unknown / not QUIC).
+    int rtt_ms() const;
 
 private:
     void on_event(uint32_t ev);

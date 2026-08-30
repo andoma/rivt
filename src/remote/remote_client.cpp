@@ -23,6 +23,9 @@ using proto::MsgType;
 double RemoteClient::seconds_since_rx() const {
     return m_quic ? m_quic->seconds_since_rx() : 0.0;
 }
+int RemoteClient::rtt_ms() const {
+    return m_quic && m_quic_conn ? (int)m_quic->rtt_ms(m_quic_conn) : 0;
+}
 void RemoteClient::set_link(const std::string &st) {
     if (m_link_state == st) return;
     m_link_state = st;

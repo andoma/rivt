@@ -104,6 +104,7 @@ private:
     int m_reconnect_timer = -1;
     int m_reconnect_attempts = 0;
     std::string m_peer_name;
+    std::string m_last_suffix;
     int m_status_timer = -1;
 
     // Predictive echo. Every prediction is scored against the

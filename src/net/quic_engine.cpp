@@ -435,6 +435,11 @@ void QuicEngine::on_socket(uint32_t events) {
     pump();
 }
 
+uint64_t QuicEngine::rtt_ms(Conn *c) const {
+    if (!c || c->dead || !c->cnx) return 0;
+    return picoquic_get_rtt(c->cnx) / 1000;
+}
+
 double QuicEngine::seconds_since_rx() const {
     if (m_last_rx_us == 0) return 0.0;
     uint64_t now = picoquic_current_time();

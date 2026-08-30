@@ -103,6 +103,9 @@ public:
     // Seconds since any datagram last arrived on this engine (keepalives
     // included) — 0 if nothing yet. Basis for liveness/staleness.
     double seconds_since_rx() const;
+    // Smoothed RTT of a connection in ms (picoquic's estimator, fed by
+    // every ack including keepalives). 0 when unknown.
+    uint64_t rtt_ms(Conn *c) const;
 
     // True if a connection closed due to peer-certificate rejection
     // (TLS certificate_unknown) — i.e. we reached the peer but neither

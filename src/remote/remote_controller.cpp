@@ -622,6 +622,13 @@ void RemoteController::refresh_status() {
     std::string s = m_peer_name.empty() ? "remote" : m_peer_name;
     if (!t.empty()) s += "  \u00b7  " + t;   // middle dot
     if (!state.empty()) s += "  \u00b7  " + state;
+    // Latency, only when it's worth knowing: silent under 150ms, then a
+    // ~100ms-bucketed figure so the title doesn't flicker (5s cadence).
+    int rtt = m_client.rtt_ms();
+    if (m_active && state.empty() && rtt >= 150)
+        s += "  \u00b7  ~" + std::to_string(((rtt + 50) / 100) * 100) + " ms";
+    if (s == m_last_suffix) return;
+    m_last_suffix = s;
     m_tabs.set_title_suffix(s);
 }
 
