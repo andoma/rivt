@@ -502,7 +502,7 @@ void RemoteController::shadow_ack(uint32_t pane_id, uint32_t seq, bool echo_off)
     } else if (done) {
         predict_overlay_sync(pane_id, ps);
     }
-    if ((m_shadow_stats.hits + m_shadow_stats.miss_cell) % 50 == 0 &&
+    if (done && (m_shadow_stats.hits + m_shadow_stats.miss_cell) % 50 == 0 &&
         m_shadow_stats.predicted) {
         uint64_t scored = m_shadow_stats.hits + m_shadow_stats.miss_cell +
                           m_shadow_stats.miss_timeout;

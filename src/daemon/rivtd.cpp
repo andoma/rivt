@@ -946,9 +946,13 @@ private:
                 // suppresses predictions before the first password key.
                 auto pit = m_panes.find(pid);
                 if (pit != m_panes.end()) {
+                    // "Echo off" only counts in canonical mode: that is
+                    // the password-read shape (sudo, read -s). Readline
+                    // prompts run raw with ECHO off and echo manually —
+                    // they must stay predictable.
                     struct termios tio;
                     bool eoff = tcgetattr(pane->pty().fd(), &tio) == 0 &&
-                                !(tio.c_lflag & ECHO);
+                                !(tio.c_lflag & ECHO) && (tio.c_lflag & ICANON);
                     bool flip = eoff != pit->second.echo_off;
                     pit->second.echo_off = eoff;
                     if (pit->second.in_client == c.get() &&
