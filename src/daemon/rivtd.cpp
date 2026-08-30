@@ -78,6 +78,10 @@ struct Session {
     std::string name;
     int cols = 80, rows = 24;   // session grid; every window fills it
     std::vector<SrvWindow> windows;
+    // SSH agent forwarding: shells get SSH_AUTH_SOCK=agent_path; each
+    // connection becomes a stream bridged to the attached client.
+    int agent_fd = -1;
+    std::string agent_path;
 
     size_t pane_count() const {
         size_t n = 0;
@@ -107,6 +111,10 @@ public:
 
     bool init() {
         if (!m_handover_in.empty()) restore_handover(m_handover_in);
+        // Restored shells inherited SSH_AUTH_SOCK from the previous
+        // daemon; the path is deterministic per session id, so re-listen
+        // on the same paths and their env stays valid across upgrades.
+        for (auto &[sid, sess] : m_sessions) session_agent_init(sess);
         // Signals via signalfd: SIGCHLD for reaping, SIGTERM/SIGINT to quit.
         sigset_t mask;
         sigemptyset(&mask);
@@ -764,6 +772,24 @@ private:
             m_sessions.erase(it);
             break;
         }
+        case MsgType::AgentData: {
+            uint32_t id = r.u32();
+            if (!r.ok) return;
+            auto it = m_agent_streams.find(id);
+            if (it == m_agent_streams.end() || it->second.client != c) return;
+            size_t n = r.remaining();
+            it->second.out.append((const char *)data + (len - n), n);
+            agent_stream_flush(it->second);
+            break;
+        }
+        case MsgType::AgentClose: {
+            uint32_t id = r.u32();
+            if (!r.ok) return;
+            auto it = m_agent_streams.find(id);
+            if (it != m_agent_streams.end() && it->second.client == c)
+                close_agent_stream(id, false);
+            break;
+        }
         default:
             break;
         }
@@ -793,6 +819,7 @@ private:
         s.cols = cols;
         s.rows = rows;
         m_sessions.emplace(sid, std::move(s));
+        session_agent_init(m_sessions.at(sid));
 
         uint16_t pid = add_window(m_sessions.at(sid), cwd);
         if (!pid) {
@@ -817,7 +844,7 @@ private:
     uint16_t add_window(Session &s, const std::string &cwd) {
         uint16_t pid = m_next_pane++;
         auto pane = std::make_unique<Pane>(s.cols, s.rows, m_config);
-        if (!pane->spawn_shell(m_loop, cwd)) return 0;
+        if (!pane->spawn_shell(m_loop, cwd, s.agent_path)) return 0;
 
         SrvWindow win;
         win.id = m_next_wid++;
@@ -935,7 +962,7 @@ private:
         uint16_t pid = m_next_pane++;
         auto pane = std::make_unique<Pane>(target->screen().cols(),
                                            target->screen().rows(), m_config);
-        if (!pane->spawn_shell(m_loop, osc7_path(target->cwd))) return;
+        if (!pane->spawn_shell(m_loop, osc7_path(target->cwd), s.agent_path)) return;
         if (!wit->layout.split(target, pane.get(), dir)) {
             pane->detach(m_loop);
             pane->pty().close();
@@ -971,6 +998,21 @@ private:
 
     void close_session(Session &s, const char *reason) {
         rivt::logmsg("rivtd: closing session %u (%s)\n", s.id, reason);
+        if (s.agent_fd >= 0) {
+            m_loop.remove_fd(s.agent_fd);
+            ::close(s.agent_fd);
+            unlink(s.agent_path.c_str());
+            s.agent_fd = -1;
+        }
+        for (auto it = m_agent_streams.begin(); it != m_agent_streams.end();) {
+            if (it->second.sid == s.id) {
+                m_loop.remove_fd(it->second.fd);
+                ::close(it->second.fd);
+                it = m_agent_streams.erase(it);
+            } else {
+                ++it;
+            }
+        }
         for (auto &win : s.windows)
             for (auto &[pid, pane] : win.panes) {
                 m_panes.erase(pid);
@@ -984,6 +1026,119 @@ private:
                 send_control(c.get(), MsgType::SessionClosed, w);
                 c->attached = 0;
             }
+    }
+
+    // ---------------- SSH agent forwarding ----------------
+
+    // Listen on a per-session unix socket; shells of the session get it
+    // as SSH_AUTH_SOCK. Path is deterministic (survives daemon upgrade).
+    void session_agent_init(Session &s) {
+        std::string dir = m_path.substr(0, m_path.rfind('/'));
+        s.agent_path = dir + "/agent-" + std::to_string(s.id) + ".sock";
+        unlink(s.agent_path.c_str());
+        struct sockaddr_un addr {};
+        addr.sun_family = AF_UNIX;
+        if (s.agent_path.size() >= sizeof(addr.sun_path)) return;
+        strcpy(addr.sun_path, s.agent_path.c_str());
+        int fd = socket(AF_UNIX, SOCK_STREAM | SOCK_NONBLOCK | SOCK_CLOEXEC, 0);
+        if (fd < 0) return;
+        if (bind(fd, (struct sockaddr *)&addr, sizeof addr) < 0 || listen(fd, 8) < 0) {
+            ::close(fd);
+            return;
+        }
+        chmod(s.agent_path.c_str(), 0600);
+        s.agent_fd = fd;
+        uint32_t sid = s.id;
+        m_loop.add_fd(fd, [this, sid](uint32_t) { agent_accept(sid); });
+    }
+
+    void agent_accept(uint32_t sid) {
+        auto sit = m_sessions.find(sid);
+        if (sit == m_sessions.end()) return;
+        int cfd;
+        while ((cfd = accept4(sit->second.agent_fd, nullptr, nullptr,
+                              SOCK_NONBLOCK | SOCK_CLOEXEC)) >= 0) {
+            // Bridge to the most recently connected client attached to
+            // this session; with none, refuse — ssh falls back cleanly.
+            Client *target = nullptr;
+            for (auto it = m_clients.rbegin(); it != m_clients.rend(); ++it)
+                if (!(*it)->dead && (*it)->attached == sid) { target = it->get(); break; }
+            if (!target) {
+                ::close(cfd);
+                continue;
+            }
+            uint32_t id = m_next_agent_stream++;
+            m_agent_streams[id] = {cfd, sid, target, {}, 0, false};
+            m_loop.add_fd(cfd, [this, id](uint32_t ev) { agent_stream_event(id, ev); });
+            proto::Writer w;
+            w.u32(id);
+            send_control(target, MsgType::AgentOpen, w);
+            dbg("rivtd: agent stream %u opened (session %u)", id, sid);
+        }
+    }
+
+    void agent_stream_event(uint32_t id, uint32_t ev) {
+        auto it = m_agent_streams.find(id);
+        if (it == m_agent_streams.end()) return;
+        AgentStream &st = it->second;
+        if (ev & EV_WRITE) agent_stream_flush(st);
+        if (ev & EV_READ) {
+            uint8_t buf[4096];
+            for (;;) {
+                ssize_t n = recv(st.fd, buf, sizeof buf, 0);
+                if (n < 0) {
+                    if (errno == EAGAIN || errno == EWOULDBLOCK) break;
+                    close_agent_stream(id, true);
+                    return;
+                }
+                if (n == 0) {
+                    close_agent_stream(id, true);
+                    return;
+                }
+                if (st.client && !st.client->dead) {
+                    proto::Writer w;
+                    w.u32(id);
+                    w.bytes(buf, (size_t)n);
+                    send_control(st.client, MsgType::AgentData, w);
+                }
+            }
+        }
+        if (ev & (EV_HUP | EV_ERR)) close_agent_stream(id, true);
+    }
+
+    void agent_stream_flush(AgentStream &st) {
+        while (st.out_off < st.out.size()) {
+            ssize_t n = send(st.fd, st.out.data() + st.out_off,
+                             st.out.size() - st.out_off, MSG_NOSIGNAL);
+            if (n > 0) { st.out_off += (size_t)n; continue; }
+            if (n < 0 && (errno == EAGAIN || errno == EWOULDBLOCK)) break;
+            if (n < 0 && errno == EINTR) continue;
+            break;  // hard error: the read side will see HUP and clean up
+        }
+        if (st.out_off == st.out.size()) {
+            st.out.clear();
+            st.out_off = 0;
+        }
+        bool want = st.out_off < st.out.size();
+        if (want != st.write_armed) {
+            st.write_armed = want;
+            m_loop.modify_fd(st.fd, EV_READ | (want ? EV_WRITE : 0));
+        }
+    }
+
+    void close_agent_stream(uint32_t id, bool notify) {
+        auto it = m_agent_streams.find(id);
+        if (it == m_agent_streams.end()) return;
+        AgentStream st = it->second;
+        m_agent_streams.erase(it);
+        m_loop.remove_fd(st.fd);
+        ::close(st.fd);
+        if (notify && st.client && !st.client->dead) {
+            proto::Writer w;
+            w.u32(id);
+            send_control(st.client, MsgType::AgentClose, w);
+        }
+        dbg("rivtd: agent stream %u closed", id);
     }
 
     // ---------------- deferred cleanup ----------------
@@ -1040,6 +1195,15 @@ private:
             m_sweep_clients = false;
             for (auto &c : m_clients)
                 if (c->dead) {
+                    for (auto it = m_agent_streams.begin(); it != m_agent_streams.end();) {
+                        if (it->second.client == c.get()) {
+                            m_loop.remove_fd(it->second.fd);
+                            ::close(it->second.fd);
+                            it = m_agent_streams.erase(it);
+                        } else {
+                            ++it;
+                        }
+                    }
                     if (c->quic) {
                         c->quic->user = nullptr;
                         m_quic->close_conn(c->quic);
@@ -1246,6 +1410,19 @@ private:
     // fresh allocation is made every few answers; old relays keep
     // serving their established sessions until they have been silent
     // long enough to reap.
+    // Agent forwarding streams: one per accepted connection on a
+    // session's agent socket, pinned to the client chosen at accept.
+    struct AgentStream {
+        int fd = -1;
+        uint32_t sid = 0;
+        Client *client = nullptr;  // valid until sweep() reaps it
+        std::string out;
+        size_t out_off = 0;
+        bool write_armed = false;
+    };
+    std::unordered_map<uint32_t, AgentStream> m_agent_streams;
+    uint32_t m_next_agent_stream = 1;
+
     std::vector<std::unique_ptr<net::TurnRelay>> m_relays;
     net::TurnRelay *m_turn = nullptr;  // current: advertised in answers
     int m_turn_answers = 0;            // answers served by m_turn

@@ -10,7 +10,8 @@ public:
     ~Pty();
 
     // Spawn a shell process, returns true on success
-    bool spawn(int cols, int rows, const std::string &shell = "", const std::string &cwd = "");
+    bool spawn(int cols, int rows, const std::string &shell = "", const std::string &cwd = "",
+               const std::string &auth_sock = "");
 
     // Adopt an already-open PTY master (daemon handover across exec).
     void adopt(int master_fd, pid_t child_pid) {

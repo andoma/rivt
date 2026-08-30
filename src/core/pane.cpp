@@ -15,9 +15,10 @@ Pane::Pane(int cols, int rows, const Config &config)
 
 Pane::~Pane() = default;
 
-bool Pane::spawn_shell(EventLoop &loop, const std::string &start_cwd) {
+bool Pane::spawn_shell(EventLoop &loop, const std::string &start_cwd,
+                       const std::string &auth_sock) {
     dbg("spawn_shell: cwd='%s'", start_cwd.c_str());
-    if (!m_pty.spawn(m_screen.cols(), m_screen.rows(), "", start_cwd))
+    if (!m_pty.spawn(m_screen.cols(), m_screen.rows(), "", start_cwd, auth_sock))
         return false;
     register_pty(loop);
     return true;

@@ -457,6 +457,7 @@ bool RemoteClient::connect(const std::string &path, bool autostart) {
 
 void RemoteClient::close() {
     disarm_ack_probe();
+    agent_close_all();
     if (m_turn_fallback_timer >= 0) {
         m_loop.remove_timer(m_turn_fallback_timer);
         m_turn_fallback_timer = -1;
@@ -649,9 +650,123 @@ void RemoteClient::dispatch_control(uint16_t type, const uint8_t *data, size_t l
         // The replica's own parser regenerates these locally; the
         // control events exist for pickers/detached observers.
         break;
+    case MsgType::AgentOpen: {
+        uint32_t id = r.u32();
+        if (r.ok) agent_open(id);
+        break;
+    }
+    case MsgType::AgentData: {
+        uint32_t id = r.u32();
+        if (!r.ok) break;
+        auto it = m_agent.find(id);
+        if (it == m_agent.end()) break;
+        size_t n = r.remaining();
+        it->second.out.append((const char *)data + (len - n), n);
+        agent_flush(it->second, id);
+        break;
+    }
+    case MsgType::AgentClose: {
+        uint32_t id = r.u32();
+        if (r.ok) agent_close(id, false);
+        break;
+    }
     default:
         break;
     }
+}
+
+// ---------------- SSH agent forwarding ----------------
+
+void RemoteClient::agent_open(uint32_t id) {
+    const char *sock = getenv("SSH_AUTH_SOCK");
+    struct sockaddr_un addr {};
+    addr.sun_family = AF_UNIX;
+    if (!sock || !*sock || strlen(sock) >= sizeof(addr.sun_path)) {
+        dbg("agent: no local SSH_AUTH_SOCK — refusing stream %u", id);
+        agent_close(id, true);
+        return;
+    }
+    strcpy(addr.sun_path, sock);
+    int fd = net::socket_cloexec(AF_UNIX, SOCK_STREAM, 0, /*nonblock=*/true);
+    if (fd < 0 || (::connect(fd, (struct sockaddr *)&addr, sizeof addr) < 0 &&
+                   errno != EINPROGRESS)) {
+        dbg("agent: cannot connect %s (errno %d) — refusing stream %u",
+            sock, errno, id);
+        if (fd >= 0) ::close(fd);
+        agent_close(id, true);
+        return;
+    }
+    m_agent[id] = {fd, {}, 0, false};
+    m_loop.add_fd(fd, [this, id](uint32_t ev) { agent_event(id, ev); });
+    dbg("agent: stream %u bridged to %s", id, sock);
+}
+
+void RemoteClient::agent_event(uint32_t id, uint32_t ev) {
+    auto it = m_agent.find(id);
+    if (it == m_agent.end()) return;
+    if (ev & EV_WRITE) agent_flush(it->second, id);
+    if (ev & EV_READ) {
+        uint8_t buf[4096];
+        for (;;) {
+            ssize_t n = recv(it->second.fd, buf, sizeof buf, 0);
+            if (n < 0) {
+                if (errno == EAGAIN || errno == EWOULDBLOCK) break;
+                agent_close(id, true);
+                return;
+            }
+            if (n == 0) {
+                agent_close(id, true);
+                return;
+            }
+            proto::Writer w;
+            w.u32(id);
+            w.bytes(buf, (size_t)n);
+            send_control((uint16_t)MsgType::AgentData, w);
+        }
+    }
+    if (ev & (EV_HUP | EV_ERR)) agent_close(id, true);
+}
+
+void RemoteClient::agent_flush(AgentBridge &b, uint32_t id) {
+    (void)id;
+    while (b.out_off < b.out.size()) {
+        ssize_t n = ::send(b.fd, b.out.data() + b.out_off, b.out.size() - b.out_off, 0);
+        if (n > 0) { b.out_off += (size_t)n; continue; }
+        if (n < 0 && (errno == EAGAIN || errno == EWOULDBLOCK)) break;
+        if (n < 0 && errno == EINTR) continue;
+        break;  // hard error surfaces as HUP on the next event
+    }
+    if (b.out_off == b.out.size()) {
+        b.out.clear();
+        b.out_off = 0;
+    }
+    bool want = b.out_off < b.out.size();
+    if (want != b.write_armed) {
+        b.write_armed = want;
+        m_loop.modify_fd(b.fd, EV_READ | (want ? EV_WRITE : 0));
+    }
+}
+
+void RemoteClient::agent_close(uint32_t id, bool notify) {
+    auto it = m_agent.find(id);
+    if (it != m_agent.end()) {
+        m_loop.remove_fd(it->second.fd);
+        ::close(it->second.fd);
+        m_agent.erase(it);
+    }
+    if (notify && connected()) {
+        proto::Writer w;
+        w.u32(id);
+        send_control((uint16_t)MsgType::AgentClose, w);
+    }
+}
+
+void RemoteClient::agent_close_all() {
+    for (auto &[id, b] : m_agent) {
+        m_loop.remove_fd(b.fd);
+        ::close(b.fd);
+    }
+    m_agent.clear();
 }
 
 void RemoteClient::send_frame(uint16_t channel, uint16_t type, const void *data, size_t len) {

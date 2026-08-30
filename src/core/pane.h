@@ -23,7 +23,8 @@ public:
     ~Pane();
 
     // Spawn shell and register PTY fd with event loop
-    bool spawn_shell(EventLoop &loop, const std::string &start_cwd = "");
+    bool spawn_shell(EventLoop &loop, const std::string &start_cwd = "",
+                     const std::string &auth_sock = "");
 
     // Adopt an existing PTY (daemon handover): register fd, no fork.
     void adopt_shell(EventLoop &loop, int master_fd, pid_t child_pid);

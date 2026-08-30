@@ -22,7 +22,8 @@ Pty::~Pty() {
     close();
 }
 
-bool Pty::spawn(int cols, int rows, const std::string &shell, const std::string &cwd) {
+bool Pty::spawn(int cols, int rows, const std::string &shell, const std::string &cwd,
+                const std::string &auth_sock) {
     struct winsize ws {};
     ws.ws_col = cols;
     ws.ws_row = rows;
@@ -52,6 +53,8 @@ bool Pty::spawn(int cols, int rows, const std::string &shell, const std::string 
         setenv("COLORTERM", "truecolor", 1);
         setenv("TERM_PROGRAM", "ghostty", 1);
         setenv("TERM_PROGRAM_VERSION", "1.2.0", 1);
+        // rivtd sessions: agent requests bridge to the attached client.
+        if (!auth_sock.empty()) setenv("SSH_AUTH_SOCK", auth_sock.c_str(), 1);
 
         // HACK: We claim to be Ghostty because apps like ink/claude-cli check
         // TERM_PROGRAM against a hardcoded whitelist to decide whether to enable

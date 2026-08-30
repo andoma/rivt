@@ -62,6 +62,15 @@ enum class MsgType : uint16_t {
                          //   (cell units; 1-cell gaps are divider space)
     WindowAdded = 75,    // u32 session_id, u32 window_id
     WindowClosed = 76,   // u32 session_id, u32 window_id
+
+    // SSH agent forwarding: connections to the session's SSH_AUTH_SOCK
+    // on the daemon become streams bridged to the attached client's
+    // local agent. Stream ids are daemon-allocated; Data/Close flow in
+    // both directions. Old peers ignore unknown types, so mixed
+    // versions just mean a dead agent socket (ssh falls back).
+    AgentOpen = 80,      // daemon -> client: u32 stream_id
+    AgentData = 81,      // both: u32 stream_id, raw bytes
+    AgentClose = 82,     // both: u32 stream_id
 };
 
 } // namespace rivt::proto

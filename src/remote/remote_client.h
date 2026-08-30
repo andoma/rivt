@@ -7,6 +7,7 @@
 #include "proto/wire.h"
 #include <cstdint>
 #include <functional>
+#include <unordered_map>
 #include <chrono>
 #include <memory>
 #include <string>
@@ -124,6 +125,21 @@ private:
     void fail();
     void arm_ack_probe();     // watch for any reply after a QUIC send
     void disarm_ack_probe();
+
+    // SSH agent forwarding: daemon-side connections to the session's
+    // SSH_AUTH_SOCK bridged to our local agent, one fd per stream id.
+    struct AgentBridge {
+        int fd = -1;
+        std::string out;
+        size_t out_off = 0;
+        bool write_armed = false;
+    };
+    std::unordered_map<uint32_t, AgentBridge> m_agent;
+    void agent_open(uint32_t id);
+    void agent_event(uint32_t id, uint32_t ev);
+    void agent_flush(AgentBridge &b, uint32_t id);
+    void agent_close(uint32_t id, bool notify);
+    void agent_close_all();
 
     EventLoop &m_loop;
     RemoteEndpoint m_endpoint;
