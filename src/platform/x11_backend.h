@@ -42,6 +42,7 @@ public:
 
     float get_dpi_scale() override;
     void set_mouse_cursor(MouseCursor cursor) override;
+    bool is_obscured() const override { return m_obscured; }
 
 private:
     void handle_key_event(xcb_key_press_event_t *ev, bool pressed);
@@ -73,6 +74,7 @@ private:
     Display *m_xlib_display = nullptr;
     int m_width = 0;
     int m_height = 0;
+    bool m_obscured = false;
 
     // Clipboard
     xcb_atom_t m_atom_clipboard = 0;

@@ -68,7 +68,8 @@ bool X11Backend::create_window(int width, int height, const std::string &title) 
         XCB_EVENT_MASK_POINTER_MOTION |
         XCB_EVENT_MASK_STRUCTURE_NOTIFY |
         XCB_EVENT_MASK_FOCUS_CHANGE |
-        XCB_EVENT_MASK_PROPERTY_CHANGE
+        XCB_EVENT_MASK_PROPERTY_CHANGE |
+        XCB_EVENT_MASK_VISIBILITY_CHANGE
     };
 
     xcb_create_window(m_conn, XCB_COPY_FROM_PARENT, m_window, m_screen->root,
@@ -189,7 +190,12 @@ bool X11Backend::create_gl_context() {
     if (m_egl_surface == EGL_NO_SURFACE) return false;
 
     eglMakeCurrent(m_egl_display, m_egl_surface, m_egl_surface, m_egl_context);
-    eglSwapInterval(m_egl_display, 1);
+    // No vsync wait: drivers throttle occluded windows' vblank-synced
+    // swaps (NVIDIA to ~1 fps), and one blocked swap stalls the shared
+    // single-threaded loop for every window. Frame pacing is done in
+    // Window::needs_render() instead; under a compositor (which any
+    // modern session has) there is no tearing without vsync.
+    eglSwapInterval(m_egl_display, 0);
     return true;
 }
 
@@ -494,6 +500,16 @@ void X11Backend::process_events() {
             case XCB_PROPERTY_NOTIFY:
                 handle_property_notify((xcb_property_notify_event_t *)ev);
                 break;
+            case XCB_VISIBILITY_NOTIFY: {
+                auto *vis = (xcb_visibility_notify_event_t *)ev;
+                bool obscured = vis->state == XCB_VISIBILITY_FULLY_OBSCURED;
+                if (obscured != m_obscured) {
+                    dbg("x11: window %s", obscured ? "fully obscured — pausing renders"
+                                                   : "visible");
+                    m_obscured = obscured;
+                }
+                break;
+            }
             default:
                 if (type == m_xkb_first_event) {
                     auto *xkb_ev = (xcb_xkb_state_notify_event_t *)ev;

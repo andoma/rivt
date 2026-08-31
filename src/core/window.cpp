@@ -7,6 +7,7 @@
 #include "remote/remote_controller.h"
 
 #include "platform/keysym.h"
+#include <algorithm>
 #include <climits>
 #include <chrono>
 #include <cstdio>
@@ -613,8 +614,14 @@ void Window::handle_resize(int w, int h) {
     // scale (retina <-> non-retina); the font must be re-rasterized at
     // the new DPI or the grid comes out at the old scale.
     float want_dpi = m_platform->get_dpi_scale() * 96.0f;
-    if (want_dpi != m_renderer.font().dpi())
+    if (want_dpi != m_renderer.font().dpi()) {
+        // If this fires on every resize event the DPI values never
+        // converge (float rounding) and each ConfigureNotify pays a full
+        // font re-rasterization + atlas clear.
+        dbg("window(%p): dpi %.4f -> %.4f, re-rasterizing font (atlas cleared)",
+            (void *)this, (double)m_renderer.font().dpi(), (double)want_dpi);
         m_renderer.set_font_size(m_config.font_size, want_dpi);
+    }
     m_last_bar_h = tab_bar_height();
     m_renderer.set_viewport(w, h);
     const auto &m = m_renderer.metrics();
@@ -1289,7 +1296,9 @@ void Window::render_if_needed() {
     m_tmux_stale_controller.reset();
     m_tmux_stale_client.reset();
 
-    if (!m_needs_render) return;
+    if (!needs_render()) return;
+
+    auto rs_t0 = std::chrono::steady_clock::now();
 
     m_platform->make_current();
     m_renderer.begin_frame(m_config);
@@ -1406,8 +1415,42 @@ void Window::render_if_needed() {
         }
     }
 
+    auto rs_t1 = std::chrono::steady_clock::now();
     m_platform->swap_buffers();
     m_needs_render = false;
+    m_last_frame = std::chrono::steady_clock::now();
+
+    // --debug: per-second render summary. Separates the three lag
+    // signatures: a render loop that never goes idle (frames/s pegged at
+    // the refresh rate while nothing is happening), a swap_buffers that
+    // starts blocking beyond one vsync (driver/compositor), and frame
+    // builds that got expensive (e.g. glyph atlas being rebuilt).
+    if (debug_enabled()) {
+        auto rs_t2 = std::chrono::steady_clock::now();
+        auto ms = [](auto a, auto b) {
+            return std::chrono::duration<double, std::milli>(b - a).count();
+        };
+        double build = ms(rs_t0, rs_t1), swap = ms(rs_t1, rs_t2);
+        m_rs_frames++;
+        m_rs_build_sum += build;
+        m_rs_swap_sum += swap;
+        m_rs_build_max = std::max(m_rs_build_max, build);
+        m_rs_swap_max = std::max(m_rs_swap_max, swap);
+        double since_log = ms(m_rs_last_log, rs_t2);
+        if (m_rs_last_log.time_since_epoch().count() == 0) {
+            m_rs_last_log = rs_t2;
+        } else if (since_log >= 1000.0) {
+            dbg("window(%p): render %.1f fps, build avg %.2f max %.2f ms, "
+                "swap avg %.2f max %.2f ms",
+                (void *)this, m_rs_frames * 1000.0 / since_log,
+                m_rs_build_sum / m_rs_frames, m_rs_build_max,
+                m_rs_swap_sum / m_rs_frames, m_rs_swap_max);
+            m_rs_frames = 0;
+            m_rs_build_sum = m_rs_swap_sum = 0;
+            m_rs_build_max = m_rs_swap_max = 0;
+            m_rs_last_log = rs_t2;
+        }
+    }
 }
 
 } // namespace rivt

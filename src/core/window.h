@@ -5,6 +5,7 @@
 #include "render/renderer.h"
 #include "net/rendezvous.h"
 #include "platform/platform.h"
+#include <chrono>
 #include <functional>
 #include <memory>
 #include <vector>
@@ -56,7 +57,17 @@ public:
     // Close the focused pane via its owner (tmux/rivtd/local).
     void close_focused_pane_routed(const char *reason);
     void connectivity_event(Platform::ConnEvent e);  // sleep/wake/path hook
-    bool needs_render() const { return m_needs_render; }
+    // While fully obscured the window doesn't render (an occluded X11
+    // window's swap can block ~1s, stalling the shared loop), but
+    // m_needs_render stays latched so the first frame after it becomes
+    // visible again repaints. Swap doesn't block on vsync on X11 (see
+    // create_gl_context), so this also paces frames: at most one render
+    // per budget interval per window.
+    bool needs_render() const {
+        if (!m_needs_render || m_platform->is_obscured()) return false;
+        return std::chrono::steady_clock::now() - m_last_frame >=
+               std::chrono::milliseconds(8);
+    }
     TabManager *tab_manager() { return m_tabs.get(); }
 
     // Resize window to fit a given cell grid (tmux controller; rivtd
@@ -133,6 +144,15 @@ private:
     void picker_key(const KeyEvent &key);
     void picker_select();
     void picker_stop();
+
+    // Frame pacing: when the last render finished (see needs_render()).
+    std::chrono::steady_clock::time_point m_last_frame{};
+
+    // --debug render stats, summarized once per second (render_if_needed)
+    int m_rs_frames = 0;
+    double m_rs_build_sum = 0, m_rs_build_max = 0;
+    double m_rs_swap_sum = 0, m_rs_swap_max = 0;
+    std::chrono::steady_clock::time_point m_rs_last_log{};
 
     // Deferred destruction — can't destroy while inside feed_data() call stack
     std::unique_ptr<TmuxClient> m_tmux_stale_client;

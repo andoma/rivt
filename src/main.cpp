@@ -325,8 +325,11 @@ int main(int argc, char *argv[]) {
         if (windows.empty() && pending_connect.empty()) { loop.request_quit(); break; }
 #endif
 
-        // render_if_needed() calls swap_buffers() which blocks until
-        // vsync, naturally pacing the loop to the display refresh rate.
+        // On X11 swap_buffers() doesn't block (swap interval 0 — a
+        // vsync-synced swap stalls ~1s for occluded windows, freezing
+        // every window in this shared loop); Window::needs_render()
+        // paces frames instead. On macOS the swap still blocks until
+        // vsync, pacing the loop to the display refresh rate.
         for (auto &w : windows) w->render_if_needed();
 
         // EGL shares our X connection, so eglSwapBuffers' round trips read

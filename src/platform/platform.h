@@ -68,6 +68,13 @@ public:
     // Display info
     virtual float get_dpi_scale() = 0;
 
+    // True while the window is fully covered by other windows. Rendering
+    // an obscured window is not just wasted work: on X11 without a
+    // compositor the present-complete event never arrives and
+    // eglSwapBuffers blocks ~1s per frame, stalling the shared event
+    // loop (and every other window) with it.
+    virtual bool is_obscured() const { return false; }
+
     // Callbacks
     std::function<void(const KeyEvent &)> on_key;
     std::function<void(const MouseEvent &)> on_mouse;

@@ -257,6 +257,7 @@ void RemoteController::maybe_send_resize() {
     }
     m_sent_cols = m_cols;
     m_sent_rows = m_rows;
+    dbg("remote: resize_session %dx%d", m_cols, m_rows);
     m_client.resize_session(m_cols, m_rows);
     m_resize_timer = m_client.loop().add_timer(150, [this]() {
         m_client.loop().remove_timer(m_resize_timer);
@@ -284,9 +285,14 @@ void RemoteController::apply_layout(uint32_t wid, int cols, int rows,
     // actual size is a real request and everyone converges on it).
     if (cols != m_cols || rows != m_rows) {
         if (cols != m_sent_cols || rows != m_sent_rows) {
+            dbg("remote: adopting daemon grid %dx%d (ours %dx%d, sent %dx%d)",
+                cols, rows, m_cols, m_rows, m_sent_cols, m_sent_rows);
             m_sent_cols = cols;
             m_sent_rows = rows;
             m_window.resize_to_cells(cols, rows);
+        } else {
+            dbg("remote: ignoring layout echo %dx%d (ours %dx%d)",
+                cols, rows, m_cols, m_rows);
         }
     }
 
