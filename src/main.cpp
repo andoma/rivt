@@ -12,9 +12,16 @@
 #include <cstdio>
 #include <cstring>
 #include <signal.h>
+#include <spawn.h>
+#include <sys/wait.h>
+#include <unistd.h>
 #include <vector>
 #include <memory>
 #include <algorithm>
+
+#ifndef __APPLE__
+extern "C" { extern char **environ; }
+#endif
 
 using namespace rivt;
 
@@ -125,7 +132,13 @@ int main(int argc, char *argv[]) {
     // (attach_sid, persistent): sid 0 creates a session; non-persistent
     // sessions are killed on clean window close.
     std::function<bool(uint32_t, bool)> create_remote_window;
-    std::function<void()> create_picker_window;      // Ctrl-Shift-N -> device picker
+    std::function<void()> create_picker_window;      // device picker window (in-process)
+    // Ctrl-Shift-N. On Linux each new top-level window is its own
+    // process, so a crash (or wedged GPU driver) in one window can't
+    // take the rest down. macOS stays in-process: the app model (menu
+    // bar, dock, Cmd-N) assumes one process owning all windows.
+    std::function<void()> new_window_action;
+    std::vector<pid_t> spawned_windows;  // Linux: child rivt processes to reap
     std::function<bool(const std::string &)> open_remote;  // connect to a named box
     std::vector<std::string> pending_connect;  // picker selections, opened at loop top
 
@@ -148,7 +161,7 @@ int main(int argc, char *argv[]) {
             raw->platform()->process_events();
         });
         // New windows from a daemon-backed window get the same lifecycle.
-        raw->on_new_window = create_picker_window;
+        raw->on_new_window = new_window_action;
         raw->on_new_tmux_window = create_tmux_window;
         raw->on_close = [](Window *w) { w->mark_closing(); };
         windows.push_back(std::move(win));
@@ -162,7 +175,7 @@ int main(int argc, char *argv[]) {
         loop.add_fd(raw->event_fd(), [raw](uint32_t) {
             raw->platform()->process_events();
         });
-        raw->on_new_window = create_picker_window;
+        raw->on_new_window = new_window_action;
         raw->on_new_tmux_window = create_tmux_window;
         raw->on_close = [](Window *w) { w->mark_closing(); };
         windows.push_back(std::move(win));
@@ -204,7 +217,7 @@ int main(int argc, char *argv[]) {
             return false;
         Window *raw = win.get();
         loop.add_fd(raw->event_fd(), [raw](uint32_t) { raw->platform()->process_events(); });
-        raw->on_new_window = create_picker_window;
+        raw->on_new_window = new_window_action;
         raw->on_pick_remote = [&](const std::string &n) { pending_connect.push_back(n); };
         raw->on_close = [](Window *w) { w->mark_closing(); };
         windows.push_back(std::move(win));
@@ -216,11 +229,53 @@ int main(int argc, char *argv[]) {
         if (!win->init_picker(rivt::net::rendezvous_url())) return;
         Window *raw = win.get();
         loop.add_fd(raw->event_fd(), [raw](uint32_t) { raw->platform()->process_events(); });
-        raw->on_new_window = create_picker_window;
+        raw->on_new_window = new_window_action;
         raw->on_pick_remote = [&](const std::string &n) { pending_connect.push_back(n); };
         raw->on_close = [](Window *w) { w->mark_closing(); };
         windows.push_back(std::move(win));
     };
+
+#ifdef __APPLE__
+    new_window_action = create_picker_window;
+#else
+    new_window_action = [&]() {
+        char exe[4096];
+        ssize_t n = readlink("/proc/self/exe", exe, sizeof exe - 1);
+        if (n <= 0) { create_picker_window(); return; }
+        exe[n] = 0;
+        // The child is a fresh rivt showing the picker. closefrom(3)
+        // drops every inherited fd (X connection, PTY masters, QUIC
+        // sockets) — the child needs none of them, and CLOEXEC flags
+        // elsewhere become defense in depth rather than load-bearing.
+        posix_spawn_file_actions_t fa;
+        posix_spawn_file_actions_init(&fa);
+        posix_spawn_file_actions_addclosefrom_np(&fa, 3);
+        // Own session: without SETSID the child shares our terminal's
+        // foreground process group, and ^C there SIGINTs every window.
+        posix_spawnattr_t attr;
+        posix_spawnattr_init(&attr);
+        posix_spawnattr_setflags(&attr, POSIX_SPAWN_SETSID);
+        const char *args[4];
+        int i = 0;
+        args[i++] = exe;
+        args[i++] = "--pick";
+        if (debug_enabled()) args[i++] = "--debug";
+        args[i] = nullptr;
+        pid_t pid;
+        int rc = posix_spawn(&pid, exe, &fa, &attr,
+                             const_cast<char *const *>(args), environ);
+        posix_spawn_file_actions_destroy(&fa);
+        posix_spawnattr_destroy(&attr);
+        if (rc != 0) {
+            rivt::logmsg("rivt: spawning new window process failed: %s "
+                         "— falling back to in-process window\n", strerror(rc));
+            create_picker_window();
+            return;
+        }
+        dbg("rivt: new window process pid %d", (int)pid);
+        spawned_windows.push_back(pid);
+    };
+#endif
 
     if (!connect_host.empty()) {
         if (!open_remote(connect_host)) return 1;
@@ -303,6 +358,12 @@ int main(int argc, char *argv[]) {
 
         if (got_sigchld) {
             got_sigchld = 0;
+            // Reap exited window processes (Linux Ctrl-Shift-N children).
+            // Targeted waitpid per tracked pid — a wait(-1) here could
+            // steal a shell's exit status from Pty::alive().
+            std::erase_if(spawned_windows, [](pid_t pid) {
+                return waitpid(pid, nullptr, WNOHANG) != 0;
+            });
             for (int i = (int)windows.size() - 1; i >= 0; i--) {
                 if (!windows[i]->reap_dead_panes()) {
                     rivt::logmsg("window(%p): closing (all panes exited)\n",
