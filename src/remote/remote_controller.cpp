@@ -274,11 +274,21 @@ void RemoteController::apply_layout(uint32_t wid, int cols, int rows,
     if (wit == m_windows.end()) return;
     Tab *tab = wit->second;
 
-    // Client grid wins: if the session is sized for someone else, ask
-    // for ours. maybe_send_resize() is a no-op when the current want
-    // was already requested, so stale layout updates can't echo.
-    if (cols != m_cols || rows != m_rows)
-        maybe_send_resize();
+    // The daemon's grid is authoritative: on attach, and when another
+    // client resizes the session, our OS window follows. The exception
+    // is the echo of our own in-flight resize request (a corner drag
+    // outrunning the round trip) — adopting that would fight the drag;
+    // the resize timer's trailing send reconciles instead. Marking the
+    // adopted size as sent keeps the follow-up resize event from
+    // echoing it back (unless the WM clamped us, in which case our
+    // actual size is a real request and everyone converges on it).
+    if (cols != m_cols || rows != m_rows) {
+        if (cols != m_sent_cols || rows != m_sent_rows) {
+            m_sent_cols = cols;
+            m_sent_rows = rows;
+            m_window.resize_to_cells(cols, rows);
+        }
+    }
 
     // Create/update panes present in the layout.
     for (const auto &g : panes) {

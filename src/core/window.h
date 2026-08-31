@@ -59,7 +59,8 @@ public:
     bool needs_render() const { return m_needs_render; }
     TabManager *tab_manager() { return m_tabs.get(); }
 
-    // Resize window to fit a given cell grid (used by tmux controller)
+    // Resize window to fit a given cell grid (tmux controller; rivtd
+    // sessions where the daemon's grid is authoritative)
     void resize_to_cells(int cols, int rows);
 
     // Grow/shrink the X11 window when the tab bar appears/disappears,
