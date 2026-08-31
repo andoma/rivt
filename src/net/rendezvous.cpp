@@ -27,7 +27,7 @@ std::string rendezvous_url() {
     std::string path = cfg && *cfg ? std::string(cfg) + "/rivt/rendezvous"
                                    : std::string(getenv("HOME") ? getenv("HOME") : ".") +
                                          "/.config/rivt/rendezvous";
-    FILE *f = fopen(path.c_str(), "r");
+    FILE *f = fopen(path.c_str(), "re");
     if (!f) return {};
     char line[512] = {0};
     if (!fgets(line, sizeof line, f)) { fclose(f); return {}; }
@@ -51,7 +51,7 @@ bool set_rendezvous_url(const std::string &url) {
         }
         if (i < dir.size()) acc += dir[i];
     }
-    FILE *f = fopen((dir + "/rendezvous").c_str(), "w");
+    FILE *f = fopen((dir + "/rendezvous").c_str(), "we");
     if (!f) return false;
     fprintf(f, "%s\n", url.c_str());
     fclose(f);

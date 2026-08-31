@@ -161,9 +161,12 @@ bool Pty::spawn(int cols, int rows, const std::string &shell, const std::string 
     m_child_pid = pid;
 #endif
 
-    // Set master fd to non-blocking
+    // Set master fd to non-blocking, and close-on-exec: forkpty/openpty
+    // hand out plain fds, and a leaked master keeps the pty alive after
+    // its shell exits (pane never EOFs) and leaks into spawned children.
     int flags = fcntl(m_master_fd, F_GETFL);
     fcntl(m_master_fd, F_SETFL, flags | O_NONBLOCK);
+    fcntl(m_master_fd, F_SETFD, FD_CLOEXEC);
 
     return true;
 }

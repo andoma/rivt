@@ -1658,7 +1658,7 @@ static bool install_systemd_unit() {
         if (i < dir.size()) acc += dir[i];
     }
     std::string path = dir + "/rivtd.service";
-    FILE *f = fopen(path.c_str(), "w");
+    FILE *f = fopen(path.c_str(), "we");
     if (!f) { rivt::logmsg("cannot write %s\n", path.c_str()); return false; }
     fprintf(f,
             "[Unit]\nDescription=rivt terminal session daemon\n"
@@ -1765,7 +1765,7 @@ static int request_upgrade(const std::string &path) {
     addr.sun_family = AF_UNIX;
     if (path.size() >= sizeof(addr.sun_path)) return 1;
     strcpy(addr.sun_path, path.c_str());
-    int fd = socket(AF_UNIX, SOCK_STREAM, 0);
+    int fd = socket(AF_UNIX, SOCK_STREAM | SOCK_CLOEXEC, 0);
     if (connect(fd, (struct sockaddr *)&addr, sizeof(addr)) < 0) {
         rivt::logmsg("rivtd: no daemon at %s\n", path.c_str());
         return 1;

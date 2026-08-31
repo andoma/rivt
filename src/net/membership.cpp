@@ -86,7 +86,7 @@ static EVP_PKEY *pub_from_der(const std::string &der) {
 }
 
 static EVP_PKEY *priv_from_pem(const std::string &path) {
-    FILE *f = fopen(path.c_str(), "r");
+    FILE *f = fopen(path.c_str(), "re");
     if (!f) return nullptr;
     EVP_PKEY *k = PEM_read_PrivateKey(f, nullptr, nullptr, nullptr);
     fclose(f);
@@ -262,7 +262,7 @@ bool MembershipLog::save(const std::string &path) const {
     w.u32((uint32_t)m_ops.size());
     for (const auto &op : m_ops) w.str(op);
     std::string tmp = path + ".tmp";
-    FILE *f = fopen(tmp.c_str(), "wb");
+    FILE *f = fopen(tmp.c_str(), "wbe");
     if (!f) return false;
     bool ok = fwrite(w.buf.data(), 1, w.buf.size(), f) == w.buf.size();
     fclose(f);
@@ -271,7 +271,7 @@ bool MembershipLog::save(const std::string &path) const {
 }
 
 bool MembershipLog::load_file(const std::string &path) {
-    FILE *f = fopen(path.c_str(), "rb");
+    FILE *f = fopen(path.c_str(), "rbe");
     if (!f) return false;
     std::string data;
     char buf[65536];
@@ -288,7 +288,7 @@ bool MembershipLog::load_file(const std::string &path) {
 
 bool MembershipLog::write_bundle(const std::string &bundle_path, int64_t now) const {
     std::string tmp = bundle_path + ".tmp";
-    FILE *f = fopen(tmp.c_str(), "w");
+    FILE *f = fopen(tmp.c_str(), "we");
     if (!f) return false;
     chmod(tmp.c_str(), 0600);
     for (const auto &m : members(now))

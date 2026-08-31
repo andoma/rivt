@@ -37,7 +37,7 @@ static std::string home_subdir(const char *env, const char *fallback, const char
 }
 
 static std::string read_file(const std::string &path) {
-    FILE *f = fopen(path.c_str(), "r");
+    FILE *f = fopen(path.c_str(), "re");
     if (!f) return {};
     std::string out;
     char buf[4096];
@@ -58,14 +58,14 @@ std::unique_ptr<Identity> Identity::load_or_create(const std::string &state_dir)
     id->m_cert_path = dir + "/device_cert.pem";
 
     EVP_PKEY *key = nullptr;
-    if (FILE *f = fopen(id->m_key_path.c_str(), "r")) {
+    if (FILE *f = fopen(id->m_key_path.c_str(), "re")) {
         key = PEM_read_PrivateKey(f, nullptr, nullptr, nullptr);
         fclose(f);
     }
     if (!key) {
         key = EVP_EC_gen("P-256");
         if (!key) return nullptr;
-        FILE *f = fopen(id->m_key_path.c_str(), "w");
+        FILE *f = fopen(id->m_key_path.c_str(), "we");
         if (!f) { EVP_PKEY_free(key); return nullptr; }
         chmod(id->m_key_path.c_str(), 0600);
         PEM_write_PrivateKey(f, key, nullptr, nullptr, 0, nullptr, nullptr);
@@ -73,7 +73,7 @@ std::unique_ptr<Identity> Identity::load_or_create(const std::string &state_dir)
     }
 
     X509 *cert = nullptr;
-    if (FILE *f = fopen(id->m_cert_path.c_str(), "r")) {
+    if (FILE *f = fopen(id->m_cert_path.c_str(), "re")) {
         cert = PEM_read_X509(f, nullptr, nullptr, nullptr);
         fclose(f);
     }
@@ -121,7 +121,7 @@ std::unique_ptr<Identity> Identity::load_or_create(const std::string &state_dir)
             EVP_PKEY_free(key);
             return nullptr;
         }
-        FILE *f = fopen(id->m_cert_path.c_str(), "w");
+        FILE *f = fopen(id->m_cert_path.c_str(), "we");
         if (!f) { X509_free(cert); EVP_PKEY_free(key); return nullptr; }
         PEM_write_X509(f, cert);
         fclose(f);
@@ -154,7 +154,7 @@ std::string Identity::authorized_bundle_path(const std::string &config_dir) {
     mkdir(dir.c_str(), 0700);
     std::string path = dir + "/authorized_certs.pem";
     if (access(path.c_str(), F_OK) != 0) {
-        FILE *f = fopen(path.c_str(), "w");
+        FILE *f = fopen(path.c_str(), "we");
         if (f) {
             chmod(path.c_str(), 0600);
             fclose(f);
@@ -178,7 +178,7 @@ static std::string b64(const uint8_t *data, size_t len) {
 }
 
 static EVP_PKEY *load_key(const std::string &path) {
-    FILE *f = fopen(path.c_str(), "r");
+    FILE *f = fopen(path.c_str(), "re");
     if (!f) return nullptr;
     EVP_PKEY *key = PEM_read_PrivateKey(f, nullptr, nullptr, nullptr);
     fclose(f);
