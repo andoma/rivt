@@ -1105,16 +1105,18 @@ void Window::handle_mouse(const MouseEvent &mouse) {
         }
     }
 
-    // Fallback scroll
+    // Fallback scroll. scroll_lines > 0 is an exact count from a
+    // precise device (trackpad); a discrete wheel click is worth 3.
     if (mouse.button == MouseButton::ScrollUp || mouse.button == MouseButton::ScrollDown) {
+        int n = mouse.scroll_lines > 0 ? mouse.scroll_lines : 3;
         if (screen.alt_screen()) {
             const char *arrow = mouse.button == MouseButton::ScrollUp
                 ? (screen.app_cursor_keys() ? "\033OA" : "\033[A")
                 : (screen.app_cursor_keys() ? "\033OB" : "\033[B");
-            for (int i = 0; i < 3; i++)
+            for (int i = 0; i < n; i++)
                 target_pane->write(std::string(arrow));
         } else {
-            int delta = mouse.button == MouseButton::ScrollUp ? -3 : 3;
+            int delta = mouse.button == MouseButton::ScrollUp ? -n : n;
             screen.scroll_viewport(delta);
             m_needs_render = true;
         }

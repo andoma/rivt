@@ -109,6 +109,10 @@ struct MouseEvent {
     KeyMod mods;
     bool pressed;
     bool motion;
+    // Scroll events only: lines this event is worth. 0 = a discrete
+    // wheel click (consumers apply their usual multiplier); >0 = exact
+    // line count from a precise device (trackpad), apply as-is.
+    int scroll_lines = 0;
 };
 
 } // namespace rivt

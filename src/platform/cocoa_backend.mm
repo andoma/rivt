@@ -377,6 +377,7 @@ uint32_t modifier_keysym_from_keycode(unsigned short kc) {
     NSTrackingArea *_tracking_area;
     rivt::MouseButton _drag_button;
     bool _dragging;
+    CGFloat _scrollAccum;  // precise-scroll points not yet worth a line
 }
 - (instancetype)initWithBackend:(rivt::CocoaBackend *)backend;
 - (void)clearBackend;
@@ -615,12 +616,29 @@ uint32_t modifier_keysym_from_keycode(unsigned short kc) {
 - (void)scrollWheel:(NSEvent *)event {
     if (!_backend || !_backend->on_mouse) return;
     CGFloat dy = [event scrollingDeltaY];
-    if (dy == 0) return;
+    CGFloat scale = [[self window] backingScaleFactor];
+    int lines = 0;  // 0 = discrete wheel click
+    if ([event hasPreciseScrollingDeltas]) {
+        // Trackpad: deltas are points of finger travel, dozens of tiny
+        // events per flick. Firing a wheel click for each one scrolls
+        // far too fast — accumulate travel and emit whole lines (one
+        // text line per cell height of travel, 1:1 with the content).
+        if ([event phase] == NSEventPhaseBegan) _scrollAccum = 0;
+        CGFloat step = _backend->impl_cell_height() / scale;
+        if (step < 4) step = 16;  // metrics not known yet
+        _scrollAccum += dy;
+        int whole = (int)(_scrollAccum / step);
+        if (whole == 0) return;
+        _scrollAccum -= whole * step;
+        dy = whole;
+        lines = whole > 0 ? whole : -whole;
+    } else if (dy == 0) {
+        return;
+    }
     NSPoint w = [event locationInWindow];
     NSRect viewFrameInWindow = [self convertRect:[self bounds] toView:nil];
     CGFloat local_x = w.x - NSMinX(viewFrameInWindow);
     CGFloat local_y = NSMaxY(viewFrameInWindow) - w.y;
-    CGFloat scale = [[self window] backingScaleFactor];
     rivt::MouseEvent me{};
     me.x = (int)(local_x * scale);
     me.y = (int)(local_y * scale);
@@ -628,6 +646,7 @@ uint32_t modifier_keysym_from_keycode(unsigned short kc) {
     me.mods = translate_mods([event modifierFlags]);
     me.pressed = true;
     me.motion = false;
+    me.scroll_lines = lines;
     _backend->on_mouse(me);
 }
 
@@ -763,6 +782,8 @@ void CocoaBackend::show_window() {
         [NSApp activateIgnoringOtherApps:YES];
     }
 }
+
+int CocoaBackend::impl_cell_height() const { return m_impl->cell_h; }
 
 void CocoaBackend::set_size_hints(int cell_w, int cell_h, int base_w, int base_h) {
     m_impl->cell_w = cell_w;
