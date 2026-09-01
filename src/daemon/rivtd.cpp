@@ -113,7 +113,7 @@ struct PaneRef {
     // Recent output with absolute offsets: a re-attaching client that is
     // current through an offset inside the ring gets the gap replayed
     // instead of a full snapshot (seamless reconnect).
-    std::string ring;
+    std::string ring{};
     uint64_t ring_end = 0;  // absolute offset of the byte after ring
 };
 

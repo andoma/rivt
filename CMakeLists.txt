@@ -52,7 +52,19 @@ if(RIVT_QUIC)
     )
     FetchContent_MakeAvailable(picoquic)
     find_package(OpenSSL REQUIRED)
+    # Upstream code, upstream warnings — not ours to fix.
+    foreach(_dep picoquic-core picotls-core picotls-openssl
+                 picotls-minicrypto picotls-fusion)
+        if(TARGET ${_dep})
+            target_compile_options(${_dep} PRIVATE -w)
+        endif()
+    endforeach()
 endif()
+
+# stb_image is vendored as-is; STBI_ONLY_PNG leaves some of its helpers
+# unused in this TU.
+set_source_files_properties(src/terminal/image_store.cpp PROPERTIES
+    COMPILE_OPTIONS "-Wno-unused-function")
 
 if(RIVT_UI)
 pkg_check_modules(FREETYPE REQUIRED freetype2)

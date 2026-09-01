@@ -512,10 +512,14 @@ void Window::picker_key(const KeyEvent &key) {
     bool ctrl = key.mods & KeyMod::Ctrl;
     if (key.keysym == XKB_KEY_Escape) { request_close("picker: escape"); return; }
     if (key.keysym == XKB_KEY_Up || (ctrl && (key.keysym == XKB_KEY_p || key.keysym == XKB_KEY_P))) {
-        if (m_pick_sel > 0) m_pick_sel--; picker_paint(); return;
+        if (m_pick_sel > 0) m_pick_sel--;
+        picker_paint();
+        return;
     }
     if (key.keysym == XKB_KEY_Down || (ctrl && (key.keysym == XKB_KEY_n || key.keysym == XKB_KEY_N))) {
-        if (m_pick_sel < (int)m_pick_entries.size() - 1) m_pick_sel++; picker_paint(); return;
+        if (m_pick_sel < (int)m_pick_entries.size() - 1) m_pick_sel++;
+        picker_paint();
+        return;
     }
     if (key.keysym == XKB_KEY_Return) { picker_select(); return; }
     if (key.keysym == XKB_KEY_Delete) {  // Delete removes the selected device

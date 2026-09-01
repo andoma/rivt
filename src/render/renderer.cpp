@@ -311,7 +311,7 @@ void Renderer::build_pane_vertices(const ScreenBuffer &buffer, const Config &con
         float run_r = 0, run_g = 0, run_b = 0;
 
         for (int col = 0; col <= ncols; col++) {
-            float bg_r, bg_g, bg_b;
+            float bg_r = 0, bg_g = 0, bg_b = 0;
             bool has_bg = false;
             if (col < ncols) {
                 has_bg = resolve_cell_bg(line.cells[col], abs_line, col, bg_r, bg_g, bg_b);

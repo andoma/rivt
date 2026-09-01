@@ -309,7 +309,8 @@ int main(int argc, char *argv[]) {
         for (auto &w : windows) w->toggle_cursor_blink();
     }, true);
 
-    bool quit_requested = false;
+    // Only read on macOS (Linux quits when the last window closes).
+    [[maybe_unused]] bool quit_requested = false;
     while (!loop.should_quit()) {
         // Picker selections are opened here, at the top of the loop, rather
         // than inline in the picker's key callback: open_remote does blocking
