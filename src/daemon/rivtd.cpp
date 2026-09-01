@@ -1591,6 +1591,16 @@ private:
 } // namespace rivt
 
 static std::string default_socket_path() {
+    // A system-unit install (rivtd install --system) binds under its
+    // RuntimeDirectory instead of the caller's session env; prefer that
+    // socket when a daemon actually lives there, so --upgrade and local
+    // clients find it regardless of how this shell was spawned.
+    {
+        std::string sys = "/run/rivt-" + std::to_string(getuid()) + "/daemon.sock";
+        struct stat st;
+        if (stat(sys.c_str(), &st) == 0 && S_ISSOCK(st.st_mode))
+            return sys;
+    }
     const char *rt = getenv("XDG_RUNTIME_DIR");
     std::string dir = rt ? std::string(rt) + "/rivt"
                          : "/tmp/rivt-" + std::to_string(getuid());
@@ -1661,6 +1671,53 @@ static bool install_systemd_unit() {
     return true;
 }
 
+// System-level unit for boxes where the login stack is unusable for
+// systemd --user (NSS-overlay users invisible to logind, no linger, no
+// polkit agent): pid1 resolves User= at spawn time and none of that
+// machinery is involved. Requires sudo; the target user is who ran it.
+static bool install_system_unit() {
+    if (geteuid() != 0) {
+        rivt::logmsg("rivtd install --system must run as root: "
+                     "sudo rivtd install --system\n");
+        return false;
+    }
+    const char *user = getenv("SUDO_USER");
+    const char *uid_s = getenv("SUDO_UID");
+    if (!user || !uid_s || !strcmp(user, "root")) {
+        rivt::logmsg("cannot determine target user — run via sudo from "
+                     "the account rivtd should run as\n");
+        return false;
+    }
+
+    char exe[4096];
+    ssize_t n = readlink("/proc/self/exe", exe, sizeof(exe) - 1);
+    if (n <= 0) { rivt::logmsg("cannot resolve own path\n"); return false; }
+    exe[n] = 0;
+
+    const char *path = "/etc/systemd/system/rivtd.service";
+    FILE *f = fopen(path, "w");
+    if (!f) { rivt::logmsg("cannot write %s\n", path); return false; }
+    fprintf(f,
+            "[Unit]\nDescription=rivt terminal session daemon\n"
+            "After=network-online.target\nWants=network-online.target\n\n"
+            "[Service]\nUser=%s\n"
+            "RuntimeDirectory=rivt-%s\n"
+            "ExecStart=%s --listen --socket /run/rivt-%s/daemon.sock\n"
+            "Restart=on-failure\nRestartSec=2\n\n"
+            "[Install]\nWantedBy=multi-user.target\n",
+            user, uid_s, exe, uid_s);
+    fclose(f);
+
+    if (system("systemctl daemon-reload") != 0 ||
+        system("systemctl enable --now rivtd") != 0) {
+        rivt::logmsg("wrote %s but could not enable it\n", path);
+        return false;
+    }
+    printf("rivtd runs as %s under systemd (system), starts at boot, "
+           "no login session needed.\n", user);
+    return true;
+}
+
 static int run_join(int argc, char **argv) {
     std::string code;
     for (int i = 1; i < argc; i++)
@@ -1719,6 +1776,8 @@ static void print_help() {
         "                           no code to found a new set on this machine\n"
         "  rivtd pair               print an invite code for pairing another device\n"
         "  rivtd install            run under systemd --user, start on boot\n"
+        "  rivtd install --system   system-wide unit via sudo — for boxes where\n"
+        "                           logind can't see your user (NSS overlays)\n"
         "  rivtd --upgrade          re-exec the running daemon in place (keeps sessions)\n"
         "  rivtd --fingerprint      print this device's identity\n"
         "\n"
@@ -1764,6 +1823,10 @@ int main(int argc, char **argv) {
     // configured daemon (setup offers the same thing after enrollment).
     for (int i = 1; i < argc; i++)
         if (!strcmp(argv[i], "install")) {
+            bool system_unit = false;
+            for (int j = 1; j < argc; j++)
+                if (!strcmp(argv[j], "--system")) system_unit = true;
+            if (system_unit) return install_system_unit() ? 0 : 1;
             if (!install_systemd_unit()) return 1;
             printf("rivtd is running under systemd --user and will start on boot.\n");
             return 0;

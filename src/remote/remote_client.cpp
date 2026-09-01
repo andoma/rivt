@@ -33,6 +33,16 @@ void RemoteClient::set_link(const std::string &st) {
 }
 
 std::string RemoteClient::default_socket_path() {
+    // A system-unit install (rivtd install --system) binds under its
+    // RuntimeDirectory instead of the caller's session env; prefer that
+    // socket when a daemon actually lives there, so --upgrade and local
+    // clients find it regardless of how this shell was spawned.
+    {
+        std::string sys = "/run/rivt-" + std::to_string(getuid()) + "/daemon.sock";
+        struct stat st;
+        if (stat(sys.c_str(), &st) == 0 && S_ISSOCK(st.st_mode))
+            return sys;
+    }
     const char *rt = getenv("XDG_RUNTIME_DIR");
     std::string dir = rt ? std::string(rt) + "/rivt"
                          : "/tmp/rivt-" + std::to_string(getuid());
