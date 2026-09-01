@@ -1122,24 +1122,32 @@ void Window::handle_mouse(const MouseEvent &mouse) {
         }
     }
 
-    // URL detection: update cursor shape on Ctrl+hover, open on Ctrl+click
-    bool ctrl_held = mouse.mods & KeyMod::Ctrl;
-    if (ctrl_held && m_config.url_detection) {
+    // URL detection: cursor shape on modifier+hover, open on
+    // modifier+click. Cmd on macOS (the platform convention), Ctrl
+    // elsewhere.
+#ifdef __APPLE__
+    bool url_mod = mouse.mods & KeyMod::Super;
+    static constexpr const char *kOpener = "open";
+#else
+    bool url_mod = mouse.mods & KeyMod::Ctrl;
+    static constexpr const char *kOpener = "xdg-open";
+#endif
+    if (url_mod && m_config.url_detection) {
         std::string url = screen.detect_url_at(cell_row, cell_col);
         if (!url.empty()) {
             m_platform->set_mouse_cursor(Platform::MouseCursor::Hand);
             if (mouse.button == MouseButton::Left && mouse.pressed && !mouse.motion) {
-                // Open URL with xdg-open, fire and forget
+                // Open the URL, fire and forget
                 pid_t pid;
-                const char *argv[] = {"xdg-open", url.c_str(), nullptr};
-                posix_spawnp(&pid, "xdg-open", nullptr, nullptr,
+                const char *argv[] = {kOpener, url.c_str(), nullptr};
+                posix_spawnp(&pid, kOpener, nullptr, nullptr,
                              const_cast<char **>(argv), ::environ);
                 return;
             }
         } else {
             m_platform->set_mouse_cursor(Platform::MouseCursor::Default);
         }
-    } else if (!ctrl_held) {
+    } else if (!url_mod) {
         m_platform->set_mouse_cursor(Platform::MouseCursor::Default);
     }
 
