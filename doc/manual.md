@@ -32,7 +32,7 @@ URL, e.g. `https://rivt-rendezvous.<you>.workers.dev`. You never type
 this URL on most devices: it travels inside pairing codes.
 
 The very first device you set up (server or client, doesn't matter)
-**founds** the set: at its setup prompt, press Enter instead of pasting
+**founds** the set: at its join prompt, press Enter instead of pasting
 a code, and give the rendezvous URL once. Every other device then
 **joins** with a pairing code minted from an existing member
 (`rivt pair` or `rivtd pair`).
@@ -53,20 +53,48 @@ libc/libstdc++/libcrypto.
 
 ### 2. Enroll and run
 ```
-rivtd setup <code>     # paste a code from `rivtd pair`/`rivt pair` on a member
+rivtd join <code>      # paste a code from `rivtd pair`/`rivt pair` on a member
 ```
 This joins the set (learning the rendezvous URL from the code), then
 offers to install and start the background service. Accept it, or run it
 yourself:
 ```
 systemctl --user enable --now rivtd     # runs `rivtd --listen` (udp/7433)
-loginctl enable-linger                   # keep running at boot / after logout
+sudo loginctl enable-linger $USER        # keep running at boot / after logout
 ```
 That's it — the box publishes itself under its hostname and is now
 reachable by name.
 
-To make this the founding device instead, run `rivtd setup` with no code
+To make this the founding device instead, run `rivtd join` with no code
 and press Enter.
+
+### Surviving logout: linger, and hostile images
+
+A `systemd --user` service dies with your last login unless lingering is
+on for your user — that's the `loginctl enable-linger` above (use sudo:
+non-root goes through polkit, which needs an agent and a login session
+you may not have). Verify with `loginctl show-user $USER -p Linger`.
+
+Minimal/provisioned images can fight back in layered ways: no
+`pkttyagent` (non-root loginctl fails with a bare "No such file or
+directory"), a polkitd that won't start, or users provided by an NSS
+overlay that a long-running logind can't resolve (enable-linger returns
+ENOENT even as root). For the last one, write the flag by hand and
+restart logind so it re-reads NSS:
+```
+sudo touch /var/lib/systemd/linger/$USER
+sudo systemctl restart systemd-logind
+```
+
+If the login stack is too broken to bother, bypass it entirely with a
+system-level unit — pid1 resolves the user itself and no
+logind/linger/polkit is involved:
+```
+sudo rivtd install --system     # per-user unit rivtd-<you>.service
+```
+Several users can do this on one box: units are per-user, control
+sockets are per-uid, and a second daemon picks a free QUIC port
+automatically (clients dial directory candidates, not a fixed port).
 
 ### Server admin
 ```
@@ -74,6 +102,8 @@ rivtd --fingerprint    # identity + config paths
 rivtd pair             # mint a code to add another device
 rivtd --upgrade        # re-exec a new build in place; sessions/PTYs/clients survive
 rivtd --listen [port]  # run in the foreground (default udp/7433)
+rivtd install          # (re)install the systemd --user service
+rivtd install --system # system-level unit instead (see above)
 ```
 
 ---
@@ -95,12 +125,12 @@ cmake --build build
 
 ### 2. Enroll
 ```
-rivt setup <code>      # paste a code from `rivt pair`/`rivtd pair` on a member
+rivt join <code>       # paste a code from `rivt pair`/`rivtd pair` on a member
 ```
 Joins the set (rendezvous URL comes from the code) and writes this
 device's trust bundle. No daemon, nothing to run in the background.
 
-To make this the founding device instead, run `rivt setup` with no code
+To make this the founding device instead, run `rivt join` with no code
 and press Enter.
 
 ### 3. Connect
@@ -116,7 +146,6 @@ it, scrollback and split layout restored.
 ### Client admin
 ```
 rivt pair              # mint a code to add another device
-rivt join <code>       # (same as `rivt setup <code>` without the prompts)
 rivt                   # plain local terminal (no daemon, no persistence)
 ```
 
