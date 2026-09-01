@@ -774,6 +774,22 @@ void CocoaBackend::resize_window(int width, int height) {
     CGFloat s = m_impl->backing_scale > 0 ? m_impl->backing_scale : 1.0f;
     NSSize pts = NSMakeSize(width / s, height / s);
     [m_impl->window setContentSize:pts];
+
+    // setContentSize keeps the origin, so a grow extends right/up and
+    // can push the window off screen. Move it back inside the visible
+    // frame (excludes menu bar and Dock); if it's larger than the
+    // screen, keep the left edge and title bar visible.
+    NSScreen *scr = [m_impl->window screen] ?: [NSScreen mainScreen];
+    if (!scr) return;
+    NSRect vis = [scr visibleFrame];
+    NSRect f = [m_impl->window frame];
+    NSPoint o = f.origin;
+    if (o.x + f.size.width > NSMaxX(vis)) o.x = NSMaxX(vis) - f.size.width;
+    if (o.x < NSMinX(vis)) o.x = NSMinX(vis);
+    if (o.y < NSMinY(vis)) o.y = NSMinY(vis);
+    if (o.y + f.size.height > NSMaxY(vis)) o.y = NSMaxY(vis) - f.size.height;
+    if (!NSEqualPoints(o, f.origin))
+        [m_impl->window setFrameOrigin:o];
 }
 
 void CocoaBackend::show_window() {

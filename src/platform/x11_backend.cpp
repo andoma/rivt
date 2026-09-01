@@ -1,4 +1,5 @@
 #include "platform/x11_backend.h"
+#include <algorithm>
 #include "core/debug.h"
 #include <xcb/xcb_icccm.h>
 // xcb/xkb.h uses 'explicit' as a field name which is a C++ keyword
@@ -253,6 +254,28 @@ void X11Backend::resize_window(int width, int height) {
     xcb_configure_window(m_conn, m_window,
                          XCB_CONFIG_WINDOW_WIDTH | XCB_CONFIG_WINDOW_HEIGHT,
                          values);
+
+    // Best effort: if the resize pushed us past the screen edge, move
+    // back inside (keep the top-left visible when oversized). Tiling
+    // WMs ignore both requests, which is fine.
+    xcb_translate_coordinates_reply_t *tr = xcb_translate_coordinates_reply(
+        m_conn,
+        xcb_translate_coordinates(m_conn, m_window, m_screen->root, 0, 0),
+        nullptr);
+    if (tr) {
+        int x = tr->dst_x, y = tr->dst_y;
+        free(tr);
+        int max_x = (int)m_screen->width_in_pixels - width;
+        int max_y = (int)m_screen->height_in_pixels - height;
+        int nx = std::max(0, std::min(x, max_x));
+        int ny = std::max(0, std::min(y, max_y));
+        if (nx != x || ny != y) {
+            uint32_t pos[] = { (uint32_t)nx, (uint32_t)ny };
+            xcb_configure_window(m_conn, m_window,
+                                 XCB_CONFIG_WINDOW_X | XCB_CONFIG_WINDOW_Y,
+                                 pos);
+        }
+    }
     xcb_flush(m_conn);
     m_width = width;
     m_height = height;
