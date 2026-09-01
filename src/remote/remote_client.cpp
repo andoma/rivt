@@ -451,7 +451,7 @@ void RemoteClient::probe_failed() {
         rivt::logmsg(                "rivt: reached the peer, but its certificate was rejected.\n"
                 "      The two devices are not in the same set. Pair them:\n"
                 "      on one run `rivt pair` / `rivtd pair`, on the other "
-                "`rivt setup <code>` / `rivtd setup <code>`.\n");
+                "`rivt join <code>` / `rivtd join <code>`.\n");
     } else {
         rivt::logmsg(                "rivt: no candidate address responded — the peer's QUIC port "
                 "(udp/%u) is not reachable from here.\n"

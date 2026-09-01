@@ -45,14 +45,38 @@ static void sigterm_handler(int) {
 int main(int argc, char *argv[]) {
     setlocale(LC_ALL, "");
 
-    // Membership verbs (foreground, no window). `rivt setup` is the
+    // Membership verbs (foreground, no window). `rivt join` is the
     // client enrollment: join a set (or found one) — no daemon/systemd.
+    // "setup" is the legacy spelling.
     for (int i = 1; i < argc; i++) {
-        if (!strcmp(argv[i], "setup")) {
+        if (!strcmp(argv[i], "-h") || !strcmp(argv[i], "--help")) {
+            printf(
+                "rivt — terminal with resumable remote sessions.\n"
+                "Local shells by default; sessions on paired rivtd boxes\n"
+                "survive disconnects, sleep and network changes.\n"
+                "\n"
+                "usage:\n"
+                "  rivt                     local terminal\n"
+                "  rivt --pick              open the device picker (also Cmd/Ctrl-Shift-N)\n"
+                "  rivt --connect <name>    attach to a paired rivtd box\n"
+                "  rivt join [code]         join your device set — paste a code from\n"
+                "                           `rivt pair` / `rivtd pair` on a paired device,\n"
+                "                           or run with no code to found a new set\n"
+                "  rivt pair                print an invite code for another device\n"
+                "\n"
+                "options:\n"
+                "  --debug, -d              verbose logging\n"
+                "\n"
+                "Getting started: `rivt join` here, `rivtd join <code>` on the box you\n"
+                "want to reach, then `rivt --connect <name>`.\n");
+            return 0;
+        }
+        if (!strcmp(argv[i], "join") || !strcmp(argv[i], "setup")) {
             std::string code;
             for (int j = 1; j < argc; j++)
-                if (argv[j][0] != '-' && strcmp(argv[j], "setup") != 0) { code = argv[j]; break; }
-            printf("rivt client setup\n\n");
+                if (argv[j][0] != '-' && strcmp(argv[j], "join") != 0 &&
+                    strcmp(argv[j], "setup") != 0) { code = argv[j]; break; }
+            printf("rivt — join a device set\n\n");
             if (!rivt::net::interactive_enroll(code)) return 1;
             printf("\nDone. Connect to a device with:  rivt --connect <name>\n");
             return 0;
@@ -60,11 +84,6 @@ int main(int argc, char *argv[]) {
         if (!strcmp(argv[i], "pair")) {
             auto id = rivt::net::Identity::load_or_create();
             return id && rivt::net::pair_invite(*id) ? 0 : 1;
-        }
-        if (!strcmp(argv[i], "join")) {
-            auto id = rivt::net::Identity::load_or_create();
-            if (!id || i + 1 >= argc) { rivt::logmsg("usage: rivt join <code>\n"); return 1; }
-            return rivt::net::pair_join(argv[i + 1], *id) ? 0 : 1;
         }
     }
     signal(SIGCHLD, sigchld_handler);

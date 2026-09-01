@@ -20,7 +20,7 @@ bool pair_invite(const Identity &self);
 // the returned log (HMAC + chain + our own membership), and adopt it.
 bool pair_join(const std::string &code, const Identity &self);
 
-// Shared enrollment core for `rivt setup` / `rivtd setup`: if code is
+// Shared enrollment core for `rivt join` / `rivtd join`: if code is
 // non-empty, join with it; if empty, prompt (paste a code to join, or
 // Enter to found a new set). Writes config + trust bundle. Returns true
 // on success. The daemon adds its own systemd step afterward.

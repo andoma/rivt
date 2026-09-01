@@ -1661,12 +1661,13 @@ static bool install_systemd_unit() {
     return true;
 }
 
-static int run_setup(int argc, char **argv) {
+static int run_join(int argc, char **argv) {
     std::string code;
     for (int i = 1; i < argc; i++)
-        if (argv[i][0] != '-' && strcmp(argv[i], "setup") != 0) { code = argv[i]; break; }
+        if (argv[i][0] != '-' && strcmp(argv[i], "join") != 0 &&
+            strcmp(argv[i], "setup") != 0) { code = argv[i]; break; }
 
-    printf("rivt server setup\n\n");
+    printf("rivtd — join a device set\n\n");
     if (!rivt::net::interactive_enroll(code)) return 1;
 
     std::string ans = prompt("\nRun rivtd as a background service (systemd --user)? [Y/n] ");
@@ -1705,11 +1706,39 @@ static int request_upgrade(const std::string &path) {
     return 0;
 }
 
+static void print_help() {
+    printf(
+        "rivtd — rivt session daemon. Runs on the machine you connect to;\n"
+        "sessions live here and survive disconnects, reattach from anywhere.\n"
+        "\n"
+        "usage:\n"
+        "  rivtd                    run the daemon (local socket only)\n"
+        "  rivtd --listen [port]    also accept remote rivt clients (QUIC, default 7433)\n"
+        "  rivtd join [code]        join your device set — paste a code from\n"
+        "                           `rivt pair` on a paired device, or run with\n"
+        "                           no code to found a new set on this machine\n"
+        "  rivtd pair               print an invite code for pairing another device\n"
+        "  rivtd install            run under systemd --user, start on boot\n"
+        "  rivtd --upgrade          re-exec the running daemon in place (keeps sessions)\n"
+        "  rivtd --fingerprint      print this device's identity\n"
+        "\n"
+        "options:\n"
+        "  --name <name>            directory name for this box (default: hostname)\n"
+        "  --socket <path>          control socket path\n"
+        "\n"
+        "Getting started: `rivtd join`, then connect from another device with\n"
+        "`rivt --connect <name>`.\n");
+}
+
 int main(int argc, char **argv) {
     std::string path, handover, name;
     bool upgrade = false;
     int listen_port = 0;
     for (int i = 1; i < argc; i++) {
+        if (!strcmp(argv[i], "-h") || !strcmp(argv[i], "--help")) {
+            print_help();
+            return 0;
+        }
         if (!strcmp(argv[i], "--socket") && i + 1 < argc) path = argv[++i];
         else if (!strcmp(argv[i], "--handover") && i + 1 < argc) handover = argv[++i];
         else if (!strcmp(argv[i], "--name") && i + 1 < argc) name = argv[++i];
@@ -1726,9 +1755,10 @@ int main(int argc, char **argv) {
             return 0;
         }
     }
-    // Interactive first-run setup.
+    // Interactive first-run setup ("setup" is the legacy spelling).
     for (int i = 1; i < argc; i++)
-        if (!strcmp(argv[i], "setup")) return run_setup(argc, argv);
+        if (!strcmp(argv[i], "join") || !strcmp(argv[i], "setup"))
+            return run_join(argc, argv);
 
     // Install/enable the systemd --user service for an already-
     // configured daemon (setup offers the same thing after enrollment).
@@ -1741,15 +1771,11 @@ int main(int argc, char **argv) {
 
     // Pairing / set verbs (foreground, no daemon).
     for (int i = 1; i < argc; i++) {
-        if (!strcmp(argv[i], "pair") || !strcmp(argv[i], "join") ||
-            !strcmp(argv[i], "init")) {
+        if (!strcmp(argv[i], "pair") || !strcmp(argv[i], "init")) {
             auto id = rivt::net::Identity::load_or_create();
             if (!id) return 1;
             if (!strcmp(argv[i], "pair")) return rivt::net::pair_invite(*id) ? 0 : 1;
-            if (!strcmp(argv[i], "init"))
-                return rivt::net::sync_membership(*id, true).empty() ? 1 : 0;
-            if (i + 1 >= argc) { rivt::logmsg("usage: rivtd join <code>\n"); return 1; }
-            return rivt::net::pair_join(argv[i + 1], *id) ? 0 : 1;
+            return rivt::net::sync_membership(*id, true).empty() ? 1 : 0;
         }
     }
 
