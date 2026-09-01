@@ -101,9 +101,8 @@ int main(int argc, char *argv[]) {
     bool remote = false;      // daemon-backed sessions + resume all (opt-in)
     bool pick = false;        // open straight to the device picker
     std::string remote_socket;
-    std::string connect_host; // QUIC daemon on another machine
-    uint16_t connect_port = 7433;
-    std::string peer_sig_id;
+    // Device name or host[:port] of a rivtd box; open_remote parses it.
+    std::string connect_host;
     for (int i = 1; i < argc; i++) {
         if (strcmp(argv[i], "--debug") == 0 || strcmp(argv[i], "-d") == 0) {
             debug_enabled() = true;
@@ -115,11 +114,6 @@ int main(int argc, char *argv[]) {
             remote_socket = argv[++i];
         } else if (strcmp(argv[i], "--connect") == 0 && i + 1 < argc) {
             connect_host = argv[++i];
-            auto colon = connect_host.rfind(':');
-            if (colon != std::string::npos) {
-                connect_port = (uint16_t)atoi(connect_host.c_str() + colon + 1);
-                connect_host.resize(colon);
-            }
         }
     }
 
