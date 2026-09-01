@@ -181,8 +181,7 @@ public:
                 // Default port taken (another user's rivtd on a shared
                 // box): any port works — candidates advertise the real
                 // one, and clients dial candidates, not a fixed port.
-                rivt::logmsg("rivtd: udp/7433 in use, picking a free port
-");
+                rivt::logmsg("rivtd: udp/7433 in use, picking a free port\n");
                 m_quic = net::QuicEngine::listen(m_loop, 0, *m_identity, bundle);
             }
             if (!m_quic) return false;
