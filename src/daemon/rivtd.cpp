@@ -177,7 +177,18 @@ public:
             std::string bundle = net::Identity::authorized_bundle_path();
             m_quic = net::QuicEngine::listen(m_loop, (uint16_t)m_listen_port,
                                              *m_identity, bundle);
+            if (!m_quic && m_listen_port == 7433) {
+                // Default port taken (another user's rivtd on a shared
+                // box): any port works — candidates advertise the real
+                // one, and clients dial candidates, not a fixed port.
+                rivt::logmsg("rivtd: udp/7433 in use, picking a free port
+");
+                m_quic = net::QuicEngine::listen(m_loop, 0, *m_identity, bundle);
+            }
             if (!m_quic) return false;
+            // Candidates, STUN discovery and the upgrade re-exec all
+            // carry this — it must be the port actually bound.
+            m_listen_port = m_quic->local_port();
             rivt::logmsg(                    "rivtd: QUIC on udp/%d\n"
                     "rivtd: fingerprint %s\n"
                     "rivtd: authorized peers: %s\n",
@@ -1694,9 +1705,13 @@ static bool install_system_unit() {
     if (n <= 0) { rivt::logmsg("cannot resolve own path\n"); return false; }
     exe[n] = 0;
 
-    const char *path = "/etc/systemd/system/rivtd.service";
-    FILE *f = fopen(path, "w");
-    if (!f) { rivt::logmsg("cannot write %s\n", path); return false; }
+    // Per-user unit name: several people can run rivtd on one box
+    // (sockets are per-uid, and the QUIC listener falls back to a free
+    // port when the default is taken).
+    std::string unit = std::string("rivtd-") + user;
+    std::string path = "/etc/systemd/system/" + unit + ".service";
+    FILE *f = fopen(path.c_str(), "w");
+    if (!f) { rivt::logmsg("cannot write %s\n", path.c_str()); return false; }
     fprintf(f,
             "[Unit]\nDescription=rivt terminal session daemon\n"
             "After=network-online.target\nWants=network-online.target\n\n"
@@ -1708,13 +1723,14 @@ static bool install_system_unit() {
             user, uid_s, exe, uid_s);
     fclose(f);
 
+    std::string enable = "systemctl enable --now " + unit;
     if (system("systemctl daemon-reload") != 0 ||
-        system("systemctl enable --now rivtd") != 0) {
-        rivt::logmsg("wrote %s but could not enable it\n", path);
+        system(enable.c_str()) != 0) {
+        rivt::logmsg("wrote %s but could not enable it\n", path.c_str());
         return false;
     }
-    printf("rivtd runs as %s under systemd (system), starts at boot, "
-           "no login session needed.\n", user);
+    printf("rivtd runs as %s under systemd (unit %s), starts at boot, "
+           "no login session needed.\n", user, unit.c_str());
     return true;
 }
 
