@@ -290,13 +290,16 @@ void RemoteClient::begin_punch(const RemoteEndpoint &ep) {
             if (m_quic || !m_signaling) return;
             const net::Candidate &t = role == 0 ? m_punch_stun : m_punch_turn;
             if (t.host.empty()) return;
-            m_loop.add_timer(1500, [this, idx, t]() {
+            // Tracked in m_redial_timers: the loop outlives us, and an
+            // orphaned one-shot fires into a freed client (seen as an
+            // ASan abort when a window closed mid-punch).
+            m_redial_timers.push_back(m_loop.add_timer(1500, [this, idx, t]() {
                 if (m_quic || !m_signaling || idx >= m_probes.size() || !m_probes[idx])
                     return;
                 dbg("rivt: punch: re-dialing [%s] %s:%u", t.kind.c_str(),
                     t.host.c_str(), t.port);
                 m_probes[idx]->start_connection(t.host, t.port);
-            }, false);
+            }, false));
         };
         net::QuicEngine *ep_raw = e.get();
         m_probes.push_back(std::move(e));
@@ -494,6 +497,8 @@ void RemoteClient::close() {
         m_loop.remove_timer(m_offer_retry_timer);
         m_offer_retry_timer = -1;
     }
+    for (int tid : m_redial_timers) m_loop.remove_timer(tid);
+    m_redial_timers.clear();
     if (m_quic) {
         m_quic_conn = nullptr;
         // Never destroy the engine here — we may be on its own callback
