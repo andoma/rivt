@@ -68,6 +68,7 @@ sudo loginctl enable-linger $USER        # keep running at boot / after logout
 Upgrading later is `cmake --build build && ./build/rivtd install`: the
 new binary replaces `~/.local/bin/rivtd` and the running daemon re-execs
 it with sessions intact.
+
 That's it — the box publishes itself under its hostname and is now
 reachable by name.
 
@@ -79,7 +80,13 @@ and press Enter.
 A `systemd --user` service dies with your last login unless lingering is
 on for your user — that's the `loginctl enable-linger` above (use sudo:
 non-root goes through polkit, which needs an agent and a login session
-you may not have). Verify with `loginctl show-user $USER -p Linger`.
+you may not have). Check it with:
+```
+loginctl show-user $USER -p Linger     # Linger=yes / Linger=no
+```
+The flag is a file under `/var/lib/systemd/linger/`, i.e. on the OS
+image: a refreshed image resets it to `no` even though `~/.local/bin/rivtd`
+and the unit in `$HOME` survive. Re-check after every refresh.
 
 Minimal/provisioned images can fight back in layered ways: no
 `pkttyagent` (non-root loginctl fails with a bare "No such file or
@@ -91,6 +98,8 @@ restart logind so it re-reads NSS:
 sudo touch /var/lib/systemd/linger/$USER
 sudo systemctl restart systemd-logind
 ```
+On provisioned dev boxes this is often the only variant that works, so
+keep it around; it is what to run after each image refresh.
 
 If the login stack is too broken to bother, bypass it entirely with a
 system-level unit — pid1 resolves the user itself and no
