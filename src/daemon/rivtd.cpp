@@ -1631,7 +1631,86 @@ static std::string prompt(const char *msg) {
     return s;
 }
 
-// Write a systemd --user unit for this exact binary and enable it.
+// Copy the running binary to ~/.local/bin/rivtd so the service survives
+// OS-image refreshes that keep $HOME but wipe /usr/local. Returns the
+// installed path, or empty on failure. A no-op when we already are that
+// file (same inode).
+static std::string install_binary() {
+    char exe[4096];
+    ssize_t n = readlink("/proc/self/exe", exe, sizeof(exe) - 1);
+    if (n <= 0) { rivt::logmsg("cannot resolve own path\n"); return {}; }
+    exe[n] = 0;
+
+    const char *home = getenv("HOME");
+    if (!home || !*home) { rivt::logmsg("HOME not set\n"); return {}; }
+    std::string dir = std::string(home) + "/.local/bin";
+    std::string dst = dir + "/rivtd";
+
+    struct stat src_st, dst_st;
+    if (stat(exe, &src_st) < 0) { rivt::logmsg("cannot stat %s\n", exe); return {}; }
+    if (stat(dst.c_str(), &dst_st) == 0 &&
+        src_st.st_dev == dst_st.st_dev && src_st.st_ino == dst_st.st_ino)
+        return dst;
+
+    mkdir((std::string(home) + "/.local").c_str(), 0755);
+    mkdir(dir.c_str(), 0755);
+
+    // Write beside the target and rename over it: a running daemon keeps
+    // its old inode, and `rivtd --upgrade` execs the new file at the same
+    // path (the daemon remembers its exe path from startup).
+    std::string tmp = dst + ".tmp." + std::to_string(getpid());
+    int in = open(exe, O_RDONLY | O_CLOEXEC);
+    int out = open(tmp.c_str(), O_WRONLY | O_CREAT | O_TRUNC | O_CLOEXEC, 0755);
+    if (in < 0 || out < 0) {
+        rivt::logmsg("cannot copy %s -> %s: %s\n", exe, tmp.c_str(), strerror(errno));
+        if (in >= 0) close(in);
+        if (out >= 0) { close(out); unlink(tmp.c_str()); }
+        return {};
+    }
+    char buf[1 << 16];
+    bool ok = true;
+    for (;;) {
+        ssize_t r = read(in, buf, sizeof buf);
+        if (r == 0) break;
+        if (r < 0) { ok = false; break; }
+        for (ssize_t off = 0; off < r;) {
+            ssize_t w = write(out, buf + off, r - off);
+            if (w <= 0) { ok = false; break; }
+            off += w;
+        }
+        if (!ok) break;
+    }
+    close(in);
+    if (ok && (fchmod(out, 0755) < 0 || fsync(out) < 0)) ok = false;
+    if (close(out) < 0) ok = false;
+    if (ok && rename(tmp.c_str(), dst.c_str()) < 0) ok = false;
+    if (!ok) {
+        rivt::logmsg("cannot install %s: %s\n", dst.c_str(), strerror(errno));
+        unlink(tmp.c_str());
+        return {};
+    }
+    return dst;
+}
+
+// Is a daemon answering on the default control socket?
+static bool daemon_running() {
+    std::string path = default_socket_path();
+    struct sockaddr_un addr {};
+    addr.sun_family = AF_UNIX;
+    if (path.size() >= sizeof(addr.sun_path)) return false;
+    strcpy(addr.sun_path, path.c_str());
+    int fd = socket(AF_UNIX, SOCK_STREAM | SOCK_CLOEXEC, 0);
+    if (fd < 0) return false;
+    bool ok = connect(fd, (struct sockaddr *)&addr, sizeof(addr)) == 0;
+    close(fd);
+    return ok;
+}
+
+static int request_upgrade(const std::string &path);
+
+// Install the binary under $HOME, write a systemd --user unit pointing
+// at it, enable it. If a daemon is already running, hand it the new
+// binary in place (sessions survive) rather than restarting the unit.
 static bool install_systemd_unit() {
     // Sessions that bypass pam_systemd (containers, `ssh host cmd`,
     // sudo -u shells) lack XDG_RUNTIME_DIR even when a systemd --user
@@ -1643,10 +1722,10 @@ static bool install_systemd_unit() {
             setenv("XDG_RUNTIME_DIR", rt.c_str(), 1);
     }
 
-    char exe[4096];
-    ssize_t n = readlink("/proc/self/exe", exe, sizeof(exe) - 1);
-    if (n <= 0) { rivt::logmsg("cannot resolve own path\n"); return false; }
-    exe[n] = 0;
+    std::string exe = install_binary();
+    if (exe.empty()) return false;
+    printf("installed %s\n", exe.c_str());
+    fflush(stdout);
 
     const char *cfg = getenv("XDG_CONFIG_HOME");
     std::string dir = cfg && *cfg ? std::string(cfg) + "/systemd/user"
@@ -1665,15 +1744,35 @@ static bool install_systemd_unit() {
             "After=network-online.target\nWants=network-online.target\n\n"
             "[Service]\nExecStart=%s --listen\nRestart=on-failure\nRestartSec=2\n\n"
             "[Install]\nWantedBy=default.target\n",
-            exe);
+            exe.c_str());
     fclose(f);
 
+    bool was_running = daemon_running();
     if (system("systemctl --user daemon-reload") != 0 ||
-        system("systemctl --user enable --now rivtd") != 0) {
-        rivt::logmsg(                "\nInstalled %s but could not enable it (no systemd --user session?).\n"
-                "Enable manually: systemctl --user enable --now rivtd\n",
-                path.c_str());
+        system("systemctl --user enable rivtd") != 0) {
+        rivt::logmsg("\nInstalled %s but could not enable it (no systemd --user session?).\n"
+                     "Enable manually: systemctl --user enable --now rivtd\n",
+                     path.c_str());
         return false;
+    }
+    if (was_running) {
+        // Hand the new binary to the live daemon; sessions survive.
+        request_upgrade(default_socket_path());
+    } else {
+        // `restart`, not `start`: a unit stuck in auto-restart (binary
+        // vanished with an OS-image refresh) races a plain start against
+        // its own retry timer and sometimes ends up failed.
+        if (system("systemctl --user reset-failed rivtd >/dev/null 2>&1; "
+                   "systemctl --user restart rivtd") != 0) {
+            rivt::logmsg("could not start rivtd: systemctl --user status rivtd\n");
+            return false;
+        }
+        // Type=simple reports success at fork; give exec a moment.
+        usleep(300 * 1000);
+        if (system("systemctl --user is-active --quiet rivtd") != 0) {
+            rivt::logmsg("rivtd did not stay up: systemctl --user status rivtd\n");
+            return false;
+        }
     }
     // Best-effort: keep it running across logout / at boot.
     if (system("loginctl enable-linger \"$USER\" >/dev/null 2>&1") != 0)
@@ -1790,7 +1889,9 @@ static void print_help() {
         "                           `rivt pair` on a paired device, or run with\n"
         "                           no code to found a new set on this machine\n"
         "  rivtd pair               print an invite code for pairing another device\n"
-        "  rivtd install            run under systemd --user, start on boot\n"
+        "  rivtd install            copy this binary to ~/.local/bin, run it under\n"
+        "                           systemd --user, start on boot; upgrades a\n"
+        "                           running daemon in place\n"
         "  rivtd install --system   system-wide unit via sudo — for boxes where\n"
         "                           logind can't see your user (NSS overlays)\n"
         "  rivtd --upgrade          re-exec the running daemon in place (keeps sessions)\n"

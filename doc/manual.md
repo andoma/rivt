@@ -45,8 +45,11 @@ a code, and give the rendezvous URL once. Every other device then
 ```
 cmake -B build -G Ninja -DRIVT_UI=OFF .    # daemon only, no graphics deps
 cmake --build build
-sudo cmake --install build                  # rivtd + systemd unit
 ```
+No install step: `rivtd join`/`rivtd install` below copy the binary to
+`~/.local/bin/rivtd`, so the service keeps working when the OS image is
+refreshed but `$HOME` persists. (`sudo cmake --install build` still
+works for a system-wide prefix.)
 Needs a C++20 compiler, CMake+Ninja, OpenSSL headers, and network access
 at configure time (fetches pinned picoquic). Runtime deps are just
 libc/libstdc++/libcrypto.
@@ -59,9 +62,12 @@ This joins the set (learning the rendezvous URL from the code), then
 offers to install and start the background service. Accept it, or run it
 yourself:
 ```
-systemctl --user enable --now rivtd     # runs `rivtd --listen` (udp/7433)
+rivtd install                            # ~/.local/bin/rivtd --listen (udp/7433)
 sudo loginctl enable-linger $USER        # keep running at boot / after logout
 ```
+Upgrading later is `cmake --build build && ./build/rivtd install`: the
+new binary replaces `~/.local/bin/rivtd` and the running daemon re-execs
+it with sessions intact.
 That's it — the box publishes itself under its hostname and is now
 reachable by name.
 
@@ -102,7 +108,8 @@ rivtd --fingerprint    # identity + config paths
 rivtd pair             # mint a code to add another device
 rivtd --upgrade        # re-exec a new build in place; sessions/PTYs/clients survive
 rivtd --listen [port]  # run in the foreground (default udp/7433)
-rivtd install          # (re)install the systemd --user service
+rivtd install          # copy to ~/.local/bin, (re)install the systemd --user
+                       # service, upgrade a running daemon in place
 rivtd install --system # system-level unit instead (see above)
 ```
 
