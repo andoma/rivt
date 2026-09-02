@@ -4,13 +4,21 @@
 
 namespace rivt {
 
+// macOS renders at a larger effective point size, so 9 reads right there;
+// on Linux 11 matches the pre-ecb213a look.
+#ifdef __APPLE__
+inline constexpr float kDefaultFontSize = 9.0f;
+#else
+inline constexpr float kDefaultFontSize = 11.0f;
+#endif
+
 struct Config {
     // Scrollback
     int scrollback_lines = 10000;
 
     // Font
     std::string font_family;  // empty = system default monospace
-    float font_size = 9.0f;
+    float font_size = kDefaultFontSize;
 
     // Colors - default dark theme
     uint32_t fg_color = 0xD4D4D4;
