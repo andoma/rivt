@@ -145,13 +145,20 @@ bool Pty::spawn(int cols, int rows, const std::string &shell, const std::string 
             }
         }
 
-        // Reset signal handlers
+        // Reset signal handlers and the blocked mask. rivtd blocks
+        // SIGINT/SIGTERM/SIGCHLD/SIGPIPE for its signalfd; the mask
+        // survives fork+exec, so without this every remote shell (and
+        // everything it runs) inherits SIGINT blocked and ^C is inert.
         signal(SIGCHLD, SIG_DFL);
         signal(SIGHUP, SIG_DFL);
         signal(SIGINT, SIG_DFL);
         signal(SIGQUIT, SIG_DFL);
         signal(SIGTERM, SIG_DFL);
         signal(SIGALRM, SIG_DFL);
+        signal(SIGPIPE, SIG_DFL);
+        sigset_t none;
+        sigemptyset(&none);
+        sigprocmask(SIG_SETMASK, &none, nullptr);
 
         execlp(sh.c_str(), login_shell.c_str(), nullptr);
         _exit(127);
