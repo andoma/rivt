@@ -137,7 +137,13 @@ macOS:
 brew install openssl@3
 cmake -B build -G Ninja .
 cmake --build build
+cmake --install build --prefix /Applications              # -> /Applications/rivt.app
+ln -sf /Applications/rivt.app/Contents/MacOS/rivt ~/.local/bin/rivt   # CLI verbs
 ```
+The bundle links Homebrew dylibs by absolute path: it runs on the machine
+that built it, not on a colleague's. Debug builds carry AddressSanitizer
+(slower, great crash reports); use `-DCMAKE_BUILD_TYPE=Release` for the
+copy you live in.
 
 ### 2. Enroll
 ```
