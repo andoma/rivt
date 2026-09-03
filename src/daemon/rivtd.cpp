@@ -264,8 +264,9 @@ public:
             [this](const std::string &from, bool answer, std::vector<net::Candidate> cands) {
                 if (!answer) handle_offer(from, cands);
             };
-        m_signaling->on_ready = []() {
+        m_signaling->on_ready = [this]() {
             rivt::logmsg("rivtd: signaling connected (ready for hole punch / relay)\n");
+            m_sig_down_logged = false;
         };
         // Reconnect on detectable transport loss (edge idle-close, RST).
         // Deferred to a timer: restarting the WS from inside its own
@@ -277,9 +278,15 @@ public:
             }, false);
         };
         if (!m_signaling->start(rdv)) {
-            rivt::logmsg("rivtd: signaling failed to start\n");
-            m_signaling.reset();
-            return;
+            // Synchronous failure is almost always DNS not being up yet:
+            // systemd --user starts us before the network settles after
+            // boot. Keep the object so the stale check below keeps
+            // retrying, and take a quick first retry for the boot case.
+            rivt::logmsg("rivtd: signaling failed to start (network not ready?), retrying\n");
+            m_sig_down_logged = true;
+            m_loop.add_timer(5000, [this]() {
+                if (m_signaling && !m_signaling->ready()) m_signaling->restart();
+            }, false);
         }
         // App-level keepalive: edge-answered, keeps the NAT/TCP mapping
         // alive without waking the DO. The edge answers every ping with a
@@ -290,8 +297,11 @@ public:
             if (!m_signaling) return;
             double idle = m_signaling->seconds_since_rx();
             if (!m_signaling->ready() || idle > 95.0) {
-                rivt::logmsg("rivtd: signaling stale (open=%d, last rx %.0fs ago), "
-                        "reconnecting\n", m_signaling->ready(), idle);
+                // Log the transition, not every 30s tick while offline.
+                if (!m_sig_down_logged)
+                    rivt::logmsg("rivtd: signaling stale (open=%d, last rx %.0fs ago), "
+                            "reconnecting\n", m_signaling->ready(), idle);
+                m_sig_down_logged = true;
                 m_signaling->restart();
             } else {
                 m_signaling->keepalive();
@@ -1567,6 +1577,7 @@ private:
     std::unique_ptr<net::Identity> m_identity;
     std::unique_ptr<net::QuicEngine> m_quic;
     std::unique_ptr<net::Signaling> m_signaling;
+    bool m_sig_down_logged = false;  // suppress repeated stale/retry logs while offline
     // Relays rotate: a Cloudflare TURN allocation silently forwards
     // only ~10 distinct peer flows over its lifetime (measured; flow 11+
     // is dropped with the control plane green, and the budget never

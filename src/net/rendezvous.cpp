@@ -286,7 +286,9 @@ bool register_device(const std::string &base_url, const Identity &id,
                        ",\"addrs\":[" + addrs + "]}";
     std::string resp;
     if (!https_request(base_url, "/dir/register", "POST", body, resp)) {
-        rivt::logmsg("rivtd: rendezvous register failed: %s\n", resp.c_str());
+        rivt::logmsg("rivtd: rendezvous register failed: %s\n",
+                     resp.empty() ? "connect failed (network not ready?); retrying in 60s"
+                                  : resp.c_str());
         return false;
     }
     return true;
