@@ -8,6 +8,7 @@
 #include "core/config.h"
 #include "core/debug.h"
 
+#include <climits>
 #include <clocale>
 #include <cstdio>
 #include <cstring>
@@ -47,6 +48,17 @@ static void sigchld_handler(int) {
 // nothing and sessions survive — that's the recovery feature.
 static void sigterm_handler(int) {
     got_term = 1;
+}
+
+// Finder and launchd start a process with cwd "/", which would become
+// the start directory of every shell in the window. Move to $HOME in
+// that case. A start from a shell keeps that shell's cwd.
+static void use_home_if_no_cwd() {
+    char buf[PATH_MAX];
+    if (!getcwd(buf, sizeof buf) || strcmp(buf, "/") != 0) return;
+    const char *home = getenv("HOME");
+    if (!home || !*home) return;
+    if (chdir(home) != 0) rivt::logmsg("cannot chdir to %s\n", home);
 }
 
 int main(int argc, char *argv[]) {
@@ -116,6 +128,8 @@ int main(int argc, char *argv[]) {
             connect_host = argv[++i];
         }
     }
+
+    use_home_if_no_cwd();
 
     Config base_config;
     EventLoop loop;
