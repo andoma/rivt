@@ -1,4 +1,13 @@
 cmake_minimum_required(VERSION 3.16)
+
+# An Xcode upgrade removes the versioned SDK directory that CMake cached
+# in CMAKE_OSX_SYSROOT, and CMake < 4.0 keeps the dead path across
+# reconfigures. Drop it before project() so the SDK is detected again.
+if(CMAKE_OSX_SYSROOT MATCHES "/" AND NOT IS_DIRECTORY "${CMAKE_OSX_SYSROOT}")
+    message(STATUS "Dropping stale CMAKE_OSX_SYSROOT: ${CMAKE_OSX_SYSROOT}")
+    unset(CMAKE_OSX_SYSROOT CACHE)
+endif()
+
 project(rivt VERSION 0.1.0 LANGUAGES C CXX)
 
 if(NOT CMAKE_BUILD_TYPE)

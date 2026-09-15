@@ -95,8 +95,15 @@ bool Pty::spawn(int cols, int rows, const std::string &shell, const std::string 
     posix_spawn_file_actions_addopen(&fa, 0, slave_name, O_RDWR, 0);
     posix_spawn_file_actions_adddup2(&fa, 0, 1);
     posix_spawn_file_actions_adddup2(&fa, 0, 2);
-    if (!cwd.empty())
+    if (!cwd.empty()) {
+        // The _np name is deprecated from macOS 26. The plain name exists
+        // only in the 26.0+ SDK and runtime.
+#if __MAC_OS_X_VERSION_MIN_REQUIRED >= 260000
+        posix_spawn_file_actions_addchdir(&fa, cwd.c_str());
+#else
         posix_spawn_file_actions_addchdir_np(&fa, cwd.c_str());
+#endif
+    }
 
     posix_spawnattr_t attr;
     posix_spawnattr_init(&attr);
