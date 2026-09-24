@@ -68,6 +68,7 @@ private:
     Pane *create_remote_pane(Tab *tab, uint32_t pane_id, int cols, int rows);
     void apply_layout(uint32_t wid, int cols, int rows,
                       const std::vector<RemotePaneGeom> &panes);
+    void drop_window(uint32_t wid);  // tear down a window's tab + panes
     uint32_t focused_pane_id() const;
     void request_scrollback(uint32_t pane_id);
     void reposition_for_tab_bar();
@@ -89,6 +90,10 @@ private:
     std::unordered_map<uint32_t, PaneEntry> m_pane_map;
     std::unordered_set<uint32_t> m_fetching;      // scrollback fetch in flight
     std::unordered_set<uint32_t> m_fetch_done;    // daemon has no more history
+    // Attach resync: windows announced since AttachOk; the SessionList
+    // barrier drops local windows the daemon no longer has.
+    bool m_resyncing = false;
+    std::unordered_set<uint32_t> m_announced;
 
     // Resize coalescing: interactive drags emit hundreds of resize
     // events; send at most one in flight per debounce window, and never

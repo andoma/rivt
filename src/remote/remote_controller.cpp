@@ -24,6 +24,21 @@ RemoteController::RemoteController(RemoteClient &client, Window &window, TabMana
     };
 
     m_client.on_session_list = [this](const std::vector<RemoteSessionInfo> &list) {
+        if (m_resyncing) {
+            // Attach barrier (see on_attach_ok): every live window has
+            // been announced. Local tabs not re-announced were closed
+            // daemon-side while we were away.
+            m_resyncing = false;
+            std::vector<uint32_t> gone;
+            for (const auto &[wid, tab] : m_windows)
+                if (!m_announced.count(wid)) gone.push_back(wid);
+            m_announced.clear();
+            for (uint32_t wid : gone) {
+                dbg("remote: window %u closed while detached", wid);
+                drop_window(wid);
+            }
+            return;
+        }
         if (m_active || m_target_sid != ATTACH_NEWEST) return;
         if (list.empty()) {
             m_client.create_session("", "", m_cols, m_rows);
@@ -55,11 +70,20 @@ RemoteController::RemoteController(RemoteClient &client, Window &window, TabMana
         }
         m_fetching.clear();
         m_fetch_done.clear();
+        // The daemon announces each live window (WindowAdded) right
+        // behind AttachOk, with no end marker. The control stream is
+        // ordered and the daemon handles Attach in full before the next
+        // request, so the SessionList reply marks the end of the list.
+        m_announced.clear();
+        m_resyncing = true;
+        m_client.list_sessions();
         refresh_status();
     };
 
     m_client.on_window_added = [this](uint32_t sid, uint32_t wid) {
-        if (sid != m_session_id || m_windows.count(wid)) return;
+        if (sid != m_session_id) return;
+        if (m_resyncing) m_announced.insert(wid);
+        if (m_windows.count(wid)) return;
         Tab *tab = m_tabs.new_empty_tab("rivtd");
         tab->tmux_managed = true;  // pane rects are ours, not the layout engine's
         m_windows[wid] = tab;
@@ -69,22 +93,8 @@ RemoteController::RemoteController(RemoteClient &client, Window &window, TabMana
 
     m_client.on_window_closed = [this](uint32_t sid, uint32_t wid) {
         if (sid != m_session_id) return;
-        auto it = m_windows.find(wid);
-        if (it == m_windows.end()) return;
-        Tab *tab = it->second;
-        m_windows.erase(it);
-        for (auto pit = m_pane_map.begin(); pit != m_pane_map.end();) {
-            if (pit->second.wid == wid) {
-                m_tabs.remove_pane(tab, pit->second.pane);
-                pit = m_pane_map.erase(pit);
-            } else {
-                ++pit;
-            }
-        }
-        m_tabs.close_tab_ptr(tab);
         // Last window: SessionClosed follows and drives exit().
-        reposition_for_tab_bar();
-        if (m_tabs.on_needs_render) m_tabs.on_needs_render();
+        drop_window(wid);
     };
 
     m_client.on_layout = [this](uint32_t sid, uint32_t wid, int cols, int rows,
@@ -326,6 +336,25 @@ void RemoteController::apply_layout(uint32_t wid, int cols, int rows,
         m_tabs.remove_pane(tab, pane);
     }
 
+    if (m_tabs.on_needs_render) m_tabs.on_needs_render();
+}
+
+void RemoteController::drop_window(uint32_t wid) {
+    auto it = m_windows.find(wid);
+    if (it == m_windows.end()) return;
+    Tab *tab = it->second;
+    m_windows.erase(it);
+    for (auto pit = m_pane_map.begin(); pit != m_pane_map.end();) {
+        if (pit->second.wid == wid) {
+            m_shadow.erase(pit->first);
+            m_tabs.remove_pane(tab, pit->second.pane);
+            pit = m_pane_map.erase(pit);
+        } else {
+            ++pit;
+        }
+    }
+    m_tabs.close_tab_ptr(tab);
+    reposition_for_tab_bar();
     if (m_tabs.on_needs_render) m_tabs.on_needs_render();
 }
 
@@ -715,6 +744,8 @@ void RemoteController::exit() {
     m_windows.clear();
     m_fetching.clear();
     m_fetch_done.clear();
+    m_resyncing = false;
+    m_announced.clear();
     if (m_status_timer >= 0) { m_client.loop().remove_timer(m_status_timer); m_status_timer = -1; }
     m_tabs.set_title_suffix("");
     if (on_exit) on_exit();
