@@ -240,7 +240,8 @@ void X11Backend::destroy_window() {
     }
 }
 
-void X11Backend::set_title(const std::string &title) {
+void X11Backend::set_title(const std::string &t) {
+    const std::string title = window_title(t);
     xcb_change_property(m_conn, XCB_PROP_MODE_REPLACE, m_window,
                         XCB_ATOM_WM_NAME, m_atom_utf8_string, 8,
                         title.size(), title.c_str());

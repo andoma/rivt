@@ -6,6 +6,16 @@
 
 namespace rivt {
 
+// Title as shown by the window manager. Debug builds (ASan, -Og) carry a
+// marker so they are not mistaken for release builds, e.g. when profiling.
+inline std::string window_title(const std::string &title) {
+#ifdef RIVT_DEBUG_BUILD
+    return "[DEBUG-BUILD] " + title;
+#else
+    return title;
+#endif
+}
+
 class Platform {
 public:
     virtual ~Platform() = default;

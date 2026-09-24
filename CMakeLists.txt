@@ -231,6 +231,7 @@ target_compile_options(rivt PRIVATE -Wall -Wextra -Wpedantic)
 if(CMAKE_BUILD_TYPE STREQUAL "Debug")
     target_compile_options(rivt PRIVATE -Og -ggdb -fsanitize=address)
     target_link_options(rivt PRIVATE -fsanitize=address)
+    target_compile_definitions(rivt PRIVATE RIVT_DEBUG_BUILD)
 endif()
 
 if(CMAKE_BUILD_TYPE STREQUAL "RelWithDebInfo")

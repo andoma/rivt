@@ -732,7 +732,7 @@ bool CocoaBackend::create_window(int width, int height, const std::string &title
                                                       backing:NSBackingStoreBuffered
                                                         defer:NO];
     [win setReleasedWhenClosed:NO];
-    [win setTitle:[NSString stringWithUTF8String:title.c_str()]];
+    [win setTitle:[NSString stringWithUTF8String:window_title(title).c_str()]];
     win.backend = this;
 
     RivtView *view = [[RivtView alloc] initWithBackend:this];
@@ -760,7 +760,8 @@ void CocoaBackend::destroy_window() {
 
 void CocoaBackend::set_title(const std::string &title) {
     if (m_impl->window)
-        [m_impl->window setTitle:[NSString stringWithUTF8String:title.c_str()]];
+        [m_impl->window setTitle:
+            [NSString stringWithUTF8String:window_title(title).c_str()]];
 }
 
 void CocoaBackend::get_size(int &width, int &height) {
