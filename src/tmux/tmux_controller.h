@@ -9,7 +9,7 @@ namespace rivt {
 
 class Window;
 class TabManager;
-class Tab;
+struct Tab;
 class Pane;
 
 class TmuxController {

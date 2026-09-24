@@ -11,7 +11,7 @@ namespace rivt {
 
 class Window;
 class TabManager;
-class Tab;
+struct Tab;
 class Pane;
 
 // Maps rivtd sessions onto local tabs/panes — the rivtd sibling of
