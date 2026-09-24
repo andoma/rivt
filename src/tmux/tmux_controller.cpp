@@ -13,8 +13,8 @@
 namespace rivt {
 
 TmuxController::TmuxController(TmuxClient &client, Window &window,
-                                 TabManager &tabs, EventLoop &loop)
-    : m_client(client), m_window(window), m_tabs(tabs), m_loop(loop)
+                                 TabManager &tabs, EventLoop &)
+    : m_client(client), m_window(window), m_tabs(tabs)
 {
     m_client.on_output = [this](int id, const std::string &d) { on_output(id, d); };
     m_client.on_window_add = [this](int id) { on_window_add(id); };

@@ -52,7 +52,6 @@ private:
     TmuxClient &m_client;
     Window &m_window;
     TabManager &m_tabs;
-    EventLoop &m_loop;
     bool m_active = false;
 
     std::unordered_map<int, Pane *> m_pane_map;    // tmux %pane_id -> rivt Pane*
