@@ -133,6 +133,8 @@ private:
     void mark_closed(Conn *c);
     void on_socket(uint32_t events);
     void pump();
+    void pump_loop();
+    void incoming(uint8_t *d, size_t n, struct sockaddr *from);
 
     EventLoop &m_loop;
     picoquic_quic_t *m_quic = nullptr;
@@ -140,6 +142,12 @@ private:
     int m_timer = -1;
     struct sockaddr_storage m_local {};
     bool m_want_write = false;
+    // picoquic is not reentrant: its callbacks (on_data, on_connected,
+    // on_drained) run inside picoquic_incoming_packet and
+    // picoquic_prepare_next_packet, and a send() there must not start a
+    // nested prepare. Such pumps are deferred to the outermost caller.
+    int m_in_stack = 0;
+    bool m_repump = false;
 
     bool m_cert_rejected = false;
     std::string m_label;  // "host:port" of an outbound target, for logs

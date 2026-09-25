@@ -420,19 +420,21 @@ void QuicEngine::on_socket(uint32_t events) {
             m_loop.add_timer(impair, [this, alive, pkt, from_copy]() {
                 if (alive.expired()) return;  // engine gone
                 struct sockaddr_storage f = from_copy;
-                picoquic_incoming_packet(m_quic, (uint8_t *)pkt.data(), pkt.size(),
-                                         (struct sockaddr *)&f,
-                                         (struct sockaddr *)&m_local, 0, 0,
-                                         picoquic_current_time());
+                incoming((uint8_t *)pkt.data(), pkt.size(), (struct sockaddr *)&f);
                 pump();
             }, false);
             continue;
         }
-        picoquic_incoming_packet(m_quic, buf, (size_t)n, (struct sockaddr *)&from,
-                                 (struct sockaddr *)&m_local, 0, 0,
-                                 picoquic_current_time());
+        incoming(buf, (size_t)n, (struct sockaddr *)&from);
     }
     pump();
+}
+
+void QuicEngine::incoming(uint8_t *d, size_t n, struct sockaddr *from) {
+    m_in_stack++;
+    picoquic_incoming_packet(m_quic, d, n, from, (struct sockaddr *)&m_local, 0, 0,
+                             picoquic_current_time());
+    m_in_stack--;
 }
 
 uint64_t QuicEngine::rtt_ms(Conn *c) const {
@@ -521,8 +523,7 @@ void QuicEngine::feed_relayed(TurnRelay *turn, const struct sockaddr_in &peer,
             break;
         }
     if (!known) m_relayed_peers.push_back({peer, turn});
-    picoquic_incoming_packet(m_quic, (uint8_t *)d, n, (struct sockaddr *)&peer,
-                             (struct sockaddr *)&m_local, 0, 0, picoquic_current_time());
+    incoming((uint8_t *)d, n, (struct sockaddr *)&peer);
     pump();
 }
 
@@ -540,7 +541,21 @@ TurnRelay *QuicEngine::relay_for(const struct sockaddr_storage &to,
 }
 
 void QuicEngine::pump() {
+    if (m_in_stack) {
+        m_repump = true;  // the outermost caller pumps on return
+        return;
+    }
+    m_in_stack++;
+    pump_loop();
+    m_in_stack--;
+    int64_t delay_us = picoquic_get_next_wake_delay(m_quic, picoquic_current_time(),
+                                                    60ll * 1000000);
+    m_loop.reset_timer(m_timer, (int)(delay_us / 1000) + 1);
+}
+
+void QuicEngine::pump_loop() {
     uint8_t buf[1536];
+    m_repump = false;
     for (;;) {
         struct sockaddr_storage to {}, fromaddr {};
         int if_index = 0;
@@ -549,7 +564,14 @@ void QuicEngine::pump() {
         int rc = picoquic_prepare_next_packet(m_quic, picoquic_current_time(), buf,
                                               sizeof buf, &send_len, &to, &fromaddr,
                                               &if_index, nullptr, &last);
-        if (rc != 0 || send_len == 0) break;
+        if (rc != 0 || send_len == 0) {
+            // A callback inside this prepare queued more data: go again.
+            if (rc == 0 && m_repump) {
+                m_repump = false;
+                continue;
+            }
+            return;
+        }
         struct sockaddr_in rpeer {};
         int impair = Netem::instance().impair(/*inbound=*/false);
         if (impair < 0) continue;  // netem: dropped
@@ -595,12 +617,9 @@ void QuicEngine::pump() {
                 m_want_write = true;
                 m_loop.modify_fd(m_fd, EV_READ | EV_WRITE);
             }
-            break;
+            return;
         }
     }
-    int64_t delay_us = picoquic_get_next_wake_delay(m_quic, picoquic_current_time(),
-                                                    60ll * 1000000);
-    m_loop.reset_timer(m_timer, (int)(delay_us / 1000) + 1);
 }
 
 } // namespace rivt::net
