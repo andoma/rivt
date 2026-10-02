@@ -905,13 +905,17 @@ void ScreenBuffer::csi_dispatch(const CsiParams &params, char intermediate, char
         case 't': // Window manipulation (ignored mostly)
             break;
         case 'n': // DSR - device status report
-            if (dec_private && params.get(0) == 6) {
-                // CPR: report cursor position
-                if (on_write_back) {
-                    char buf[32];
-                    snprintf(buf, sizeof(buf), "\033[%d;%dR", m_cursor_row + 1, m_cursor_col + 1);
-                    on_write_back(buf);
-                }
+            if (!on_write_back)
+                break;
+            if (params.get(0) == 6) {
+                // CPR (CSI 6 n) / DECXCPR (CSI ? 6 n): report cursor position
+                char buf[32];
+                snprintf(buf, sizeof(buf), "\033[%s%d;%dR", dec_private ? "?" : "",
+                         m_cursor_row + 1, m_cursor_col + 1);
+                on_write_back(buf);
+            } else if (params.get(0) == 5 && !dec_private) {
+                // Operating status: report OK
+                on_write_back("\033[0n");
             }
             break;
         case 'c': // DA - device attributes

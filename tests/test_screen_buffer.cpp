@@ -401,6 +401,23 @@ TEST(kitty_kbd_query) {
     ASSERT_STR_EQ(response, "\033[?5u");
 }
 
+TEST(dsr_cursor_position) {
+    TestTerminal t;
+    std::string response;
+    t.screen.on_write_back = [&](const std::string &s) { response = s; };
+
+    t.feed("\033[3;7H\033[6n");
+    ASSERT_STR_EQ(response, "\033[3;7R");
+
+    response.clear();
+    t.feed("\033[?6n");
+    ASSERT_STR_EQ(response, "\033[?3;7R");
+
+    response.clear();
+    t.feed("\033[5n");
+    ASSERT_STR_EQ(response, "\033[0n");
+}
+
 TEST(kitty_kbd_reset_on_alt_screen) {
     TestTerminal t;
     t.feed("\033[>1u");  // push kitty mode
