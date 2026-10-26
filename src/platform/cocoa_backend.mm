@@ -368,6 +368,24 @@ uint32_t modifier_keysym_from_keycode(unsigned short kc) {
 - (BOOL)canBecomeMainWindow { return YES; }
 @end
 
+// Close a window and, if it was key, hand key status to the frontmost
+// remaining rivt window. AppKit does not reliably do this itself when
+// the close is issued from our main loop instead of from a user event,
+// which leaves the app with no key window.
+static void close_window_and_refocus(RivtWindow *win) {
+    bool was_key = [win isKeyWindow];
+    win.backend = nullptr;
+    [win close];
+    if (!was_key) return;
+    for (NSWindow *w in [NSApp orderedWindows]) {
+        if (w == win || ![w isKindOfClass:[RivtWindow class]]) continue;
+        if (!((RivtWindow *)w).backend) continue;
+        if (![w isVisible] || [w isMiniaturized]) continue;
+        [w makeKeyAndOrderFront:nil];
+        break;
+    }
+}
+
 // =================================================================
 // RivtView — the NSView that hosts the GL surface and receives input.
 // =================================================================
@@ -702,7 +720,7 @@ CocoaBackend::~CocoaBackend() {
         }
     }
     if (m_impl->window) {
-        [m_impl->window close];
+        close_window_and_refocus(m_impl->window);
         m_impl->window = nil;
     }
     m_impl->view = nil;
@@ -752,7 +770,7 @@ bool CocoaBackend::create_window(int width, int height, const std::string &title
 
 void CocoaBackend::destroy_window() {
     if (m_impl->window) {
-        [m_impl->window close];
+        close_window_and_refocus(m_impl->window);
         m_impl->window = nil;
     }
     m_impl->view = nil;
