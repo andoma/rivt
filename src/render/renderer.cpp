@@ -87,7 +87,7 @@ void main() {
 static float text_gamma() {
     static float g = [] {
         const char *e = getenv("RIVT_TEXT_GAMMA");
-        float v = e ? (float)atof(e) : 0.5f;
+        float v = e ? (float)atof(e) : 0.25f;
         return std::fmin(std::fmax(v, 0.0f), 1.0f);
     }();
     return g;
