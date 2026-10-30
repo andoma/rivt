@@ -6,6 +6,7 @@
 #include "render/gl.h"
 #include <cstdio>
 #include <cmath>
+#include <cstdlib>
 #include <string>
 
 namespace rivt {
@@ -16,15 +17,18 @@ layout(location = 0) in vec2 aPos;
 layout(location = 1) in vec2 aTexCoord;
 layout(location = 2) in vec4 aColor;
 layout(location = 3) in float aType;
+layout(location = 4) in float aUnder;
 out vec2 vTexCoord;
 out vec4 vColor;
 out float vType;
+out float vUnder;
 uniform mat4 uProjection;
 void main() {
     gl_Position = uProjection * vec4(aPos, 0.0, 1.0);
     vTexCoord = aTexCoord;
     vColor = aColor;
     vType = aType;
+    vUnder = aUnder;
 }
 )";
 
@@ -33,8 +37,35 @@ static const char *glyph_fragment_src = R"(
 in vec2 vTexCoord;
 in vec4 vColor;
 in float vType;
+in float vUnder;
 out vec4 FragColor;
 uniform sampler2D uAtlas;
+uniform float uTextGamma;
+
+float to_linear(float c) {
+    return c <= 0.04045 ? c / 12.92 : pow((c + 0.055) / 1.055, 2.4);
+}
+float to_srgb(float c) {
+    return c <= 0.0031308 ? c * 12.92 : 1.055 * pow(c, 1.0 / 2.4) - 0.055;
+}
+float luminance(vec3 srgb) {
+    vec3 l = vec3(to_linear(srgb.r), to_linear(srgb.g), to_linear(srgb.b));
+    return to_srgb(dot(l, vec3(0.2126, 0.7152, 0.0722)));
+}
+
+// The framebuffer blends in sRGB space, which makes light-on-dark text
+// thin. Find the alpha that gives, in sRGB-space blending, the
+// luminance that blending in linear light would give. uTextGamma mixes
+// between the two: 0 = plain sRGB blend, 1 = linear-light blend.
+float correct_alpha(float a, vec3 fg, float under) {
+    if (under < 0.0 || uTextGamma <= 0.0) return a;
+    float over = luminance(fg);
+    float d = over - under;
+    if (abs(d) < 1.0 / 255.0) return a;
+    float want = to_srgb(mix(to_linear(under), to_linear(over), a));
+    return mix(a, clamp((want - under) / d, 0.0, 1.0), uTextGamma);
+}
+
 void main() {
     if (vType < 0.5) {
         // Background quad
@@ -42,13 +73,40 @@ void main() {
     } else if (vType < 1.5) {
         // Mask glyph: sample alpha, multiply by fg color
         vec4 tex = texture(uAtlas, vTexCoord);
-        FragColor = vec4(vColor.rgb, vColor.a * tex.a);
+        float a = correct_alpha(tex.a, vColor.rgb, vUnder);
+        FragColor = vec4(vColor.rgb, vColor.a * a);
     } else {
         // Color glyph (emoji): sample RGBA directly
         FragColor = texture(uAtlas, vTexCoord);
     }
 }
 )";
+
+// Share of linear-light blending for text, see correct_alpha() in the
+// glyph shader. RIVT_TEXT_GAMMA=0..1 overrides the default.
+static float text_gamma() {
+    static float g = [] {
+        const char *e = getenv("RIVT_TEXT_GAMMA");
+        float v = e ? (float)atof(e) : 0.5f;
+        return std::fmin(std::fmax(v, 0.0f), 1.0f);
+    }();
+    return g;
+}
+
+static float srgb_to_linear(float c) {
+    return c <= 0.04045f ? c / 12.92f : std::pow((c + 0.055f) / 1.055f, 2.4f);
+}
+
+static float linear_to_srgb(float c) {
+    return c <= 0.0031308f ? c * 12.92f : 1.055f * std::pow(c, 1.0f / 2.4f) - 0.055f;
+}
+
+// Same as luminance() in the glyph shader.
+static float srgb_luminance(float r, float g, float b) {
+    return linear_to_srgb(0.2126f * srgb_to_linear(r) +
+                          0.7152f * srgb_to_linear(g) +
+                          0.0722f * srgb_to_linear(b));
+}
 
 static const char *image_vertex_src = R"(
 #version 330 core
@@ -457,12 +515,16 @@ void Renderer::build_pane_vertices(const ScreenBuffer &buffer, const Config &con
 
             float glyph_type = (ge->type == GlyphType::Color) ? 2.0f : 1.0f;
 
-            m_vertices.push_back({gx,  gy,  tu,  tv,  fg_r, fg_g, fg_b, 1.0f, glyph_type});
-            m_vertices.push_back({gx2, gy,  tu2, tv,  fg_r, fg_g, fg_b, 1.0f, glyph_type});
-            m_vertices.push_back({gx2, gy2, tu2, tv2, fg_r, fg_g, fg_b, 1.0f, glyph_type});
-            m_vertices.push_back({gx,  gy,  tu,  tv,  fg_r, fg_g, fg_b, 1.0f, glyph_type});
-            m_vertices.push_back({gx2, gy2, tu2, tv2, fg_r, fg_g, fg_b, 1.0f, glyph_type});
-            m_vertices.push_back({gx,  gy2, tu,  tv2, fg_r, fg_g, fg_b, 1.0f, glyph_type});
+            float ubg_r, ubg_g, ubg_b;
+            resolve_cell_bg(line.cells[col], abs_line, col, ubg_r, ubg_g, ubg_b);
+            float under = srgb_luminance(ubg_r, ubg_g, ubg_b);
+
+            m_vertices.push_back({gx,  gy,  tu,  tv,  fg_r, fg_g, fg_b, 1.0f, glyph_type, under});
+            m_vertices.push_back({gx2, gy,  tu2, tv,  fg_r, fg_g, fg_b, 1.0f, glyph_type, under});
+            m_vertices.push_back({gx2, gy2, tu2, tv2, fg_r, fg_g, fg_b, 1.0f, glyph_type, under});
+            m_vertices.push_back({gx,  gy,  tu,  tv,  fg_r, fg_g, fg_b, 1.0f, glyph_type, under});
+            m_vertices.push_back({gx2, gy2, tu2, tv2, fg_r, fg_g, fg_b, 1.0f, glyph_type, under});
+            m_vertices.push_back({gx,  gy2, tu,  tv2, fg_r, fg_g, fg_b, 1.0f, glyph_type, under});
 
             if (cell.attrs & ATTR_UNDERLINE_MASK) {
                 float uy = y_top + m.ascender + 2;
@@ -699,6 +761,7 @@ void Renderer::render_images(ScreenBuffer &buffer, int offset_x, int offset_y,
         // Disable unused attribs from glyph shader
         glDisableVertexAttribArray(2);
         glDisableVertexAttribArray(3);
+        glDisableVertexAttribArray(4);
 
         glDrawArrays(GL_TRIANGLES, 0, 6);
     }
@@ -984,6 +1047,8 @@ void Renderer::flush() {
 
     loc = glGetUniformLocation(m_glyph_shader, "uAtlas");
     glUniform1i(loc, 0);
+    loc = glGetUniformLocation(m_glyph_shader, "uTextGamma");
+    glUniform1f(loc, text_gamma());
 
     glActiveTexture(GL_TEXTURE0);
     glBindTexture(GL_TEXTURE_2D, m_atlas.texture_id());
@@ -1005,6 +1070,9 @@ void Renderer::flush() {
     glVertexAttribPointer(3, 1, GL_FLOAT, GL_FALSE, sizeof(QuadVertex),
                           (void *)offsetof(QuadVertex, type));
     glEnableVertexAttribArray(3);
+    glVertexAttribPointer(4, 1, GL_FLOAT, GL_FALSE, sizeof(QuadVertex),
+                          (void *)offsetof(QuadVertex, under));
+    glEnableVertexAttribArray(4);
 
     glDrawArrays(GL_TRIANGLES, 0, (int)m_vertices.size());
 

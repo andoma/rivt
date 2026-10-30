@@ -101,6 +101,11 @@ private:
         float u, v;       // texcoord
         float r, g, b, a; // color
         float type;        // 0=bg, 1=mask, 2=color
+        float under;       // mask: sRGB luminance of the background, <0 = unknown
+
+        QuadVertex(float x, float y, float u, float v, float r, float g, float b, float a,
+                   float type, float under = -1.0f)
+            : x(x), y(y), u(u), v(v), r(r), g(g), b(b), a(a), type(type), under(under) {}
     };
     std::vector<QuadVertex> m_vertices;
 };
