@@ -38,6 +38,19 @@ public:
 
 private:
     bool insert_glyph(Font &font, int font_index, uint32_t glyph_id, bool bold, GlyphEntry &entry);
+    void place(const uint8_t *data, int bw, int bh, int bearing_x, int bearing_y,
+               GlyphType type, GlyphEntry &entry);
+#ifdef __APPLE__
+    // Core Text rasterization, same look as native macOS apps.
+    // Returns false to fall back to FreeType.
+    bool insert_glyph_ct(Font &font, int font_index, uint32_t glyph_id, bool bold, GlyphEntry &entry);
+    const void *ct_font(Font &font, int font_index);
+    void release_ct_fonts();
+
+    // CTFontRef per font index, sized to the current FreeType ppem.
+    // nullptr entries cache a failed lookup.
+    std::unordered_map<int, const void *> m_ct_fonts;
+#endif
     void grow_texture();
     void upload_region(int x, int y, int w, int h, const uint8_t *data, GlyphType type);
 

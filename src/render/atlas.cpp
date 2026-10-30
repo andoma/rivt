@@ -6,17 +6,29 @@
 #include <cstring>
 #include <vector>
 #include <algorithm>
+#include <cmath>
+
+#ifdef __APPLE__
+#include <CoreText/CoreText.h>
+#include <cstdlib>
+#endif
 
 namespace rivt {
 
 GlyphAtlas::GlyphAtlas() = default;
 
 GlyphAtlas::~GlyphAtlas() {
+#ifdef __APPLE__
+    release_ct_fonts();
+#endif
     if (m_texture_id)
         glDeleteTextures(1, &m_texture_id);
 }
 
 bool GlyphAtlas::init(int initial_size) {
+#ifdef __APPLE__
+    release_ct_fonts();
+#endif
     m_tex_size = initial_size;
 
     glGenTextures(1, &m_texture_id);
@@ -36,6 +48,10 @@ bool GlyphAtlas::init(int initial_size) {
 }
 
 void GlyphAtlas::clear() {
+#ifdef __APPLE__
+    // Font size changed: CT fonts are sized per ppem, so recreate them.
+    release_ct_fonts();
+#endif
     m_cache.clear();
     m_shelf_x = 0;
     m_shelf_y = 0;
@@ -119,6 +135,11 @@ bool GlyphAtlas::insert_glyph(Font &font, int font_index, uint32_t glyph_id, boo
     if (is_color)
         load_flags |= FT_LOAD_COLOR;
 
+#ifdef __APPLE__
+    if (!is_color && insert_glyph_ct(font, font_index, glyph_id, bold, entry))
+        return true;
+#endif
+
     FT_Error err = FT_Load_Glyph(face, glyph_id, load_flags);
     if (err) {
         dbg("atlas: FT_Load_Glyph failed font_idx=%d glyph=%u err=%d is_color=%d",
@@ -161,6 +182,24 @@ bool GlyphAtlas::insert_glyph(Font &font, int font_index, uint32_t glyph_id, boo
     else
         type = GlyphType::Mask;
 
+    // Ensure contiguous bitmap data
+    std::vector<uint8_t> buffer;
+    int bytes_per_pixel = (type == GlyphType::Color) ? 4 : 1;
+    int row_bytes = bw * bytes_per_pixel;
+    buffer.resize(row_bytes * bh);
+    for (int row = 0; row < bh; row++) {
+        memcpy(buffer.data() + row * row_bytes,
+               bmp.buffer + row * bmp.pitch,
+               row_bytes);
+    }
+
+    place(buffer.data(), bw, bh, face->glyph->bitmap_left, face->glyph->bitmap_top,
+          type, entry);
+    return true;
+}
+
+void GlyphAtlas::place(const uint8_t *data, int bw, int bh, int bearing_x, int bearing_y,
+                       GlyphType type, GlyphEntry &entry) {
     // Calculate atlas width for this glyph
     int atlas_w = bw;
     if (type == GlyphType::Lcd)
@@ -178,32 +217,158 @@ bool GlyphAtlas::insert_glyph(Font &font, int font_index, uint32_t glyph_id, boo
         grow_texture();
     }
 
-    // Ensure contiguous bitmap data
-    std::vector<uint8_t> buffer;
-    int bytes_per_pixel = (type == GlyphType::Color) ? 4 : 1;
-    int row_bytes = bw * bytes_per_pixel;
-    buffer.resize(row_bytes * bh);
-    for (int row = 0; row < bh; row++) {
-        memcpy(buffer.data() + row * row_bytes,
-               bmp.buffer + row * bmp.pitch,
-               row_bytes);
-    }
-
-    upload_region(m_shelf_x, m_shelf_y, bw, bh, buffer.data(), type);
+    upload_region(m_shelf_x, m_shelf_y, bw, bh, data, type);
 
     entry.u = m_shelf_x;
     entry.v = m_shelf_y;
     entry.w = atlas_w;
     entry.h = bh;
-    entry.bearing_x = face->glyph->bitmap_left;
-    entry.bearing_y = face->glyph->bitmap_top;
+    entry.bearing_x = bearing_x;
+    entry.bearing_y = bearing_y;
     entry.type = type;
 
     m_shelf_x += atlas_w + 1;
     m_shelf_height = std::max(m_shelf_height, bh);
+}
 
+#ifdef __APPLE__
+
+namespace {
+
+// RIVT_RASTER=freetype disables Core Text rasterization.
+bool core_text_enabled() {
+    static bool on = [] {
+        const char *e = getenv("RIVT_RASTER");
+        return !(e && !strcmp(e, "freetype"));
+    }();
+    return on;
+}
+
+// Core Text font smoothing makes strokes heavier. Like iTerm2's default
+// ("thin strokes on Retina"), use it only on non-Retina displays.
+// RIVT_FONT_SMOOTH=0/1 forces it off or on.
+bool font_smoothing(float dpi) {
+    if (const char *e = getenv("RIVT_FONT_SMOOTH"))
+        return atoi(e) != 0;
+    return dpi < 144.0f;
+}
+
+CTFontRef create_ct_font(const std::string &path, FT_Face face) {
+    if (path.empty() || !face->size) return nullptr;
+
+    CFURLRef url = CFURLCreateFromFileSystemRepresentation(
+        nullptr, (const UInt8 *)path.data(), (CFIndex)path.size(), false);
+    if (!url) return nullptr;
+    CFArrayRef descs = CTFontManagerCreateFontDescriptorsFromURL(url);
+    CFRelease(url);
+    if (!descs) return nullptr;
+
+    CFIndex n = CFArrayGetCount(descs);
+    if (n == 0) {
+        CFRelease(descs);
+        return nullptr;
+    }
+
+    // For collections (.ttc), match the FreeType face by PostScript name
+    // so glyph IDs refer to the same face.
+    CFIndex pick = std::min<CFIndex>(face->face_index & 0xffff, n - 1);
+    if (const char *ps = FT_Get_Postscript_Name(face)) {
+        CFStringRef want = CFStringCreateWithCString(nullptr, ps, kCFStringEncodingUTF8);
+        for (CFIndex i = 0; want && i < n; i++) {
+            auto d = (CTFontDescriptorRef)CFArrayGetValueAtIndex(descs, i);
+            auto name = (CFStringRef)CTFontDescriptorCopyAttribute(d, kCTFontNameAttribute);
+            bool match = name && CFStringCompare(name, want, 0) == kCFCompareEqualTo;
+            if (name) CFRelease(name);
+            if (match) {
+                pick = i;
+                break;
+            }
+        }
+        if (want) CFRelease(want);
+    }
+
+    // Same ppem as FreeType, so glyphs line up with the FreeType metrics.
+    double ppem = face->units_per_EM * (double)face->size->metrics.x_scale / 65536.0 / 64.0;
+    auto desc = (CTFontDescriptorRef)CFArrayGetValueAtIndex(descs, pick);
+    CTFontRef ct = CTFontCreateWithFontDescriptor(desc, ppem, nullptr);
+    CFRelease(descs);
+    return ct;
+}
+
+} // namespace
+
+void GlyphAtlas::release_ct_fonts() {
+    for (auto &[idx, f] : m_ct_fonts)
+        if (f) CFRelease((CTFontRef)f);
+    m_ct_fonts.clear();
+}
+
+const void *GlyphAtlas::ct_font(Font &font, int font_index) {
+    auto it = m_ct_fonts.find(font_index);
+    if (it != m_ct_fonts.end())
+        return it->second;
+    CTFontRef ct = create_ct_font(font.path(font_index), font.face(font_index));
+    if (!ct)
+        dbg("atlas: no Core Text font for font_idx=%d, using FreeType", font_index);
+    m_ct_fonts[font_index] = ct;
+    return ct;
+}
+
+bool GlyphAtlas::insert_glyph_ct(Font &font, int font_index, uint32_t glyph_id, bool bold,
+                                 GlyphEntry &entry) {
+    if (!core_text_enabled()) return false;
+    auto ct = (CTFontRef)ct_font(font, font_index);
+    if (!ct) return false;
+
+    CGGlyph g = (CGGlyph)glyph_id;
+    CGRect r = CTFontGetBoundingRectsForGlyphs(ct, kCTFontOrientationHorizontal, &g, nullptr, 1);
+    if (CGRectIsEmpty(r)) {
+        entry = {0, 0, 0, 0, 0, 0, GlyphType::Mask};
+        return true;
+    }
+
+    // Synthetic bold: same strength as FT_GlyphSlot_Embolden (ppem / 24).
+    CGFloat stroke = bold ? CTFontGetSize(ct) / 24.0 : 0.0;
+
+    // Pad for the bold stroke and for the dilation from font smoothing.
+    CGFloat pad = stroke / 2 + 1;
+    int left   = (int)std::floor(CGRectGetMinX(r) - pad);
+    int bottom = (int)std::floor(CGRectGetMinY(r) - pad);
+    int right  = (int)std::ceil(CGRectGetMaxX(r) + pad);
+    int top    = (int)std::ceil(CGRectGetMaxY(r) + pad);
+    int w = right - left;
+    int h = top - bottom;
+
+    // White glyph on black: the gray value is the coverage.
+    std::vector<uint8_t> buf(w * h, 0);
+    CGColorSpaceRef cs = CGColorSpaceCreateDeviceGray();
+    CGContextRef ctx = CGBitmapContextCreate(buf.data(), w, h, 8, w, cs, kCGImageAlphaNone);
+    CGColorSpaceRelease(cs);
+    if (!ctx) return false;
+
+    CGContextSetAllowsAntialiasing(ctx, true);
+    CGContextSetShouldAntialias(ctx, true);
+    CGContextSetAllowsFontSmoothing(ctx, true);
+    CGContextSetShouldSmoothFonts(ctx, font_smoothing(font.dpi()));
+    CGContextSetAllowsFontSubpixelPositioning(ctx, false);
+    CGContextSetShouldSubpixelPositionFonts(ctx, false);
+    CGContextSetGrayFillColor(ctx, 1, 1);
+    if (bold) {
+        CGContextSetGrayStrokeColor(ctx, 1, 1);
+        CGContextSetLineWidth(ctx, stroke);
+        CGContextSetTextDrawingMode(ctx, kCGTextFillStroke);
+    }
+
+    CGPoint pos = CGPointMake(-left, -bottom);
+    CTFontDrawGlyphs(ct, &g, &pos, 1, ctx);
+    CGContextRelease(ctx);
+
+    // Bitmap rows run top to bottom, as FreeType's do.
+    place(buf.data(), w, h, left, top, GlyphType::Mask, entry);
     return true;
 }
+
+#endif // __APPLE__
 
 void GlyphAtlas::grow_texture() {
     // Double the texture size and re-upload

@@ -42,6 +42,7 @@ public:
 
     FT_Face face(int index = 0) const;
     hb_font_t *hb_font(int index = 0) const;
+    const std::string &path(int index = 0) const { return m_faces[index].path; }
     int font_count() const { return (int)m_faces.size(); }
 
     const FontMetrics &metrics() const { return m_metrics; }
