@@ -1786,8 +1786,15 @@ static bool install_systemd_unit() {
         }
     }
     // Best-effort: keep it running across logout / at boot.
+    // Without sudo this goes through polkit, which often fails on
+    // provisioned boxes; suggest the by-hand variant from doc/manual.md.
     if (system("loginctl enable-linger \"$USER\" >/dev/null 2>&1") != 0)
-        rivt::logmsg("note: run `loginctl enable-linger` to start at boot without login\n");
+        rivt::logmsg("note: lingering is off, so rivtd stops at logout and won't start at boot.\n"
+                     "Enable it with:\n"
+                     "  sudo loginctl enable-linger $USER\n"
+                     "or, if that fails (e.g. NSS-overlay users), by hand:\n"
+                     "  sudo touch /var/lib/systemd/linger/$USER\n"
+                     "  sudo systemctl restart systemd-logind\n");
     return true;
 }
 
