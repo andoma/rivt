@@ -5,6 +5,8 @@
 #include "net/rendezvous.h"
 
 #include <openssl/hmac.h>
+#include <openssl/pem.h>
+#include <openssl/x509.h>
 #include <openssl/rand.h>
 #include <openssl/sha.h>
 
@@ -40,6 +42,27 @@ static std::string sha256_hex(const std::string &d) {
     uint8_t h[SHA256_DIGEST_LENGTH];
     SHA256((const uint8_t *)d.data(), d.size(), h);
     return hexstr(h, sizeof h);
+}
+
+// Fingerprint of an offered cert, in the same form as Identity::fingerprint()
+// (SHA-256 of the cert DER) so both sides of a pairing show the same value.
+// Empty if the PEM is bad or the cert isn't for pubkey_der.
+static std::string cert_fingerprint(const std::string &cert_pem, const std::string &pubkey_der) {
+    BIO *bio = BIO_new_mem_buf(cert_pem.data(), (int)cert_pem.size());
+    X509 *cert = bio ? PEM_read_bio_X509(bio, nullptr, nullptr, nullptr) : nullptr;
+    BIO_free(bio);
+    if (!cert) return {};
+    std::string out;
+    uint8_t *der = nullptr;
+    int klen = i2d_PUBKEY(X509_get0_pubkey(cert), &der);
+    bool match = klen > 0 && std::string((const char *)der, klen) == pubkey_der;
+    OPENSSL_free(der);
+    der = nullptr;
+    int dlen = match ? i2d_X509(cert, &der) : 0;
+    if (dlen > 0) out = sha256_hex(std::string((const char *)der, dlen));
+    OPENSSL_free(der);
+    X509_free(cert);
+    return out;
 }
 
 // Minimal flat-JSON string field extractor (values are base64/hex/plain,
@@ -133,9 +156,14 @@ bool pair_invite(const Identity &self) {
         rivt::logmsg("rivt: pairing offer failed verification (wrong code?)\n");
         return false;
     }
+    std::string fp = cert_fingerprint(cert, pubkey);
+    if (fp.empty()) {
+        rivt::logmsg("rivt: pairing offer has a cert that doesn't match its key\n");
+        return false;
+    }
 
     printf("\nDevice wants to join:\n    name: %s\n    fingerprint: %s\n\nApprove? [y/N] ",
-           name.c_str(), sha256_hex(pubkey).c_str());
+           name.c_str(), fp.c_str());
     fflush(stdout);
     bool yes = getenv("RIVT_PAIR_YES");
     if (!yes) {
