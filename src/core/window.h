@@ -60,6 +60,10 @@ public:
     // (connecting or reconnecting): its tabs and panes belong to the
     // daemon, so local close/split/new-tab must not touch them.
     bool remote_offline() const;
+    // Toast explaining that `what` is refused while rivtd is offline.
+    void refuse_offline(const char *what);
+    // Show a one-line message near the bottom for a few seconds.
+    void show_toast(const std::string &msg);
     void connectivity_event(Platform::ConnEvent e);  // sleep/wake/path hook
     // While fully obscured the window doesn't render (an occluded X11
     // window's swap can block ~1s, stalling the shared loop), but
@@ -142,6 +146,8 @@ private:
     int m_pick_sel = 0;
     std::string m_pick_filter;
     int m_picker_refresh_timer = -1;
+    std::string m_toast;       // empty = no toast shown
+    int m_toast_timer = -1;
     void picker_refresh_roster();
     void picker_rebuild();
     void picker_paint();

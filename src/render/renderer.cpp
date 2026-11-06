@@ -814,6 +814,38 @@ void Renderer::render_border(float x, float y, float w, float h,
     m_vertices.push_back({x,   y+h, 0,0, r,g,b,1, 0});
 }
 
+void Renderer::push_rect(float x, float y, float w, float h,
+                         float r, float g, float b, float a) {
+    auto &v = m_vertices;
+    v.push_back({x,   y,   0,0, r,g,b,a, 0});
+    v.push_back({x+w, y,   0,0, r,g,b,a, 0});
+    v.push_back({x+w, y+h, 0,0, r,g,b,a, 0});
+    v.push_back({x,   y,   0,0, r,g,b,a, 0});
+    v.push_back({x+w, y+h, 0,0, r,g,b,a, 0});
+    v.push_back({x,   y+h, 0,0, r,g,b,a, 0});
+}
+
+void Renderer::render_dim(float alpha) {
+    push_rect(0, 0, (float)m_viewport_w, (float)m_viewport_h,
+              0, 0, 0, alpha);
+}
+
+void Renderer::render_toast(const std::string &text) {
+    const auto &m = m_font.metrics();
+    float atlas_size = (float)m_atlas.texture_size();
+    int ncp = 0;  // codepoints = cells (toast text is not wide)
+    for (unsigned char c : text)
+        if ((c & 0xC0) != 0x80) ncp++;
+    float pad_x = (float)m.cell_width, pad_y = 8;
+    float w = ncp * m.cell_width + 2 * pad_x;
+    float h = m.cell_height + 2 * pad_y;
+    float x = std::max(0.0f, (m_viewport_w - w) / 2);
+    float y = std::max(0.0f, m_viewport_h - h - 2.0f * m.cell_height);
+    push_rect(x - 1, y - 1, w + 2, h + 2, 0.55f, 0.45f, 0.2f, 1);
+    push_rect(x, y, w, h, 0.16f, 0.14f, 0.1f, 1);
+    draw_text(x + pad_x, y + pad_y, text, 1.0f, 0.85f, 0.5f, atlas_size);
+}
+
 // Format a terminal title for display in a tab.
 // Strips "user@host:" prefix, abbreviates paths to last 2 components,
 // replaces $HOME prefix with ~.

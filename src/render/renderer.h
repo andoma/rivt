@@ -32,6 +32,12 @@ public:
     void render_border(float x, float y, float w, float h,
                        float r, float g, float b);
 
+    // Translucent black over the whole viewport (0 = none, 1 = black).
+    void render_dim(float alpha);
+
+    // One-line message box, centred near the bottom of the viewport.
+    void render_toast(const std::string &text);
+
     // Render dot grid in dead zone (tmux constrained area)
     void render_dot_grid(int offset_x, int offset_y, int w, int h,
                          int cell_w, int cell_h);
@@ -108,6 +114,8 @@ private:
             : x(x), y(y), u(u), v(v), r(r), g(g), b(b), a(a), type(type), under(under) {}
     };
     std::vector<QuadVertex> m_vertices;
+    void push_rect(float x, float y, float w, float h,
+                   float r, float g, float b, float a);
 };
 
 } // namespace rivt

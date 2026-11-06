@@ -28,6 +28,7 @@ Window::Window(const Config &base_config, EventLoop &loop)
 Window::~Window() {
     // Drop our loop timer (shared EventLoop outlives the window).
     if (m_picker_refresh_timer >= 0) m_loop.remove_timer(m_picker_refresh_timer);
+    if (m_toast_timer >= 0) m_loop.remove_timer(m_toast_timer);
     // Replace the gateway pane's override with a drain that swallows remaining
     // tmux protocol (up to the DCS terminator \033\\) before restoring normal
     // operation. Don't touch on_tmux_control_mode — it stays active so the
@@ -352,7 +353,7 @@ void Window::close_focused_pane_routed(const char *reason) {
         if (!m_tabs || m_tabs->tabs().empty())
             request_close(reason);
         else
-            rivt::logmsg("window(%p): close ignored, rivtd offline\n", (void *)this);
+            refuse_offline("close the pane");
     } else if (m_tabs && !m_tabs->close_focused_pane()) {
         request_close(reason);
     }
@@ -361,6 +362,30 @@ void Window::close_focused_pane_routed(const char *reason) {
 
 bool Window::remote_offline() const {
     return m_remote_controller && !m_remote_controller->is_active();
+}
+
+void Window::refuse_offline(const char *what) {
+    const std::string &peer = m_remote_controller->peer_name();
+    std::string name = peer.empty() ? "rivtd" : peer;
+    std::string msg;
+    if (m_remote_controller->is_reconnecting())
+        msg = "Reconnecting to " + name + " \u2013 can't " + what +
+              " until the link is back";
+    else
+        msg = "Connecting to " + name + " \u2013 can't " + what + " yet";
+    rivt::logmsg("window(%p): %s\n", (void *)this, msg.c_str());
+    show_toast(msg);
+}
+
+void Window::show_toast(const std::string &msg) {
+    m_toast = msg;
+    m_needs_render = true;
+    if (m_toast_timer >= 0) m_loop.remove_timer(m_toast_timer);
+    m_toast_timer = m_loop.add_timer(3000, [this]() {
+        m_toast_timer = -1;  // one-shot: the loop removes it
+        m_toast.clear();
+        m_needs_render = true;
+    }, false);
 }
 
 void Window::request_close(const char *reason) {
@@ -808,7 +833,9 @@ void Window::handle_key(const KeyEvent &raw_key) {
                     m_tmux_client->send_command("split-window -h");
                 else if (m_remote_controller && m_remote_controller->is_active())
                     m_remote_controller->split(false);
-                else if (!remote_offline())
+                else if (remote_offline())
+                    refuse_offline("split the pane");
+                else
                     m_tabs->split_pane(SplitDir::Vertical);
                 m_needs_render = true;
                 return;
@@ -818,7 +845,9 @@ void Window::handle_key(const KeyEvent &raw_key) {
                     m_tmux_client->send_command("split-window -v");
                 else if (m_remote_controller && m_remote_controller->is_active())
                     m_remote_controller->split(true);
-                else if (!remote_offline())
+                else if (remote_offline())
+                    refuse_offline("split the pane");
+                else
                     m_tabs->split_pane(SplitDir::Horizontal);
                 m_needs_render = true;
                 return;
@@ -846,7 +875,9 @@ void Window::handle_key(const KeyEvent &raw_key) {
                     m_tmux_client->send_command("new-window");
                 else if (m_remote_controller && m_remote_controller->is_active())
                     m_remote_controller->new_window();
-                else if (!remote_offline())
+                else if (remote_offline())
+                    refuse_offline("open a tab");
+                else
                     m_tabs->new_tab();
                 recompute();
                 m_needs_render = true;
@@ -961,7 +992,7 @@ void Window::handle_mouse(const MouseEvent &mouse) {
                     m_remote_controller->request_close_tab(m_tabs->tabs()[close_hit].get())) {
                     // Teardown happens when WindowClosed arrives.
                 } else if (remote_offline()) {
-                    // Daemon-owned tab: can't close it until re-attached.
+                    refuse_offline("close the tab");
                 } else if (!m_tabs->close_tab(close_hit)) {
                     request_close("last tab closed by mouse");
                 }
@@ -980,7 +1011,7 @@ void Window::handle_mouse(const MouseEvent &mouse) {
                         m_remote_controller->request_close_tab(m_tabs->tabs()[hit].get())) {
                         // Teardown happens when WindowClosed arrives.
                     } else if (remote_offline()) {
-                        // Daemon-owned tab: can't close it until re-attached.
+                        refuse_offline("close the tab");
                     } else if (!m_tabs->close_tab(hit)) {
                         request_close("last tab closed by mouse");
                     }
@@ -1434,6 +1465,12 @@ void Window::render_if_needed() {
             m_renderer.flush();
         }
     }
+
+    // rivtd link down: dim everything (tab bar too) so stale content
+    // reads as stale; the toast says why an action was refused.
+    if (remote_offline()) m_renderer.render_dim(0.4f);
+    if (!m_toast.empty()) m_renderer.render_toast(m_toast);
+    m_renderer.flush();
 
     auto rs_t1 = std::chrono::steady_clock::now();
     m_platform->swap_buffers();

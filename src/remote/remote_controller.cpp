@@ -685,6 +685,9 @@ void RemoteController::refresh_status() {
     if (s == m_last_suffix) return;
     m_last_suffix = s;
     m_tabs.set_title_suffix(s);
+    // The window dims while offline; every state change alters the
+    // suffix, so this repaints on connect, loss and re-attach.
+    if (m_tabs.on_needs_render) m_tabs.on_needs_render();
 }
 
 void RemoteController::schedule_reconnect_attempt() {

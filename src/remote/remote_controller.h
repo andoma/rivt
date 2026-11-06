@@ -39,10 +39,12 @@ public:
 
     // Display name of the peer, for the window-title status.
     void set_peer_name(const std::string &name) { m_peer_name = name; }
+    const std::string &peer_name() const { return m_peer_name; }
     void handle_resize(int cols, int rows, int cell_w, int cell_h,
                        int content_x, int content_y);
 
     bool is_active() const { return m_active; }
+    bool is_reconnecting() const { return m_reconnecting; }
     void detach();
 
     // User actions, routed to the daemon.
