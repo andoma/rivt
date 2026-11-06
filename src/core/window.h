@@ -56,6 +56,10 @@ public:
     void request_close(const char *reason);
     // Close the focused pane via its owner (tmux/rivtd/local).
     void close_focused_pane_routed(const char *reason);
+    // rivtd window whose controller can't take requests right now
+    // (connecting or reconnecting): its tabs and panes belong to the
+    // daemon, so local close/split/new-tab must not touch them.
+    bool remote_offline() const;
     void connectivity_event(Platform::ConnEvent e);  // sleep/wake/path hook
     // While fully obscured the window doesn't render (an occluded X11
     // window's swap can block ~1s, stalling the shared loop), but

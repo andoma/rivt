@@ -339,16 +339,28 @@ bool Window::init_remote(const std::string &socket_path, uint32_t attach_sid,
 // that keep the controller's bookkeeping consistent. Freeing them
 // locally (as the Cmd-W menu path once did) leaves dangling Pane
 // pointers in the controller maps: heap-use-after-free on the next
-// layout/window message.
+// layout/window message. The same holds while the controller is
+// reconnecting: the panes are still in its maps, and the re-attach
+// LayoutUpdate resizes them.
 void Window::close_focused_pane_routed(const char *reason) {
     if (m_tmux_controller && m_tmux_controller->is_active()) {
         m_tmux_client->send_command("kill-pane");
     } else if (m_remote_controller && m_remote_controller->is_active()) {
         m_remote_controller->close_focused_pane();
+    } else if (remote_offline()) {
+        // Nothing attached yet: closing means giving up on the window.
+        if (!m_tabs || m_tabs->tabs().empty())
+            request_close(reason);
+        else
+            rivt::logmsg("window(%p): close ignored, rivtd offline\n", (void *)this);
     } else if (m_tabs && !m_tabs->close_focused_pane()) {
         request_close(reason);
     }
     m_needs_render = true;
+}
+
+bool Window::remote_offline() const {
+    return m_remote_controller && !m_remote_controller->is_active();
 }
 
 void Window::request_close(const char *reason) {
@@ -796,7 +808,7 @@ void Window::handle_key(const KeyEvent &raw_key) {
                     m_tmux_client->send_command("split-window -h");
                 else if (m_remote_controller && m_remote_controller->is_active())
                     m_remote_controller->split(false);
-                else
+                else if (!remote_offline())
                     m_tabs->split_pane(SplitDir::Vertical);
                 m_needs_render = true;
                 return;
@@ -806,7 +818,7 @@ void Window::handle_key(const KeyEvent &raw_key) {
                     m_tmux_client->send_command("split-window -v");
                 else if (m_remote_controller && m_remote_controller->is_active())
                     m_remote_controller->split(true);
-                else
+                else if (!remote_offline())
                     m_tabs->split_pane(SplitDir::Horizontal);
                 m_needs_render = true;
                 return;
@@ -834,7 +846,7 @@ void Window::handle_key(const KeyEvent &raw_key) {
                     m_tmux_client->send_command("new-window");
                 else if (m_remote_controller && m_remote_controller->is_active())
                     m_remote_controller->new_window();
-                else
+                else if (!remote_offline())
                     m_tabs->new_tab();
                 recompute();
                 m_needs_render = true;
@@ -948,6 +960,8 @@ void Window::handle_mouse(const MouseEvent &mouse) {
                 if (m_remote_controller && m_remote_controller->is_active() &&
                     m_remote_controller->request_close_tab(m_tabs->tabs()[close_hit].get())) {
                     // Teardown happens when WindowClosed arrives.
+                } else if (remote_offline()) {
+                    // Daemon-owned tab: can't close it until re-attached.
                 } else if (!m_tabs->close_tab(close_hit)) {
                     request_close("last tab closed by mouse");
                 }
@@ -965,6 +979,8 @@ void Window::handle_mouse(const MouseEvent &mouse) {
                     if (m_remote_controller && m_remote_controller->is_active() &&
                         m_remote_controller->request_close_tab(m_tabs->tabs()[hit].get())) {
                         // Teardown happens when WindowClosed arrives.
+                    } else if (remote_offline()) {
+                        // Daemon-owned tab: can't close it until re-attached.
                     } else if (!m_tabs->close_tab(hit)) {
                         request_close("last tab closed by mouse");
                     }
