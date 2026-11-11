@@ -426,6 +426,7 @@ static void close_window_and_refocus(RivtWindow *win) {
 
 - (void)clearBackend {
     _backend = nullptr;
+    [[NSNotificationCenter defaultCenter] removeObserver:self];
 }
 
 - (void)copy:(id)sender {
@@ -503,6 +504,28 @@ static void close_window_and_refocus(RivtWindow *win) {
     _backend->_impl_set_size(w, h);
     _backend->_impl_update_gl_drawable();
     if (_backend->on_resize) _backend->on_resize(w, h);
+}
+
+// The GL context caches the drawable geometry and the renderer for the
+// current display. A display reconfiguration (wake from sleep, monitor
+// plugged or unplugged, window moved to another screen) changes both
+// without a view resize. NSOpenGLContext then needs -update before the
+// next draw; without it glClear writes past the end of a stale back
+// buffer. NSOpenGLView does the same on these notifications.
+- (void)displayConfigChanged:(NSNotification *)note {
+    (void)note;
+    if (!_backend) return;
+    NSSize backing = [self convertSizeToBacking:[self bounds].size];
+    int w = (int)backing.width;
+    int h = (int)backing.height;
+    _backend->_impl_set_size(w, h);
+    _backend->_impl_update_gl_drawable();
+    // -update leaves the back buffer undefined: force a full redraw.
+    if (_backend->on_resize) _backend->on_resize(w, h);
+}
+
+- (void)windowDidChangeScreen:(NSNotification *)note {
+    [self displayConfigChanged:note];
 }
 
 // ---------------- Window delegate ----------------
@@ -871,6 +894,14 @@ bool CocoaBackend::create_gl_context() {
     [ctx setView:m_impl->view];
 #pragma clang diagnostic pop
     [ctx update];
+    NSNotificationCenter *nc = [NSNotificationCenter defaultCenter];
+#pragma clang diagnostic push
+#pragma clang diagnostic ignored "-Wdeprecated-declarations"
+    [nc addObserver:m_impl->view selector:@selector(displayConfigChanged:)
+               name:NSViewGlobalFrameDidChangeNotification object:m_impl->view];
+#pragma clang diagnostic pop
+    [nc addObserver:m_impl->view selector:@selector(displayConfigChanged:)
+               name:NSApplicationDidChangeScreenParametersNotification object:nil];
     if (!share) CocoaApp::instance().shared_gl_context = ctx;
     m_impl->gl_context = ctx;
     [ctx makeCurrentContext];
