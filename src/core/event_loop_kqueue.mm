@@ -107,6 +107,9 @@ void EventLoop::add_fd(int fd, Callback cb, uint32_t events) {
     if (n == 0) return;
     if (kevent(m_backend_fd, changes, n, nullptr, 0, nullptr) < 0)
         throw std::runtime_error("kevent EV_ADD failed");
+    // An entry with this fd number is stale: its fd was closed without
+    // remove_fd(). Drop it, or the lookup finds it before the new entry.
+    std::erase_if(m_fds, [fd](const FdEntry &e) { return e.fd == fd; });
     m_fds.push_back({fd, std::move(cb)});
 }
 

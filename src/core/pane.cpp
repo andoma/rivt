@@ -13,7 +13,12 @@ Pane::Pane(int cols, int rows, const Config &config)
 {
 }
 
-Pane::~Pane() = default;
+Pane::~Pane() {
+    // The event loop callback captures `this`. A window that closes frees
+    // its panes without a detach() call, so remove the callback here.
+    // If it stays, the next fd with the same number runs it on freed memory.
+    if (m_loop) detach(*m_loop);
+}
 
 bool Pane::spawn_shell(EventLoop &loop, const std::string &start_cwd,
                        const std::string &auth_sock) {

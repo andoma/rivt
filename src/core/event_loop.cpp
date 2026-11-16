@@ -45,6 +45,9 @@ void EventLoop::add_fd(int fd, Callback cb, uint32_t events) {
     ev.data.fd = fd;
     if (epoll_ctl(m_backend_fd, EPOLL_CTL_ADD, fd, &ev) < 0)
         throw std::runtime_error("epoll_ctl ADD failed");
+    // An entry with this fd number is stale: its fd was closed without
+    // remove_fd(). Drop it, or the lookup finds it before the new entry.
+    std::erase_if(m_fds, [fd](const FdEntry &e) { return e.fd == fd; });
     m_fds.push_back({fd, std::move(cb)});
 }
 
