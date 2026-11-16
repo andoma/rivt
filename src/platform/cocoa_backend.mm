@@ -10,6 +10,7 @@
 #import <CoreText/CoreText.h>
 #import <CoreFoundation/CoreFoundation.h>
 #import <OpenGL/gl3.h>
+#import <OpenGL/OpenGL.h>
 #import <Network/Network.h>
 
 #include "platform/cocoa_backend.h"
@@ -268,6 +269,8 @@ struct CocoaBackend::Impl {
     int cell_w = 0, cell_h = 0;
     int base_w = 0, base_h = 0;
     bool is_key_window = false;
+    bool sw_renderer_logged = false;
+    CFAbsoluteTime last_sw_update = 0;
     std::string clipboard_typed_data;
     std::string clipboard_typed_mime;
 };
@@ -910,6 +913,50 @@ bool CocoaBackend::create_gl_context() {
 
 void CocoaBackend::_impl_update_gl_drawable() {
     if (m_impl->gl_context) [m_impl->gl_context update];
+}
+
+// True when the context runs on Apple's software renderer
+// (GLRendererFloat). The pixel format asks for an accelerated renderer,
+// but the context can still land on the software one when no display is
+// usable (display asleep, screen locked, display reconfiguration).
+static bool on_software_renderer(NSOpenGLContext *ctx) {
+    GLint rid = 0;
+    if (CGLGetParameter([ctx CGLContextObj], kCGLCPCurrentRendererID, &rid)
+        != kCGLNoError)
+        return false;
+    return (rid & kCGLRendererIDMatchingMask) == kCGLRendererGenericFloatID;
+}
+
+// Window::needs_render() skips the frame while this returns true and
+// keeps the render request latched, so the first frame after it turns
+// false repaints.
+bool CocoaBackend::is_obscured() const {
+    if (!m_impl->window || !m_impl->gl_context) return false;
+    // Not on any screen: nothing to draw to.
+    if (!([m_impl->window occlusionState] & NSWindowOcclusionStateVisible))
+        return true;
+    // glClear on the software renderer has written past the end of its
+    // back buffer (SIGSEGV in _platform_memset_pattern16, called from
+    // gldClearDrawBuffer). Never draw with it. Ask the context to select
+    // a renderer again, at most one time per second, until the
+    // accelerated renderer is back.
+    if (!on_software_renderer(m_impl->gl_context)) {
+        m_impl->sw_renderer_logged = false;
+        return false;
+    }
+    if (!m_impl->sw_renderer_logged) {
+        m_impl->sw_renderer_logged = true;
+        logmsg("cocoa: GL context is on the software renderer, "
+               "rendering paused\n");
+    }
+    CFAbsoluteTime now = CFAbsoluteTimeGetCurrent();
+    if (now - m_impl->last_sw_update < 1.0) return true;
+    m_impl->last_sw_update = now;
+    [m_impl->gl_context update];
+    if (on_software_renderer(m_impl->gl_context)) return true;
+    m_impl->sw_renderer_logged = false;
+    logmsg("cocoa: GL context is back on an accelerated renderer\n");
+    return false;
 }
 
 void CocoaBackend::make_current() {

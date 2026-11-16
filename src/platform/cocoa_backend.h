@@ -27,6 +27,7 @@ public:
     bool create_gl_context() override;
     void make_current() override;
     void swap_buffers() override;
+    bool is_obscured() const override;
 
     int get_event_fd() override { return -1; }
     void process_events() override {}  // NSApp dispatches centrally
