@@ -248,10 +248,23 @@ void RemoteController::handle_resize(int cols, int rows, int cell_w, int cell_h,
                                      int content_x, int content_y) {
     m_cols = cols;
     m_rows = rows;
+    bool geom_changed = cell_w != m_cell_w || cell_h != m_cell_h ||
+                        content_x != m_content_x || content_y != m_content_y;
     m_cell_w = cell_w;
     m_cell_h = cell_h;
     m_content_x = content_x;
     m_content_y = content_y;
+    // Pane rects are in pixels. A new backing scale (wake from sleep,
+    // window moved to another screen) changes the cell size but not the
+    // grid, so no resize goes to the daemon and no layout comes back.
+    // Compute the rects again here.
+    if (geom_changed) {
+        for (auto &[id, e] : m_pane_map)
+            e.pane->rect = {m_content_x + e.gx * m_cell_w,
+                            m_content_y + e.gy * m_cell_h,
+                            e.pane->screen().cols() * m_cell_w,
+                            e.pane->screen().rows() * m_cell_h};
+    }
     if (!m_active) return;
     // The daemon owns the layout: send our new grid; it relayouts and
     // answers with a LayoutUpdate carrying every pane's rect.
@@ -320,6 +333,9 @@ void RemoteController::apply_layout(uint32_t wid, int cols, int rows,
         }
         if (p->screen().cols() != g.cols || p->screen().rows() != g.rows)
             p->resize(g.cols, g.rows);
+        PaneEntry &e = m_pane_map[g.id];
+        e.gx = g.x;
+        e.gy = g.y;
         p->rect = {m_content_x + g.x * m_cell_w, m_content_y + g.y * m_cell_h,
                    g.cols * m_cell_w, g.rows * m_cell_h};
     }

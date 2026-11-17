@@ -82,7 +82,8 @@ private:
     Window &m_window;
     TabManager &m_tabs;
 
-    struct PaneEntry { Pane *pane; uint32_t wid; };
+    // gx, gy: the pane origin in cells, from the last layout.
+    struct PaneEntry { Pane *pane; uint32_t wid; int gx = 0, gy = 0; };
 
     bool m_active = false;
     bool m_kill_on_close = false;
